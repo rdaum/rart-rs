@@ -1,6 +1,11 @@
 [package]
 name = "rart"
 description = "Ryan's Adaptive Radix Tree"
+authors = ["Ryan Daum <ryan.daum@gmail.com>"]
+license = "Apache-2.0"
+homepage = "https://github.com/rdaum/rart-rs"
+repository = "https://github.com/rdaum/rart-rs"
+keywords = ["datastructure", "tree", "radix", "index"]
 version = "0.1.0"
 edition = "2021"
 
