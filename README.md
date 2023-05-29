@@ -25,6 +25,4 @@ Some notes:
   * Uses explicit SIMD optimizations for x86 SSE for the 16-child inner keyed node; an implementation for ARM NEON is also there, but doesn't really provide
 much performance benefit.
 
-More documentation to come. Still working at smoothing the rought corners. Contributions welcome.
-
-Ryan
+More documentation to come. Still working at smoothing the rough corners. Contributions welcome.
