@@ -1,6 +1,6 @@
 # Ryan's Adaptive Radix Tree
 
-This is yet another performant implementation of an Adaptive Radix Tree (ART) in Rust. ARTs are an ordered associative (key-value) structure that outperform BTrees for many use cases.
+This is yet another implementation of an Adaptive Radix Tree (ART) in Rust. ARTs are an ordered associative (key-value) structure that outperform BTrees for many use cases.
 
 The implementation is based on the paper [The Adaptive Radix Tree: ARTful Indexing for Main-Memory Databases](https://db.in.tum.de/~leis/papers/ART.pdf) by Viktor Leis, Alfons Kemper, and Thomas Neumann.
 
@@ -9,7 +9,7 @@ I have not (yet) implemented the concurrent form described in later papers.
 During implementation I looked at the following implementations, and borrowed some flow and ideas from them:
    * https://github.com/armon/libart/ A C implementation
    * https://github.com/rafaelkallis/adaptive-radix-tree C++ implementation
-   * https://github.com/Lagrang/art-rs Another implementation in Rust. (The criterion benches I have were on the hole borrowed from here originally)
+   * https://github.com/Lagrang/art-rs Another implementation in Rust. (The criterion benches I have were on the whole borrowed from here originally)
 
 Performance boost can be gained through fixed sized keys and partials. There are a selection of key types and partials provided under the `partials` module.
 
