@@ -1,0 +1,28 @@
+[package]
+name = "rart"
+description = "Ryan's Adaptive Radix Tree"
+version = "0.1.0"
+edition = "2021"
+
+[dev-dependencies]
+criterion = { version = "0.4", features = ["html_reports"] }
+rand = "0.8"
+
+[dependencies]
+num-traits = { git = "https://github.com/rust-num/num-traits.git", rev = "c696ef9e8b51a15fb47dbc9a0e1c783f9c615d8a" }
+
+[[bench]]
+name = "art_bench"
+harness = false
+
+[[bench]]
+name = "vart_bench"
+harness = false
+
+[[bench]]
+name = "fv_bench"
+harness = false
+
+[[bench]]
+name = "art_compare_bench"
+harness = false
