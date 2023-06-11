@@ -83,10 +83,7 @@ impl<P: PrefixTraits, V> AdaptiveRadixTree<P, V> {
     }
 
     pub fn get<K: Key>(&self, key: &K) -> Option<&V> {
-        self.root.as_ref()?;
-
-        let root = self.root.as_ref().unwrap();
-        AdaptiveRadixTree::get_iterate(root, key)
+        AdaptiveRadixTree::get_iterate(self.root.as_ref()?, key)
     }
 
     fn get_iterate<'a, K: Key>(cur_node: &'a Node<P, V>, key: &K) -> Option<&'a V> {
@@ -104,11 +101,8 @@ impl<P: PrefixTraits, V> AdaptiveRadixTree<P, V> {
             }
 
             let k = key.at(depth + cur_node.prefix.length());
-            let next_node = cur_node.seek_child(k);
-            next_node?;
             depth += cur_node.prefix.length();
-            // key = key.prefix_after(cur_node.prefix.length()
-            cur_node = next_node.unwrap();
+            cur_node = cur_node.seek_child(k)?;
         }
     }
 
