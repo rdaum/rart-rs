@@ -2,11 +2,11 @@ use std::cmp::min;
 use std::fmt::Debug;
 
 use crate::pageable::node_store::{AddChildResult, NodeStore};
-use crate::Partial;
 use crate::partials::key::Key;
+use crate::Partial;
 
 pub trait PrefixTraits: Partial + Clone + PartialEq + Debug + for<'a> From<&'a [u8]> {}
-impl<T: Partial + Clone + PartialEq +  Debug + for<'a> From<&'a [u8]>> PrefixTraits for T {}
+impl<T: Partial + Clone + PartialEq + Debug + for<'a> From<&'a [u8]>> PrefixTraits for T {}
 
 /// Encapsulates the traversal state of the tree during inserts or removals.
 struct Cursor<NP: Clone> {
@@ -261,8 +261,8 @@ impl<NP: Clone, P: PrefixTraits, V, NS: NodeStore<NP, P, V>>
 
 #[cfg(test)]
 mod tests {
-    use rand::{Rng, thread_rng};
     use rand::seq::SliceRandom;
+    use rand::{thread_rng, Rng};
 
     use crate::pageable::pageable_tree::PageableAdaptiveRadixTree;
     use crate::pageable::vector_node_store::VectorNodeStore;

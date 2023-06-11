@@ -140,6 +140,48 @@ fn binary_find_key(key: u8, keys: &[u8], num_children: usize) -> Option<usize> {
     None
 }
 
+fn bit_floor(n: usize) -> usize {
+    let mut n = n;
+    n |= n >> 1;
+    n |= n >> 2;
+    n |= n >> 4;
+    n |= n >> 8;
+    n |= n >> 16;
+    n
+}
+
+fn bit_ceil(n: usize) -> usize {
+    bit_floor(n - 1) + 1
+}
+
+fn branchless_lower_bound(keys: &[u8], key: u8, num_children: usize) -> usize {
+    if num_children == 0 {
+        return num_children;
+    }
+    let step = bit_floor(num_children);
+    let mut index = 0;
+
+    if step != num_children && keys[index + step] < key {
+        let new_length = num_children - step - 1;
+        if new_length == 0 {
+            return num_children;
+        }
+        let new_step = bit_ceil(new_length);
+        index = num_children - new_step;
+    }
+
+    let mut step = step / 2;
+
+    while step != 0 {
+        if keys[index + step] < key {
+            index += step;
+        }
+        step /= 2;
+    }
+
+    index + (keys[index] < key) as usize
+}
+
 pub fn u8_keys_find_key_position<const WIDTH: usize>(
     key: u8,
     keys: &[u8],
@@ -190,4 +232,18 @@ pub fn u8_keys_find_insert_position<const WIDTH: usize>(
         (0..num_children).rev().find(|&i| key < keys[i])
     };
     idx.or(Some(num_children))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::utils::u8_keys::{binary_find_key, branchless_lower_bound};
+
+    #[test]
+    fn branchess_lower_bound_test() {
+        let collection = [
+            0, 1, 2, 3, 4, 5, 6, 7, 255, 255, 255, 255, 255, 255, 255, 255,
+        ];
+        assert_eq!(binary_find_key(6, &collection, 8), Some(6));
+        assert_eq!(branchless_lower_bound(&collection, 6, 8), 6);
+    }
 }

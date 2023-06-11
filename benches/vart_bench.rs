@@ -1,8 +1,8 @@
 use std::time::Instant;
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main, Throughput};
-use rand::{Rng, thread_rng};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rand::prelude::SliceRandom;
+use rand::{thread_rng, Rng};
 
 use rart::pageable::pageable_tree::PageableAdaptiveRadixTree;
 use rart::pageable::vector_node_store::VectorNodeStore;

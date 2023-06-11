@@ -4,7 +4,7 @@ use crate::mapping::keyed_mapping::KeyedChildMapping;
 use crate::node::NodeMapping;
 use crate::pageable::node_store::{AddChildResult, NodeStore, RmChildResult};
 use crate::pageable::pageable_tree::PrefixTraits;
-use crate::utils::fillvector::{FillVector, FVIndex};
+use crate::utils::fillvector::{FVIndex, FillVector};
 
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -28,12 +28,15 @@ pub struct Node {
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
 pub struct NodeId {
     node: FVIndex,
-    prefix: FVIndex
+    prefix: FVIndex,
 }
 
 impl NodeId {
     pub fn new(mapping: FVIndex, prefix: FVIndex) -> Self {
-        Self { node: mapping, prefix }
+        Self {
+            node: mapping,
+            prefix,
+        }
     }
 }
 
@@ -173,7 +176,7 @@ impl<P: PrefixTraits, V> VectorNodeStore<P, V> {
             NodeT::Node16 => self.node_16s[node.index].num_children() <= 4,
             NodeT::Node48 => self.node_48s[node.index].num_children() <= 16,
             NodeT::Node256 => self.node_256s[node.index].num_children() <= 48,
-            NodeT::Leaf => false
+            NodeT::Leaf => false,
         }
     }
     fn shrink_node(&mut self, nptr: &NodeId) {
@@ -216,7 +219,7 @@ impl<P: PrefixTraits, V> VectorNodeStore<P, V> {
                     index,
                 };
             }
-            NodeT::Leaf => unreachable!("shrink called on leaf node")
+            NodeT::Leaf => unreachable!("shrink called on leaf node"),
         }
     }
 
@@ -287,12 +290,7 @@ impl<P: PrefixTraits, V> NodeStore<NodeId, P, V> for VectorNodeStore<P, V> {
         };
         node_mapping.seek_child(key)
     }
-    fn add_child_to_node(
-        &mut self,
-        node: &NodeId,
-        key: u8,
-        child: NodeId,
-    ) -> AddChildResult {
+    fn add_child_to_node(&mut self, node: &NodeId, key: u8, child: NodeId) -> AddChildResult {
         let mut replaced = false;
         if self.is_full(node) {
             replaced = true;
@@ -378,22 +376,18 @@ impl<P: PrefixTraits, V> NodeStore<NodeId, P, V> for VectorNodeStore<P, V> {
     fn new_leaf(&mut self, key: &[u8], value: V) -> NodeId {
         let index = self.leaves.add(|_i| value);
         let prefix = self.prefixes.add(|_i| key.into());
-        let node = self.nodes.add(|_| {
-            Node {
-                node_type: NodeT::Leaf,
-                index,
-            }
+        let node = self.nodes.add(|_| Node {
+            node_type: NodeT::Leaf,
+            index,
         });
         NodeId::new(node, prefix)
     }
     fn new_inner(&mut self, prefix: P) -> NodeId {
         let prefix = self.prefixes.add(|_i| prefix);
         let index = self.node_2s.add(|_i| KeyedChildMapping::new());
-        let node = self.nodes.add(|_| {
-            Node {
-                node_type: NodeT::Node2,
-                index,
-            }
+        let node = self.nodes.add(|_| Node {
+            node_type: NodeT::Node2,
+            index,
         });
         NodeId::new(node, prefix)
     }
@@ -402,9 +396,7 @@ impl<P: PrefixTraits, V> NodeStore<NodeId, P, V> for VectorNodeStore<P, V> {
 #[cfg(test)]
 mod tests {
     use crate::pageable::node_store::{AddChildResult, RmChildResult};
-    use crate::pageable::vector_node_store::{
-        NodeStore, VectorNodeStore,
-    };
+    use crate::pageable::vector_node_store::{NodeStore, VectorNodeStore};
     use crate::partials::array_partial::ArrPartial;
 
     // Test the update_child_in_node function for keyed mappings
