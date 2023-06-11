@@ -2,8 +2,8 @@ use std::cmp::min;
 use std::ops::Index;
 use std::rc::Rc;
 
-use crate::Partial;
 use crate::partials::key::Key;
+use crate::Partial;
 
 // A prefix root.
 pub struct SharedPartialRoot<const SIZE: usize> {

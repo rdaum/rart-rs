@@ -1,4 +1,3 @@
-
 use std::cmp::min;
 use std::collections::{Bound, HashMap};
 use std::fmt::Debug;
@@ -376,8 +375,8 @@ impl<P: PrefixTraits, V> AdaptiveRadixTree<P, V> {
 
 #[cfg(test)]
 mod tests {
-    use rand::{Rng, thread_rng};
     use rand::seq::SliceRandom;
+    use rand::{thread_rng, Rng};
     use std::collections::{btree_map, BTreeMap, BTreeSet};
     use std::fmt::Debug;
 
@@ -539,7 +538,7 @@ mod tests {
             k.clone()
         };
         let k = k.as_slice();
-        
+
         u64::from_be_bytes(k[0..8].try_into().unwrap())
     }
 

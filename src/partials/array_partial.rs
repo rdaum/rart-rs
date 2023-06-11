@@ -1,8 +1,8 @@
 use std::cmp::min;
 use std::ops::Index;
 
-use crate::Partial;
 use crate::partials::key::Key;
+use crate::Partial;
 
 #[derive(Clone, Debug, Eq)]
 pub struct ArrPartial<const SIZE: usize> {

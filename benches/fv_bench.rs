@@ -1,7 +1,7 @@
-use criterion::{Criterion, criterion_group, criterion_main, Throughput};
-use rand::{Rng, thread_rng};
+use criterion::{criterion_group, criterion_main, Criterion, Throughput};
+use rand::{thread_rng, Rng};
 
-use rart::utils::fillvector::{FillVector, FVIndex};
+use rart::utils::fillvector::{FVIndex, FillVector};
 
 // A workload where a pile of items are inserted, then a pile of random items are deleted, then a
 // pile of items are inserted, etc. Meant to simulate something like how a real world application

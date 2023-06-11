@@ -3,12 +3,12 @@ use crate::partials::key::Key;
 mod node;
 pub mod utils;
 
+pub mod iter;
 mod mapping;
 pub mod pageable;
 pub mod partials;
-pub mod tree;
 pub mod range;
-pub mod iter;
+pub mod tree;
 
 pub trait Partial {
     /// Returns a partial up to `length` bytes.
