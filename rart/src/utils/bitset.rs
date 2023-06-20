@@ -33,9 +33,7 @@ impl<const WIDTH_U64: usize> Bitset<WIDTH_U64> {
 
     #[inline]
     pub fn clear(&mut self) {
-        for b in self.bitset.iter_mut() {
-            *b = 0;
-        }
+        self.bitset.fill(0);
     }
 
     #[inline]

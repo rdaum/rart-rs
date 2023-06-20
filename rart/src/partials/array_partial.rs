@@ -20,7 +20,6 @@ impl<const SIZE: usize> ArrPartial<SIZE> {
         assert!(src.len() < SIZE);
         let mut data = [0; SIZE];
         data[..src.len()].copy_from_slice(src);
-        data[src.len()] = 0;
         Self {
             data,
             len: src.len() + 1,

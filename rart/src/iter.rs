@@ -1,13 +1,16 @@
 use crate::node::Node;
 use crate::tree::PrefixTraits;
 
+type IterEntry<'a, P, V> = (u8, &'a Node<P, V>);
+type NodeIterator<'a, P, V> = dyn Iterator<Item =IterEntry<'a, P, V>> + 'a;
+
 pub struct Iter<'a, P: PrefixTraits + 'a, V> {
     inner: Box<dyn Iterator<Item = (Vec<u8>, &'a V)> + 'a>,
     _marker: std::marker::PhantomData<P>,
 }
 
 struct IterInner<'a, P: PrefixTraits + 'a, V> {
-    node_iter_stack: Vec<Box<dyn Iterator<Item = (u8, &'a Node<P, V>)> + 'a>>,
+    node_iter_stack: Vec<Box<NodeIterator<'a, P, V>>>,
 
     // Pushed and popped with prefix portions as we descend the tree,
     cur_key: Vec<u8>,
@@ -16,8 +19,7 @@ struct IterInner<'a, P: PrefixTraits + 'a, V> {
 
 impl<'a, P: PrefixTraits + 'a, V> IterInner<'a, P, V> {
     pub fn new(node: &'a Node<P, V>) -> Self {
-        let mut node_iter_stack = Vec::new();
-        node_iter_stack.push(node.iter());
+        let node_iter_stack = vec![node.iter()];
 
         Self {
             node_iter_stack,

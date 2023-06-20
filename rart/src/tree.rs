@@ -85,7 +85,6 @@ impl<P: PrefixTraits, V> AdaptiveRadixTree<P, V> {
     pub fn get<K: Key>(&self, key: &K) -> Option<&V> {
         AdaptiveRadixTree::get_iterate(self.root.as_ref()?, key)
     }
-
     fn get_iterate<'a, K: Key>(cur_node: &'a Node<P, V>, key: &K) -> Option<&'a V> {
         let mut cur_node = cur_node;
         let mut depth = 0;
@@ -103,6 +102,29 @@ impl<P: PrefixTraits, V> AdaptiveRadixTree<P, V> {
             let k = key.at(depth + cur_node.prefix.length());
             depth += cur_node.prefix.length();
             cur_node = cur_node.seek_child(k)?;
+        }
+    }
+
+    pub fn get_mut<K: Key>(&mut self, key: &K) -> Option<&mut V> {
+        AdaptiveRadixTree::get_iterate_mut(self.root.as_mut()?, key)
+    }
+    fn get_iterate_mut<'a, K: Key>(cur_node: &'a mut Node<P, V>, key: &K) -> Option<&'a mut V> {
+        let mut cur_node = cur_node;
+        let mut depth = 0;
+        loop {
+            let key_prefix = key.partial_after(depth);
+            let prefix_common_match = cur_node.prefix.prefix_length_slice(key_prefix);
+            if prefix_common_match != cur_node.prefix.length() {
+                return None;
+            }
+
+            if cur_node.prefix.length() == key_prefix.len() {
+                return cur_node.value_mut();
+            }
+
+            let k = key.at(depth + cur_node.prefix.length());
+            depth += cur_node.prefix.length();
+            cur_node = cur_node.seek_child_mut(k)?;
         }
     }
 
@@ -382,7 +404,7 @@ mod tests {
     #[test]
     fn test_root_set_get() {
         let mut q = AdaptiveRadixTree::<ArrPartial<16>, i32>::new();
-        let key = VectorKey::from_str("abc");
+        let key = VectorKey::new_from_str("abc");
         q.insert(&key, 1);
         assert_eq!(*q.get(&key).unwrap(), 1);
     }
@@ -390,30 +412,30 @@ mod tests {
     #[test]
     fn test_string_keys_get_set() {
         let mut q = AdaptiveRadixTree::<ArrPartial<16>, i32>::new();
-        q.insert(&VectorKey::from_str("abcd"), 1);
-        q.insert(&VectorKey::from_str("abc"), 2);
-        q.insert(&VectorKey::from_str("abcde"), 3);
-        q.insert(&VectorKey::from_str("xyz"), 4);
-        q.insert(&VectorKey::from_str("xyz"), 5);
-        q.insert(&VectorKey::from_str("axyz"), 6);
-        q.insert(&VectorKey::from_str("1245zzz"), 6);
+        q.insert(&VectorKey::new_from_str("abcd"), 1);
+        q.insert(&VectorKey::new_from_str("abc"), 2);
+        q.insert(&VectorKey::new_from_str("abcde"), 3);
+        q.insert(&VectorKey::new_from_str("xyz"), 4);
+        q.insert(&VectorKey::new_from_str("xyz"), 5);
+        q.insert(&VectorKey::new_from_str("axyz"), 6);
+        q.insert(&VectorKey::new_from_str("1245zzz"), 6);
 
         eprintln!("Tree: ");
         q.print_tree();
         eprintln!();
 
-        assert_eq!(*q.get(&VectorKey::from_str("abcd")).unwrap(), 1);
-        assert_eq!(*q.get(&VectorKey::from_str("abc")).unwrap(), 2);
-        assert_eq!(*q.get(&VectorKey::from_str("abcde")).unwrap(), 3);
-        assert_eq!(*q.get(&VectorKey::from_str("axyz")).unwrap(), 6);
-        assert_eq!(*q.get(&VectorKey::from_str("xyz")).unwrap(), 5);
+        assert_eq!(*q.get(&VectorKey::new_from_str("abcd")).unwrap(), 1);
+        assert_eq!(*q.get(&VectorKey::new_from_str("abc")).unwrap(), 2);
+        assert_eq!(*q.get(&VectorKey::new_from_str("abcde")).unwrap(), 3);
+        assert_eq!(*q.get(&VectorKey::new_from_str("axyz")).unwrap(), 6);
+        assert_eq!(*q.get(&VectorKey::new_from_str("xyz")).unwrap(), 5);
 
-        assert!(q.remove(&VectorKey::from_str("abcde")));
-        assert_eq!(q.get(&VectorKey::from_str("abcde")), None);
-        assert_eq!(*q.get(&VectorKey::from_str("abc")).unwrap(), 2);
-        assert_eq!(*q.get(&VectorKey::from_str("axyz")).unwrap(), 6);
-        assert!(q.remove(&VectorKey::from_str("abc")));
-        assert_eq!(q.get(&VectorKey::from_str("abc")), None);
+        assert!(q.remove(&VectorKey::new_from_str("abcde")));
+        assert_eq!(q.get(&VectorKey::new_from_str("abcde")), None);
+        assert_eq!(*q.get(&VectorKey::new_from_str("abc")).unwrap(), 2);
+        assert_eq!(*q.get(&VectorKey::new_from_str("axyz")).unwrap(), 6);
+        assert!(q.remove(&VectorKey::new_from_str("abc")));
+        assert_eq!(q.get(&VectorKey::new_from_str("abc")), None);
     }
 
     #[test]

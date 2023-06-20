@@ -5,7 +5,6 @@ pub mod utils;
 
 pub mod iter;
 mod mapping;
-pub mod pageable;
 pub mod partials;
 pub mod range;
 pub mod tree;

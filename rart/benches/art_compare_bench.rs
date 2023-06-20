@@ -5,8 +5,6 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Through
 use rand::prelude::SliceRandom;
 use rand::{thread_rng, Rng};
 
-use rart::pageable::pageable_tree::PageableAdaptiveRadixTree;
-use rart::pageable::vector_node_store::VectorNodeStore;
 use rart::partials::array_partial::ArrPartial;
 use rart::partials::key::ArrayKey;
 use rart::tree::AdaptiveRadixTree;
@@ -18,15 +16,6 @@ pub fn seq_insert(c: &mut Criterion) {
     group.throughput(Throughput::Elements(1));
     group.bench_function("seq_insert", |b| {
         let mut tree = AdaptiveRadixTree::<ArrPartial<16>, _>::new();
-        let mut key = 0u64;
-        b.iter(|| {
-            tree.insert::<ArrayKey<16>>(&key.into(), key);
-            key += 1;
-        })
-    });
-
-    group.bench_function("seq_insert_vart", |b| {
-        let mut tree = PageableAdaptiveRadixTree::new(VectorNodeStore::<ArrPartial<16>, _>::new());
         let mut key = 0u64;
         b.iter(|| {
             tree.insert::<ArrayKey<16>>(&key.into(), key);
@@ -82,24 +71,6 @@ pub fn rand_insert(c: &mut Criterion) {
         })
     });
 
-    group.bench_function("vart", |b| {
-        let mut tree = PageableAdaptiveRadixTree::new(VectorNodeStore::<ArrPartial<16>, _>::new());
-        let mut rng = thread_rng();
-        b.iter(|| {
-            let key = &keys[rng.gen_range(0..keys.len())];
-            tree.insert::<ArrayKey<16>>(&key.into(), key.clone());
-        })
-    });
-
-    group.bench_function("vart_cached_keys", |b| {
-        let mut tree = PageableAdaptiveRadixTree::new(VectorNodeStore::<ArrPartial<16>, _>::new());
-        let mut rng = thread_rng();
-        b.iter(|| {
-            let key = &cached_keys[rng.gen_range(0..cached_keys.len())];
-            tree.insert(&key.0, key.1.clone());
-        })
-    });
-
     group.bench_function("hash", |b| {
         let mut tree = HashMap::new();
         let mut rng = thread_rng();
@@ -137,19 +108,6 @@ pub fn seq_delete(c: &mut Criterion) {
         })
     });
 
-    group.bench_function("vart", |b| {
-        let mut tree = PageableAdaptiveRadixTree::new(VectorNodeStore::<ArrPartial<16>, _>::new());
-        b.iter_custom(|iters| {
-            for i in 0..iters {
-                tree.insert::<ArrayKey<16>>(&i.into(), i);
-            }
-            let start = Instant::now();
-            for i in 0..iters {
-                tree.remove::<ArrayKey<16>>(&i.into());
-            }
-            start.elapsed()
-        })
-    });
     group.bench_function("hash", |b| {
         let mut tree = HashMap::new();
         b.iter_custom(|iters| {
@@ -210,30 +168,6 @@ pub fn rand_delete(c: &mut Criterion) {
             criterion::black_box(tree.remove(&key.0));
         })
     });
-    group.bench_function("vart", |b| {
-        let mut tree = PageableAdaptiveRadixTree::new(VectorNodeStore::<ArrPartial<16>, _>::new());
-        let mut rng = thread_rng();
-        for key in &keys {
-            tree.insert::<ArrayKey<16>>(&key.into(), key);
-        }
-        b.iter(|| {
-            let key = &keys[rng.gen_range(0..keys.len())];
-            criterion::black_box(tree.remove::<ArrayKey<16>>(&key.into()));
-        })
-    });
-
-    group.bench_function("vart_cached_keys", |b| {
-        let mut tree = PageableAdaptiveRadixTree::new(VectorNodeStore::<ArrPartial<16>, _>::new());
-        let mut rng = thread_rng();
-        for key in &cached_keys {
-            tree.insert(&key.0, key.1.clone());
-        }
-        b.iter(|| {
-            let key = &cached_keys[rng.gen_range(0..keys.len())];
-            criterion::black_box(tree.remove(&key.0));
-        })
-    });
-
     group.bench_function("hash", |b| {
         let mut tree = HashMap::new();
         let mut rng = thread_rng();
@@ -280,22 +214,6 @@ pub fn rand_get(c: &mut Criterion) {
         }
     }
     group.throughput(Throughput::Elements(1));
-    {
-        for size in SIZES {
-            group.bench_with_input(BenchmarkId::new("vart", size), &size, |b, size| {
-                let mut tree =
-                    PageableAdaptiveRadixTree::new(VectorNodeStore::<ArrPartial<16>, _>::new());
-                for i in 0..*size {
-                    tree.insert::<ArrayKey<16>>(&i.into(), i);
-                }
-                let mut rng = thread_rng();
-                b.iter(|| {
-                    let key = rng.gen_range(0..*size);
-                    criterion::black_box(tree.get::<ArrayKey<16>>(&key.into()));
-                })
-            });
-        }
-    }
     {
         for size in SIZES {
             group.bench_with_input(BenchmarkId::new("btree", size), &size, |b, size| {
@@ -375,45 +293,6 @@ pub fn rand_get_str(c: &mut Criterion) {
 
     {
         for size in SIZES {
-            group.bench_with_input(BenchmarkId::new("vart", size), &size, |b, _size| {
-                let mut tree =
-                    PageableAdaptiveRadixTree::new(VectorNodeStore::<ArrPartial<16>, _>::new());
-                for (i, key) in keys.iter().enumerate() {
-                    tree.insert::<ArrayKey<16>>(&key.into(), i);
-                }
-                let mut rng = thread_rng();
-                b.iter(|| {
-                    let key = &keys[rng.gen_range(0..keys.len())];
-                    criterion::black_box(tree.get::<ArrayKey<16>>(&key.into()));
-                })
-            });
-        }
-    }
-
-    group.throughput(Throughput::Elements(1));
-    {
-        for size in SIZES {
-            group.bench_with_input(
-                BenchmarkId::new("vart_cached_keys", size),
-                &size,
-                |b, _size| {
-                    let mut tree =
-                        PageableAdaptiveRadixTree::new(VectorNodeStore::<ArrPartial<16>, _>::new());
-                    for (i, key) in cached_keys.iter().enumerate() {
-                        tree.insert(&key.0, i);
-                    }
-                    let mut rng = thread_rng();
-                    b.iter(|| {
-                        let key = &cached_keys[rng.gen_range(0..keys.len())];
-                        criterion::black_box(tree.get(&key.0));
-                    })
-                },
-            );
-        }
-    }
-
-    {
-        for size in SIZES {
             group.bench_with_input(BenchmarkId::new("btree", size), &size, |b, _size| {
                 let mut tree = BTreeMap::new();
                 for (i, key) in keys.iter().enumerate() {
@@ -455,23 +334,6 @@ pub fn seq_get(c: &mut Criterion) {
         for size in SIZES {
             group.bench_with_input(BenchmarkId::new("art", size), &size, |b, size| {
                 let mut tree = AdaptiveRadixTree::<ArrPartial<16>, _>::new();
-                for i in 0..*size {
-                    tree.insert::<ArrayKey<16>>(&i.into(), i);
-                }
-                let mut key = 0u64;
-                b.iter(|| {
-                    criterion::black_box(tree.get::<ArrayKey<16>>(&key.into()));
-                    key += 1;
-                })
-            });
-        }
-    }
-    group.throughput(Throughput::Elements(1));
-    {
-        for size in SIZES {
-            group.bench_with_input(BenchmarkId::new("vart", size), &size, |b, size| {
-                let mut tree =
-                    PageableAdaptiveRadixTree::new(VectorNodeStore::<ArrPartial<16>, _>::new());
                 for i in 0..*size {
                     tree.insert::<ArrayKey<16>>(&i.into(), i);
                 }
