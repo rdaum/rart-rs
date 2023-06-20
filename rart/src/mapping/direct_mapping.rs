@@ -1,14 +1,13 @@
-use crate::mapping::indexed_boxed_mapping::IndexedBoxedNodeMapping;
-use crate::mapping::indexed_mapping::IndexedNodeMapping;
+use crate::mapping::indexed_mapping::IndexedMapping;
 use crate::node::NodeMapping;
 use crate::utils::bitarray::BitArray;
 
-pub(crate) struct DirectNodeMapping<N> {
-    children: Box<BitArray<N, 256, 4>>,
+pub(crate) struct DirectMapping<N> {
+    pub(crate) children: Box<BitArray<N, 256, 4>>,
     num_children: usize,
 }
 
-impl<N> DirectNodeMapping<N> {
+impl<N> DirectMapping<N> {
     pub fn new() -> Self {
         Self {
             children: Box::new(BitArray::new()),
@@ -16,39 +15,20 @@ impl<N> DirectNodeMapping<N> {
         }
     }
 
+    pub(crate) fn from_indexed<const WIDTH: usize, const BITWIDTH: usize>(im: &mut IndexedMapping<N, WIDTH, BITWIDTH>) -> Self {
+        let mut new_mapping = DirectMapping::<N>::new();
+        im.num_children = 0;
+        im.move_into(&mut new_mapping);
+        new_mapping
+    }
+
     #[inline]
     pub fn iter(&self) -> impl Iterator<Item = (u8, &N)> {
         self.children.iter().map(|(key, node)| (key as u8, node))
     }
-
-    pub fn to_indexed_boxed<const NEW_WIDTH: usize, const BITWIDTH: usize>(
-        &mut self,
-    ) -> IndexedBoxedNodeMapping<N, NEW_WIDTH, BITWIDTH> {
-        let mut indexed = IndexedBoxedNodeMapping::new();
-
-        let keys: Vec<usize> = self.children.iter_keys().collect();
-        for key in keys {
-            let child = self.children.erase(key).unwrap();
-            indexed.add_child(key as u8, child);
-        }
-        indexed
-    }
-
-    pub fn to_indexed<const NEW_WIDTH: usize, const BITWIDTH: usize>(
-        &mut self,
-    ) -> IndexedNodeMapping<N, NEW_WIDTH, BITWIDTH> {
-        let mut indexed = IndexedNodeMapping::new();
-
-        let keys: Vec<usize> = self.children.iter_keys().collect();
-        for key in keys {
-            let child = self.children.erase(key).unwrap();
-            indexed.add_child(key as u8, child);
-        }
-        indexed
-    }
 }
 
-impl<N> NodeMapping<N> for DirectNodeMapping<N> {
+impl<N> NodeMapping<N> for DirectMapping<N> {
     #[inline]
     fn add_child(&mut self, key: u8, node: N) {
         self.children.set(key as usize, node);
@@ -96,7 +76,7 @@ mod tests {
 
     #[test]
     fn direct_mapping_test() {
-        let mut dm = super::DirectNodeMapping::new();
+        let mut dm = super::DirectMapping::new();
         for i in 0..255 {
             dm.add_child(i, i);
             assert_eq!(*dm.seek_child(i).unwrap(), i);

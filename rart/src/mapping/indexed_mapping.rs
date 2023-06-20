@@ -1,49 +1,47 @@
-use crate::mapping::direct_mapping::DirectNodeMapping;
-use crate::mapping::keyed_mapping::KeyedChildMapping;
+use crate::mapping::direct_mapping::DirectMapping;
+use crate::mapping::keyed_mapping::KeyedMapping;
 use crate::node::NodeMapping;
 use crate::utils::bitarray::BitArray;
+use std::mem::MaybeUninit;
 
 // A mapping from keys to separate child pointers.
-// This is the non-boxed version which only works with Sized node types
-pub struct IndexedNodeMapping<N, const WIDTH: usize, const BITWIDTH: usize> {
-    child_ptr_indexes: BitArray<u8, 256, 4>,
-    children: BitArray<N, WIDTH, BITWIDTH>,
-    num_children: u8,
+pub struct IndexedMapping<N, const WIDTH: usize, const BITWIDTH: usize> {
+    child_ptr_indexes: Box<BitArray<u8, 256, 4>>,
+    children: Box<BitArray<N, WIDTH, BITWIDTH>>,
+    pub(crate) num_children: u8,
 }
 
-impl<N, const WIDTH: usize, const BITWIDTH: usize> IndexedNodeMapping<N, WIDTH, BITWIDTH> {
+impl<N, const WIDTH: usize, const BITWIDTH: usize> IndexedMapping<N, WIDTH, BITWIDTH> {
     pub fn new() -> Self {
         Self {
-            child_ptr_indexes: BitArray::new(),
-            children: BitArray::new(),
+            child_ptr_indexes: Box::new(BitArray::new()),
+            children: Box::new(BitArray::new()),
             num_children: 0,
         }
     }
 
-    pub(crate) fn to_keyed<const NEW_WIDTH: usize>(&mut self) -> KeyedChildMapping<N, NEW_WIDTH> {
-        let mut new_mapping = KeyedChildMapping::<N, NEW_WIDTH>::new();
-        self.num_children = 0;
-        self.move_into(&mut new_mapping);
-        new_mapping
+    pub(crate) fn from_direct(dm: &mut DirectMapping<N>) -> Self {
+        let mut indexed = IndexedMapping::new();
+
+        let keys: Vec<usize> = dm.children.iter_keys().collect();
+        for key in keys {
+            let child = dm.children.erase(key).unwrap();
+            indexed.add_child(key as u8, child);
+        }
+        indexed
     }
 
-    pub(crate) fn to_direct(&mut self) -> DirectNodeMapping<N> {
-        let mut new_mapping = DirectNodeMapping::<N>::new();
-        self.num_children = 0;
-        self.move_into(&mut new_mapping);
-        new_mapping
+    pub fn from_keyed<const KM_WIDTH: usize>(km: &mut KeyedMapping<N, KM_WIDTH>) -> Self {
+        let mut im: IndexedMapping<N, WIDTH, BITWIDTH> = IndexedMapping::new();
+        for i in 0..km.num_children as usize {
+            let stolen = std::mem::replace(&mut km.children[i], MaybeUninit::uninit());
+            im.add_child(km.keys[i], unsafe { stolen.assume_init() });
+        }
+        km.num_children = 0;
+        im
     }
 
-    pub(crate) fn resized<const NEW_WIDTH: usize>(
-        &mut self,
-    ) -> IndexedNodeMapping<N, NEW_WIDTH, BITWIDTH> {
-        let mut new_mapping = IndexedNodeMapping::<N, NEW_WIDTH, BITWIDTH>::new();
-        self.num_children = 0;
-        self.move_into(&mut new_mapping);
-        new_mapping
-    }
-
-    fn move_into<NM: NodeMapping<N>>(&mut self, nm: &mut NM) {
+    pub(crate) fn move_into<NM: NodeMapping<N>>(&mut self, nm: &mut NM) {
         for (key, pos) in self.child_ptr_indexes.iter() {
             let node = self.children.erase(*pos as usize).unwrap();
             nm.add_child(key as u8, node);
@@ -58,7 +56,7 @@ impl<N, const WIDTH: usize, const BITWIDTH: usize> IndexedNodeMapping<N, WIDTH, 
 }
 
 impl<N, const WIDTH: usize, const BITWIDTH: usize> NodeMapping<N>
-    for IndexedNodeMapping<N, WIDTH, BITWIDTH>
+    for IndexedMapping<N, WIDTH, BITWIDTH>
 {
     fn add_child(&mut self, key: u8, node: N) {
         let pos = self.children.first_free_pos().unwrap();
@@ -107,7 +105,7 @@ impl<N, const WIDTH: usize, const BITWIDTH: usize> NodeMapping<N>
     }
 }
 
-impl<N, const WIDTH: usize, const BITWIDTH: usize> Drop for IndexedNodeMapping<N, WIDTH, BITWIDTH> {
+impl<N, const WIDTH: usize, const BITWIDTH: usize> Drop for IndexedMapping<N, WIDTH, BITWIDTH> {
     fn drop(&mut self) {
         if self.num_children == 0 {
             return;
@@ -124,7 +122,7 @@ mod test {
 
     #[test]
     fn test_basic_mapping() {
-        let mut mapping = super::IndexedNodeMapping::<u8, 48, 1>::new();
+        let mut mapping = super::IndexedMapping::<u8, 48, 1>::new();
         for i in 0..48 {
             mapping.add_child(i, i);
             assert_eq!(*mapping.seek_child(i).unwrap(), i);

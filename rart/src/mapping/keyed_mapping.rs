@@ -1,16 +1,16 @@
 use std::mem::MaybeUninit;
 
-use crate::mapping::indexed_boxed_mapping::IndexedBoxedNodeMapping;
+use crate::mapping::indexed_mapping::IndexedMapping;
 use crate::node::NodeMapping;
 use crate::utils::u8_keys::{u8_keys_find_insert_position, u8_keys_find_key_position};
 
-pub struct KeyedBoxedChildMapping<N, const WIDTH: usize> {
-    keys: [u8; WIDTH],
-    children: Box<[MaybeUninit<N>; WIDTH]>,
-    num_children: u8,
+pub struct KeyedMapping<N, const WIDTH: usize> {
+    pub(crate) keys: [u8; WIDTH],
+    pub(crate) children: Box<[MaybeUninit<N>; WIDTH]>,
+    pub(crate) num_children: u8,
 }
 
-impl<N, const WIDTH: usize> KeyedBoxedChildMapping<N, WIDTH> {
+impl<N, const WIDTH: usize> KeyedMapping<N, WIDTH> {
     #[inline]
     pub fn new() -> Self {
         Self {
@@ -22,28 +22,24 @@ impl<N, const WIDTH: usize> KeyedBoxedChildMapping<N, WIDTH> {
         }
     }
 
-    pub fn resized<const NEW_WIDTH: usize>(&mut self) -> KeyedBoxedChildMapping<N, NEW_WIDTH> {
-        let mut new: KeyedBoxedChildMapping<N, NEW_WIDTH> = KeyedBoxedChildMapping::new();
-        for i in 0..self.num_children as usize {
-            new.keys[i] = self.keys[i];
-            new.children[i] = std::mem::replace(&mut self.children[i], MaybeUninit::uninit())
-        }
-        new.num_children = self.num_children;
-        self.num_children = 0;
-        new
+    pub(crate) fn from_indexed<const IDX_WIDTH: usize, const IDX_BITSIZE: usize>(
+        im: &mut IndexedMapping<N, IDX_WIDTH, IDX_BITSIZE>,
+    ) -> Self {
+        let mut new_mapping = KeyedMapping::new();
+        im.num_children = 0;
+        im.move_into(&mut new_mapping);
+        new_mapping
     }
 
-    pub fn to_indexed<const NEW_WIDTH: usize, const BITWIDTH: usize>(
-        &mut self,
-    ) -> IndexedBoxedNodeMapping<N, NEW_WIDTH, BITWIDTH> {
-        let mut im: IndexedBoxedNodeMapping<N, NEW_WIDTH, BITWIDTH> =
-            IndexedBoxedNodeMapping::new();
-        for i in 0..self.num_children as usize {
-            let stolen = std::mem::replace(&mut self.children[i], MaybeUninit::uninit());
-            im.add_child(self.keys[i], unsafe { stolen.assume_init() });
+    pub fn from_resized<const OLD_WIDTH: usize>(km: &mut KeyedMapping<N, OLD_WIDTH>) -> Self {
+        let mut new = KeyedMapping::new();
+        for i in 0..km.num_children as usize {
+            new.keys[i] = km.keys[i];
+            new.children[i] = std::mem::replace(&mut km.children[i], MaybeUninit::uninit())
         }
-        self.num_children = 0;
-        im
+        new.num_children = km.num_children;
+        km.num_children = 0;
+        new
     }
 
     #[inline]
@@ -56,7 +52,7 @@ impl<N, const WIDTH: usize> KeyedBoxedChildMapping<N, WIDTH> {
     }
 }
 
-impl<N, const WIDTH: usize> NodeMapping<N> for KeyedBoxedChildMapping<N, WIDTH> {
+impl<N, const WIDTH: usize> NodeMapping<N> for KeyedMapping<N, WIDTH> {
     #[inline]
     fn add_child(&mut self, key: u8, node: N) {
         let idx =
@@ -121,7 +117,7 @@ impl<N, const WIDTH: usize> NodeMapping<N> for KeyedBoxedChildMapping<N, WIDTH> 
     }
 }
 
-impl<N, const WIDTH: usize> Drop for KeyedBoxedChildMapping<N, WIDTH> {
+impl<N, const WIDTH: usize> Drop for KeyedMapping<N, WIDTH> {
     fn drop(&mut self) {
         for value in &mut self.children[..self.num_children as usize] {
             unsafe { value.assume_init_drop() }
@@ -132,11 +128,11 @@ impl<N, const WIDTH: usize> Drop for KeyedBoxedChildMapping<N, WIDTH> {
 
 #[cfg(test)]
 mod tests {
-    use crate::mapping::keyed_boxed_mapping::{KeyedBoxedChildMapping, NodeMapping};
+    use crate::mapping::keyed_mapping::{KeyedMapping, NodeMapping};
 
     #[test]
     fn test_add_seek_delete() {
-        let mut node = KeyedBoxedChildMapping::<u8, 4>::new();
+        let mut node = KeyedMapping::<u8, 4>::new();
         node.add_child(1, 1);
         node.add_child(2, 2);
         node.add_child(3, 3);
@@ -168,16 +164,10 @@ mod tests {
         // keys = 4
         // children array ptr = 8
         // total = 13 pads out to 16
-        assert_eq!(
-            std::mem::size_of::<KeyedBoxedChildMapping<Box<u8>, 4>>(),
-            16
-        );
+        assert_eq!(std::mem::size_of::<KeyedMapping<Box<u8>, 4>>(), 16);
 
-        // 40 is the padded size of the struct on account of
+        // 32 is the padded size of the struct on account of
         // num_children + keys (u8) + children ptrs
-        assert_eq!(
-            std::mem::size_of::<KeyedBoxedChildMapping<Box<u8>, 16>>(),
-            32
-        );
+        assert_eq!(std::mem::size_of::<KeyedMapping<Box<u8>, 16>>(), 32);
     }
 }

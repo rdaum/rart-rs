@@ -1,6 +1,6 @@
-use crate::mapping::direct_mapping::DirectNodeMapping;
-use crate::mapping::indexed_boxed_mapping::IndexedBoxedNodeMapping;
-use crate::mapping::keyed_boxed_mapping::KeyedBoxedChildMapping;
+use crate::mapping::direct_mapping::DirectMapping;
+use crate::mapping::indexed_mapping::IndexedMapping;
+use crate::mapping::keyed_mapping::KeyedMapping;
 use crate::Partial;
 
 pub(crate) struct Node<P: Partial + Clone, V> {
@@ -20,11 +20,11 @@ pub trait NodeMapping<N> {
 
 pub(crate) enum NodeType<P: Partial + Clone, V> {
     Leaf(V),
-    Node2(KeyedBoxedChildMapping<Node<P, V>, 2>),
-    Node4(KeyedBoxedChildMapping<Node<P, V>, 4>),
-    Node16(KeyedBoxedChildMapping<Node<P, V>, 16>),
-    Node48(IndexedBoxedNodeMapping<Node<P, V>, 48, 1>),
-    Node256(DirectNodeMapping<Node<P, V>>),
+    Node2(KeyedMapping<Node<P, V>, 2>),
+    Node4(KeyedMapping<Node<P, V>, 4>),
+    Node16(KeyedMapping<Node<P, V>, 16>),
+    Node48(IndexedMapping<Node<P, V>, 48, 1>),
+    Node256(DirectMapping<Node<P, V>>),
 }
 
 impl<P: Partial + Clone, V> Node<P, V> {
@@ -38,35 +38,35 @@ impl<P: Partial + Clone, V> Node<P, V> {
 
     #[inline]
     pub fn new_inner(prefix: P) -> Self {
-        let nt = NodeType::Node2(KeyedBoxedChildMapping::new());
+        let nt = NodeType::Node2(KeyedMapping::new());
         Self { prefix, ntype: nt }
     }
 
     #[inline]
     #[allow(dead_code)]
     pub fn new_4(prefix: P) -> Self {
-        let nt = NodeType::Node4(KeyedBoxedChildMapping::new());
+        let nt = NodeType::Node4(KeyedMapping::new());
         Self { prefix, ntype: nt }
     }
 
     #[inline]
     #[allow(dead_code)]
     pub fn new_16(prefix: P) -> Self {
-        let nt = NodeType::Node16(KeyedBoxedChildMapping::new());
+        let nt = NodeType::Node16(KeyedMapping::new());
         Self { prefix, ntype: nt }
     }
 
     #[inline]
     #[allow(dead_code)]
     pub fn new_48(prefix: P) -> Self {
-        let nt = NodeType::Node48(IndexedBoxedNodeMapping::new());
+        let nt = NodeType::Node48(IndexedMapping::new());
         Self { prefix, ntype: nt }
     }
 
     #[inline]
     #[allow(dead_code)]
     pub fn new_256(prefix: P) -> Self {
-        let nt = NodeType::Node256(DirectNodeMapping::new());
+        let nt = NodeType::Node256(DirectMapping::new());
         Self { prefix, ntype: nt }
     }
 
@@ -215,20 +215,17 @@ impl<P: Partial + Clone, V> Node<P, V> {
                 unreachable!("Should never shrink a node4")
             }
             NodeType::Node4(km) => {
-                self.ntype = NodeType::Node2(km.resized());
+                self.ntype = NodeType::Node2(KeyedMapping::from_resized(km));
             }
             NodeType::Node16(km) => {
-                self.ntype = NodeType::Node4(km.resized());
+                self.ntype = NodeType::Node4(KeyedMapping::from_resized(km));
             }
             NodeType::Node48(im) => {
-                let km = im.to_keyed();
-
-                let new_node = NodeType::Node16(km);
+                let new_node = NodeType::Node16(KeyedMapping::from_indexed(im));
                 self.ntype = new_node;
             }
             NodeType::Node256(dm) => {
-                let im = dm.to_indexed_boxed();
-                self.ntype = NodeType::Node48(im);
+                self.ntype = NodeType::Node48(IndexedMapping::from_direct(dm));
             }
             NodeType::Leaf(_) => unreachable!("Should not be possible."),
         }
@@ -237,20 +234,18 @@ impl<P: Partial + Clone, V> Node<P, V> {
     fn grow(&mut self) {
         match &mut self.ntype {
             NodeType::Node2(km) => {
-                let new_node = NodeType::Node4(km.resized());
+                let new_node = NodeType::Node4(KeyedMapping::from_resized(km));
                 self.ntype = new_node
             }
             NodeType::Node4(km) => {
-                let new_node = NodeType::Node16(km.resized());
+                let new_node = NodeType::Node16(KeyedMapping::from_resized(km));
                 self.ntype = new_node
             }
             NodeType::Node16(km) => {
-                let im = km.to_indexed();
-                self.ntype = NodeType::Node48(im)
+                self.ntype = NodeType::Node48(IndexedMapping::from_keyed(km))
             }
             NodeType::Node48(im) => {
-                let dm = im.to_direct();
-                self.ntype = NodeType::Node256(dm);
+                self.ntype = NodeType::Node256(DirectMapping::from_indexed(im));
             }
             NodeType::Node256 { .. } => {
                 unreachable!("Should never grow a node256")

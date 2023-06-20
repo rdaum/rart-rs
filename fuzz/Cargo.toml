@@ -1,0 +1,22 @@
+[package]
+name = "rart-rs-fuzz"
+version = "0.1.0"
+authors = ["Automatically generated"]
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4.6"
+arbitrary = { version = "1.3.0", features = ["derive"] }
+
+[dependencies.rart]
+path = "../rart"
+
+[[bin]]
+name = "rart_check"
+path = "src/rart_check.rs"
+test = false
+doc = false

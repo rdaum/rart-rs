@@ -129,31 +129,16 @@ fn binary_find_key(key: u8, keys: &[u8], num_children: usize) -> Option<usize> {
     let mut right = num_children;
     while left < right {
         let mid = (left + right) / 2;
-        if keys[mid] == key {
-            return Some(mid);
-        } else if keys[mid] < key {
-            left = mid + 1;
-        } else {
-            right = mid;
+        match keys[mid].cmp(&key) {
+            std::cmp::Ordering::Less => left = mid + 1,
+            std::cmp::Ordering::Equal => return Some(mid),
+            std::cmp::Ordering::Greater => right = mid,
         }
     }
     None
 }
 
-fn bit_floor(n: usize) -> usize {
-    let mut n = n;
-    n |= n >> 1;
-    n |= n >> 2;
-    n |= n >> 4;
-    n |= n >> 8;
-    n |= n >> 16;
-    n
-}
-
-fn bit_ceil(n: usize) -> usize {
-    bit_floor(n - 1) + 1
-}
-
+#[allow(unreachable_code)]
 pub fn u8_keys_find_key_position<const WIDTH: usize>(
     key: u8,
     keys: &[u8],
