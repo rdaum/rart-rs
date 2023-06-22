@@ -2,7 +2,7 @@ use crate::node::Node;
 use crate::tree::PrefixTraits;
 
 type IterEntry<'a, P, V> = (u8, &'a Node<P, V>);
-type NodeIterator<'a, P, V> = dyn Iterator<Item =IterEntry<'a, P, V>> + 'a;
+type NodeIterator<'a, P, V> = dyn Iterator<Item = IterEntry<'a, P, V>> + 'a;
 
 pub struct Iter<'a, P: PrefixTraits + 'a, V> {
     inner: Box<dyn Iterator<Item = (Vec<u8>, &'a V)> + 'a>,

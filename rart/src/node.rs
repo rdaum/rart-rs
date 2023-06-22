@@ -1,7 +1,7 @@
 use crate::mapping::direct_mapping::DirectMapping;
 use crate::mapping::indexed_mapping::IndexedMapping;
 use crate::mapping::keyed_mapping::KeyedMapping;
-use crate::Partial;
+use crate::partials::Partial;
 
 pub(crate) struct Node<P: Partial + Clone, V> {
     pub(crate) prefix: P,
@@ -20,7 +20,6 @@ pub trait NodeMapping<N> {
 
 pub(crate) enum NodeType<P: Partial + Clone, V> {
     Leaf(V),
-    Node2(KeyedMapping<Node<P, V>, 2>),
     Node4(KeyedMapping<Node<P, V>, 4>),
     Node16(KeyedMapping<Node<P, V>, 16>),
     Node48(IndexedMapping<Node<P, V>, 48, 1>),
@@ -38,7 +37,7 @@ impl<P: Partial + Clone, V> Node<P, V> {
 
     #[inline]
     pub fn new_inner(prefix: P) -> Self {
-        let nt = NodeType::Node2(KeyedMapping::new());
+        let nt = NodeType::Node4(KeyedMapping::new());
         Self { prefix, ntype: nt }
     }
 
@@ -95,7 +94,6 @@ impl<P: Partial + Clone, V> Node<P, V> {
 
     pub fn num_children(&self) -> usize {
         match &self.ntype {
-            NodeType::Node2(n) => n.num_children(),
             NodeType::Node4(n) => n.num_children(),
             NodeType::Node16(n) => n.num_children(),
             NodeType::Node48(n) => n.num_children(),
@@ -109,10 +107,9 @@ impl<P: Partial + Clone, V> Node<P, V> {
         }
 
         match &self.ntype {
-            NodeType::Node2(dm) => dm.seek_child(key),
-            NodeType::Node4(dm) => dm.seek_child(key),
-            NodeType::Node16(dm) => dm.seek_child(key),
-            NodeType::Node48(im) => im.seek_child(key),
+            NodeType::Node4(km) => km.seek_child(key),
+            NodeType::Node16(km) => km.seek_child(key),
+            NodeType::Node48(km) => km.seek_child(key),
             NodeType::Node256(children) => children.seek_child(key),
             NodeType::Leaf(_) => None,
         }
@@ -120,10 +117,9 @@ impl<P: Partial + Clone, V> Node<P, V> {
 
     pub(crate) fn seek_child_mut(&mut self, key: u8) -> Option<&mut Node<P, V>> {
         match &mut self.ntype {
-            NodeType::Node2(dm) => dm.seek_child_mut(key),
-            NodeType::Node4(dm) => dm.seek_child_mut(key),
-            NodeType::Node16(dm) => dm.seek_child_mut(key),
-            NodeType::Node48(im) => im.seek_child_mut(key),
+            NodeType::Node4(km) => km.seek_child_mut(key),
+            NodeType::Node16(km) => km.seek_child_mut(key),
+            NodeType::Node48(km) => km.seek_child_mut(key),
             NodeType::Node256(children) => children.seek_child_mut(key),
             NodeType::Leaf(_) => None,
         }
@@ -135,14 +131,11 @@ impl<P: Partial + Clone, V> Node<P, V> {
         }
 
         match &mut self.ntype {
-            NodeType::Node2(dm) => {
-                dm.add_child(key, node);
+            NodeType::Node4(km) => {
+                km.add_child(key, node);
             }
-            NodeType::Node4(dm) => {
-                dm.add_child(key, node);
-            }
-            NodeType::Node16(dm) => {
-                dm.add_child(key, node);
+            NodeType::Node16(km) => {
+                km.add_child(key, node);
             }
             NodeType::Node48(im) => {
                 im.add_child(key, node);
@@ -156,15 +149,7 @@ impl<P: Partial + Clone, V> Node<P, V> {
 
     pub(crate) fn delete_child(&mut self, key: u8) -> Option<Node<P, V>> {
         match &mut self.ntype {
-            NodeType::Node2(dm) => dm.delete_child(key),
-            NodeType::Node4(dm) => {
-                let node = dm.delete_child(key);
-
-                if self.num_children() < 3 {
-                    self.shrink();
-                }
-                node
-            }
+            NodeType::Node4(dm) => dm.delete_child(key),
             NodeType::Node16(dm) => {
                 let node = dm.delete_child(key);
 
@@ -199,7 +184,6 @@ impl<P: Partial + Clone, V> Node<P, V> {
     #[inline]
     fn is_full(&self) -> bool {
         match &self.ntype {
-            NodeType::Node2(km) => self.num_children() >= km.width(),
             NodeType::Node4(km) => self.num_children() >= km.width(),
             NodeType::Node16(km) => self.num_children() >= km.width(),
             NodeType::Node48(im) => self.num_children() >= im.width(),
@@ -211,14 +195,11 @@ impl<P: Partial + Clone, V> Node<P, V> {
 
     fn shrink(&mut self) {
         match &mut self.ntype {
-            NodeType::Node2(_dm) => {
+            NodeType::Node4(_) => {
                 unreachable!("Should never shrink a node4")
             }
-            NodeType::Node4(km) => {
-                self.ntype = NodeType::Node2(KeyedMapping::from_resized(km));
-            }
             NodeType::Node16(km) => {
-                self.ntype = NodeType::Node4(KeyedMapping::from_resized(km));
+                self.ntype = NodeType::Node4(KeyedMapping::from_resized_shrink(km));
             }
             NodeType::Node48(im) => {
                 let new_node = NodeType::Node16(KeyedMapping::from_indexed(im));
@@ -233,17 +214,10 @@ impl<P: Partial + Clone, V> Node<P, V> {
 
     fn grow(&mut self) {
         match &mut self.ntype {
-            NodeType::Node2(km) => {
-                let new_node = NodeType::Node4(KeyedMapping::from_resized(km));
-                self.ntype = new_node
-            }
             NodeType::Node4(km) => {
-                let new_node = NodeType::Node16(KeyedMapping::from_resized(km));
-                self.ntype = new_node
+                self.ntype = NodeType::Node16(KeyedMapping::from_resized_grow(km))
             }
-            NodeType::Node16(km) => {
-                self.ntype = NodeType::Node48(IndexedMapping::from_keyed(km))
-            }
+            NodeType::Node16(km) => self.ntype = NodeType::Node48(IndexedMapping::from_keyed(km)),
             NodeType::Node48(im) => {
                 self.ntype = NodeType::Node256(DirectMapping::from_indexed(im));
             }
@@ -256,7 +230,6 @@ impl<P: Partial + Clone, V> Node<P, V> {
 
     pub(crate) fn capacity(&self) -> usize {
         match &self.ntype {
-            NodeType::Node2 { .. } => 2,
             NodeType::Node4 { .. } => 4,
             NodeType::Node16 { .. } => 16,
             NodeType::Node48 { .. } => 48,
@@ -273,7 +246,6 @@ impl<P: Partial + Clone, V> Node<P, V> {
     #[allow(dead_code)]
     pub fn iter(&self) -> Box<dyn Iterator<Item = (u8, &Self)> + '_> {
         return match &self.ntype {
-            NodeType::Node2(n) => Box::new(n.iter()),
             NodeType::Node4(n) => Box::new(n.iter()),
             NodeType::Node16(n) => Box::new(n.iter()),
             NodeType::Node48(n) => Box::new(n.iter()),
@@ -281,27 +253,16 @@ impl<P: Partial + Clone, V> Node<P, V> {
             NodeType::Leaf(_) => Box::new(std::iter::empty()),
         };
     }
-
-    pub fn node_type_name(&self) -> String {
-        match &self.ntype {
-            NodeType::Node2(_) => "Node2".to_string(),
-            NodeType::Node4(_) => "Node4".to_string(),
-            NodeType::Node16(_) => "Node16".to_string(),
-            NodeType::Node48(_) => "Node48".to_string(),
-            NodeType::Node256(_) => "Node256".to_string(),
-            NodeType::Leaf(_) => "Leaf".to_string(),
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::node::Node;
-    use crate::partials::shared_partial::{SharedPartial, SharedPartialRoot};
+    use crate::partials::array_partial::ArrPartial;
 
     #[test]
     fn test_n4() {
-        let test_key: SharedPartial<16> = SharedPartialRoot::key("abc".as_bytes());
+        let test_key: ArrPartial<16> = ArrPartial::key("abc".as_bytes());
 
         let mut n4 = Node::new_4(test_key.clone());
         n4.add_child(5, Node::new_leaf(test_key.clone(), 1));
@@ -332,7 +293,7 @@ mod tests {
 
     #[test]
     fn test_n16() {
-        let test_key: SharedPartial<16> = SharedPartialRoot::key("abc".as_bytes());
+        let test_key: ArrPartial<16> = ArrPartial::key("abc".as_bytes());
 
         let mut n16 = Node::new_16(test_key.clone());
 
@@ -377,7 +338,7 @@ mod tests {
 
     #[test]
     fn test_n48() {
-        let test_key: SharedPartial<16> = SharedPartialRoot::key("abc".as_bytes());
+        let test_key: ArrPartial<16> = ArrPartial::key("abc".as_bytes());
 
         let mut n48 = Node::new_48(test_key.clone());
 
@@ -401,7 +362,7 @@ mod tests {
 
     #[test]
     fn test_n_256() {
-        let test_key: SharedPartial<16> = SharedPartialRoot::key("abc".as_bytes());
+        let test_key: ArrPartial<16> = ArrPartial::key("abc".as_bytes());
 
         let mut n256 = Node::new_256(test_key.clone());
 

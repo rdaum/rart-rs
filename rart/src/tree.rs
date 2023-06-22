@@ -1,14 +1,13 @@
 use std::cmp::min;
 use std::collections::{Bound, HashMap};
 use std::fmt::Debug;
-
 use std::ops::RangeBounds;
 
 use crate::iter::Iter;
+use crate::keys::KeyTrait;
 use crate::node::{Node, NodeType};
-use crate::partials::key::Key;
+use crate::partials::Partial;
 use crate::range::Range;
-use crate::Partial;
 
 #[derive(Debug)]
 pub struct NodeStats {
@@ -30,7 +29,10 @@ pub struct TreeStats {
 pub trait PrefixTraits: Partial + Clone + PartialEq + Debug + for<'a> From<&'a [u8]> {}
 impl<T: Partial + Clone + PartialEq + Debug + for<'a> From<&'a [u8]>> PrefixTraits for T {}
 
-pub struct AdaptiveRadixTree<P: PrefixTraits, V> {
+pub struct AdaptiveRadixTree<P, V>
+where
+    P: PrefixTraits,
+{
     root: Option<Node<P, V>>,
 }
 
@@ -38,28 +40,6 @@ impl<P: PrefixTraits, V> Default for AdaptiveRadixTree<P, V> {
     fn default() -> Self {
         Self::new()
     }
-}
-
-pub fn key_str_rep<K: Key>(k: &K) -> String {
-    let s = k.as_slice();
-    // hex string
-    let s = s
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect::<Vec<_>>()
-        .join(" ");
-    format!("[{}]", s)
-}
-
-pub fn prefix_str_rep<P: PrefixTraits>(p: &P) -> String {
-    let s = p.to_slice();
-    // hex string
-    let s = s
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect::<Vec<_>>()
-        .join(" ");
-    format!("[{}]", s)
 }
 
 fn update_tree_stats<P: Partial + Clone, V>(tree_stats: &mut TreeStats, node: &Node<P, V>) {
@@ -77,53 +57,67 @@ fn update_tree_stats<P: Partial + Clone, V>(tree_stats: &mut TreeStats, node: &N
             density: 0.0,
         });
 }
-impl<P: PrefixTraits, V> AdaptiveRadixTree<P, V> {
+
+impl<P, V> AdaptiveRadixTree<P, V>
+where
+    P: PrefixTraits,
+{
     pub fn new() -> Self {
         Self { root: None }
     }
 
-    pub fn get<K: Key>(&self, key: &K) -> Option<&V> {
+    pub fn get<K>(&self, key: &K) -> Option<&V>
+    where
+        K: KeyTrait<P>,
+    {
         AdaptiveRadixTree::get_iterate(self.root.as_ref()?, key)
     }
-    fn get_iterate<'a, K: Key>(cur_node: &'a Node<P, V>, key: &K) -> Option<&'a V> {
+    fn get_iterate<'a, K>(cur_node: &'a Node<P, V>, key: &K) -> Option<&'a V>
+    where
+        K: KeyTrait<P>,
+    {
         let mut cur_node = cur_node;
         let mut depth = 0;
         loop {
-            let key_prefix = key.partial_after(depth);
-            let prefix_common_match = cur_node.prefix.prefix_length_slice(key_prefix);
-            if prefix_common_match != cur_node.prefix.length() {
+            let prefix_common_match = cur_node.prefix.prefix_length_key(key, depth);
+            if prefix_common_match != cur_node.prefix.len() {
                 return None;
             }
 
-            if cur_node.prefix.length() == key_prefix.len() {
+            if cur_node.prefix.len() == (key.len() - depth) {
                 return cur_node.value();
             }
 
-            let k = key.at(depth + cur_node.prefix.length());
-            depth += cur_node.prefix.length();
+            let k = key.at(depth + cur_node.prefix.len());
+            depth += cur_node.prefix.len();
             cur_node = cur_node.seek_child(k)?;
         }
     }
 
-    pub fn get_mut<K: Key>(&mut self, key: &K) -> Option<&mut V> {
+    pub fn get_mut<K>(&mut self, key: &K) -> Option<&mut V>
+    where
+        K: KeyTrait<P>,
+    {
         AdaptiveRadixTree::get_iterate_mut(self.root.as_mut()?, key)
     }
-    fn get_iterate_mut<'a, K: Key>(cur_node: &'a mut Node<P, V>, key: &K) -> Option<&'a mut V> {
+    fn get_iterate_mut<'a, K>(cur_node: &'a mut Node<P, V>, key: &K) -> Option<&'a mut V>
+    where
+        K: KeyTrait<P>,
+    {
         let mut cur_node = cur_node;
         let mut depth = 0;
         loop {
-            let key_prefix = key.partial_after(depth);
-            let prefix_common_match = cur_node.prefix.prefix_length_slice(key_prefix);
-            if prefix_common_match != cur_node.prefix.length() {
+            let prefix_common_match = cur_node.prefix.prefix_length_key(key, depth);
+            if prefix_common_match != cur_node.prefix.len() {
                 return None;
             }
 
-            if cur_node.prefix.length() == key_prefix.len() {
+            if cur_node.prefix.len() == key.len() - depth {
                 return cur_node.value_mut();
             }
 
-            let k = key.at(depth + cur_node.prefix.length());
-            depth += cur_node.prefix.length();
+            let k = key.at(depth + cur_node.prefix.len());
+            depth += cur_node.prefix.len();
             cur_node = cur_node.seek_child_mut(k)?;
         }
     }
@@ -132,7 +126,7 @@ impl<P: PrefixTraits, V> AdaptiveRadixTree<P, V> {
         Iter::new(self.root.as_ref())
     }
 
-    pub fn range<'a, K: Key, R>(&'a self, range: R) -> Range<K, P, V>
+    pub fn range<'a, K: KeyTrait<P>, R>(&'a self, range: R) -> Range<K, P, V>
     where
         R: RangeBounds<K> + 'a,
     {
@@ -150,8 +144,8 @@ impl<P: PrefixTraits, V> AdaptiveRadixTree<P, V> {
             }
         };
 
-        while let Some((k, _)) = iter.next() {
-            if start_key.as_slice() == k.as_slice() {
+        while let Some((k_vec, _)) = iter.next() {
+            if start_key.matches_slice(k_vec.as_slice()) {
                 if let Bound::Excluded(_) = range.start_bound() {
                     iter.next();
                 }
@@ -163,9 +157,9 @@ impl<P: PrefixTraits, V> AdaptiveRadixTree<P, V> {
         Range::empty()
     }
 
-    pub fn insert<K: Key>(&mut self, key: &K, value: V) -> Option<V> {
+    pub fn insert<K: KeyTrait<P>>(&mut self, key: &K, value: V) -> Option<V> {
         if self.root.is_none() {
-            self.root = Some(Node::new_leaf(key.as_slice().into(), value));
+            self.root = Some(Node::new_leaf(key.to_prefix(0), value));
             return None;
         };
 
@@ -174,7 +168,7 @@ impl<P: PrefixTraits, V> AdaptiveRadixTree<P, V> {
         AdaptiveRadixTree::insert_recurse(root, key, value, 0)
     }
 
-    fn insert_recurse<K: Key>(
+    fn insert_recurse<K: KeyTrait<P>>(
         cur_node: &mut Node<P, V>,
         key: &K,
         value: V,
@@ -182,16 +176,14 @@ impl<P: PrefixTraits, V> AdaptiveRadixTree<P, V> {
     ) -> Option<V> {
         let cur_node_prefix = cur_node.prefix.clone();
 
-        let key_prefix = key.partial_after(depth);
-        let longest_common_prefix = cur_node_prefix.prefix_length_slice(key_prefix);
+        let longest_common_prefix = cur_node_prefix.prefix_length_key(key, depth);
 
-        let is_prefix_match =
-            min(cur_node_prefix.length(), key_prefix.len()) == longest_common_prefix;
+        let is_prefix_match = min(cur_node_prefix.len(), key.len()) == longest_common_prefix;
 
         // Prefix fully covers this node.
         // Either sets the value or replaces the old value already here.
         if let NodeType::Leaf(ref mut v) = &mut cur_node.ntype {
-            if is_prefix_match && cur_node_prefix.length() == key_prefix.len() {
+            if is_prefix_match && cur_node_prefix.len() == key.len() - depth {
                 return Some(std::mem::replace(v, value));
             }
         }
@@ -206,13 +198,13 @@ impl<P: PrefixTraits, V> AdaptiveRadixTree<P, V> {
             let n4 = Node::new_inner(cur_node_prefix.partial_before(longest_common_prefix));
 
             let k1 = cur_node_prefix.at(longest_common_prefix);
-            let k2 = key_prefix[longest_common_prefix];
+            let k2 = key.at(depth + longest_common_prefix);
 
             let replacement_current = std::mem::replace(cur_node, n4);
 
             // We've deferred creating the leaf til now so that we can take ownership over the
             // key after other things are done peering at it.
-            let new_leaf = Node::new_leaf(key_prefix[longest_common_prefix..].into(), value);
+            let new_leaf = Node::new_leaf(key.to_prefix(depth + longest_common_prefix), value);
 
             // Add the old leaf node as a child of the new inner node.
             cur_node.add_child(k1, replacement_current);
@@ -223,7 +215,7 @@ impl<P: PrefixTraits, V> AdaptiveRadixTree<P, V> {
 
         // We must be an inner node, and either we need a new baby, or one of our children does, so
         // we'll hunt and see.
-        let k = key_prefix[longest_common_prefix];
+        let k = key.at(depth + longest_common_prefix);
 
         let child_for_key = cur_node.seek_child_mut(k);
         if let Some(child) = child_for_key {
@@ -237,12 +229,12 @@ impl<P: PrefixTraits, V> AdaptiveRadixTree<P, V> {
 
         // We should not be a leaf at this point. If so, something bad has happened.
         assert!(cur_node.is_inner());
-        let new_leaf = Node::new_leaf(key_prefix[longest_common_prefix..].into(), value);
+        let new_leaf = Node::new_leaf(key.to_prefix(depth + longest_common_prefix), value);
         cur_node.add_child(k, new_leaf);
         None
     }
 
-    pub fn remove<K: Key>(&mut self, key: &K) -> bool {
+    pub fn remove<K: KeyTrait<P>>(&mut self, key: &K) -> bool {
         if self.root.is_none() {
             return false;
         }
@@ -250,7 +242,7 @@ impl<P: PrefixTraits, V> AdaptiveRadixTree<P, V> {
         AdaptiveRadixTree::remove_recurse(&mut self.root.as_mut(), key, 0)
     }
 
-    fn remove_recurse<K: Key>(
+    fn remove_recurse<K: KeyTrait<P>>(
         cur_node_ptr: &mut Option<&mut Node<P, V>>,
         key: &K,
         depth: usize,
@@ -261,32 +253,31 @@ impl<P: PrefixTraits, V> AdaptiveRadixTree<P, V> {
 
         let prefix = cur_node_ptr.as_ref().unwrap().prefix.clone();
 
-        let key_prefix = key.partial_after(depth);
-        let longest_common_prefix = prefix.prefix_length_slice(key_prefix);
+        let longest_common_prefix = prefix.prefix_length_key(key, depth);
 
-        if prefix.length() != longest_common_prefix {
+        if prefix.len() != longest_common_prefix {
             // No prefix match, so we can't delete anything.
             return false;
         }
-        let prefix_matched = min(prefix.length(), key_prefix.len()) == longest_common_prefix;
+        let prefix_matched = min(prefix.len(), key.len() - depth) == longest_common_prefix;
 
         let Some(node) = cur_node_ptr else {
             return false;
         };
 
         // Simplest scenario, we get to just drop the leaf node.
-        if prefix_matched && prefix.length() == key_prefix.len() {
+        if prefix_matched && prefix.len() == key.len() - depth {
             *cur_node_ptr = None;
             return true;
         }
 
-        let k = key_prefix[longest_common_prefix];
+        let k = key.at(depth + longest_common_prefix);
         let mut next = node.seek_child_mut(k);
         if let Some(child_node) = &next {
             // If we have no children, this node can be pruned out.
             if child_node.num_children() == 0 {
                 // We can delete this leaf node.
-                if child_node.prefix.length() == key_prefix.len() - longest_common_prefix {
+                if child_node.prefix.len() == key.len() - longest_common_prefix - depth {
                     node.delete_child(k).expect("child not found");
                     return true;
                 }
@@ -302,36 +293,6 @@ impl<P: PrefixTraits, V> AdaptiveRadixTree<P, V> {
         }
 
         false
-    }
-
-    pub fn print_tree(&self) {
-        if self.root.is_none() {
-            eprintln!("[]]");
-            return;
-        }
-
-        AdaptiveRadixTree::print_tree_recurse(self.root.as_ref().unwrap(), 0);
-    }
-
-    fn print_tree_recurse(node: &Node<P, V>, depth: usize) {
-        let indent = "  ".repeat(depth);
-        eprintln!(
-            "{}{} prefix {}, {} #children",
-            indent,
-            node.node_type_name(),
-            prefix_str_rep(&node.prefix),
-            node.num_children()
-        );
-
-        for (k, child) in node.iter() {
-            eprintln!(
-                "{}  ({:02x}) {} =>",
-                indent,
-                k,
-                prefix_str_rep(&child.prefix)
-            );
-            AdaptiveRadixTree::print_tree_recurse(child, depth + 1);
-        }
     }
 
     pub fn get_tree_stats(&self) -> TreeStats {
@@ -391,69 +352,67 @@ impl<P: PrefixTraits, V> AdaptiveRadixTree<P, V> {
 
 #[cfg(test)]
 mod tests {
-    use rand::seq::SliceRandom;
-    use rand::{thread_rng, Rng};
     use std::collections::{btree_map, BTreeMap, BTreeSet};
     use std::fmt::Debug;
 
+    use rand::seq::SliceRandom;
+    use rand::{thread_rng, Rng};
+
+    use crate::keys::array_key::ArrayKey;
+    use crate::keys::KeyTrait;
     use crate::partials::array_partial::ArrPartial;
-    use crate::partials::key::{ArrayKey, Key, VectorKey};
     use crate::tree;
-    use crate::tree::{key_str_rep, AdaptiveRadixTree, PrefixTraits};
+    use crate::tree::{AdaptiveRadixTree, PrefixTraits};
 
     #[test]
     fn test_root_set_get() {
         let mut q = AdaptiveRadixTree::<ArrPartial<16>, i32>::new();
-        let key = VectorKey::new_from_str("abc");
-        q.insert(&key, 1);
-        assert_eq!(*q.get(&key).unwrap(), 1);
+        let key = ArrayKey::new_from_str("abc");
+        assert!(q.insert(&key, 1).is_none());
+        assert_eq!(q.get(&key), Some(&1));
     }
 
     #[test]
     fn test_string_keys_get_set() {
         let mut q = AdaptiveRadixTree::<ArrPartial<16>, i32>::new();
-        q.insert(&VectorKey::new_from_str("abcd"), 1);
-        q.insert(&VectorKey::new_from_str("abc"), 2);
-        q.insert(&VectorKey::new_from_str("abcde"), 3);
-        q.insert(&VectorKey::new_from_str("xyz"), 4);
-        q.insert(&VectorKey::new_from_str("xyz"), 5);
-        q.insert(&VectorKey::new_from_str("axyz"), 6);
-        q.insert(&VectorKey::new_from_str("1245zzz"), 6);
+        q.insert(&ArrayKey::new_from_str("abcd"), 1);
+        q.insert(&ArrayKey::new_from_str("abc"), 2);
+        q.insert(&ArrayKey::new_from_str("abcde"), 3);
+        q.insert(&ArrayKey::new_from_str("xyz"), 4);
+        q.insert(&ArrayKey::new_from_str("xyz"), 5);
+        q.insert(&ArrayKey::new_from_str("axyz"), 6);
+        q.insert(&ArrayKey::new_from_str("1245zzz"), 6);
 
-        eprintln!("Tree: ");
-        q.print_tree();
-        eprintln!();
+        assert_eq!(*q.get(&ArrayKey::new_from_str("abcd")).unwrap(), 1);
+        assert_eq!(*q.get(&ArrayKey::new_from_str("abc")).unwrap(), 2);
+        assert_eq!(*q.get(&ArrayKey::new_from_str("abcde")).unwrap(), 3);
+        assert_eq!(*q.get(&ArrayKey::new_from_str("axyz")).unwrap(), 6);
+        assert_eq!(*q.get(&ArrayKey::new_from_str("xyz")).unwrap(), 5);
 
-        assert_eq!(*q.get(&VectorKey::new_from_str("abcd")).unwrap(), 1);
-        assert_eq!(*q.get(&VectorKey::new_from_str("abc")).unwrap(), 2);
-        assert_eq!(*q.get(&VectorKey::new_from_str("abcde")).unwrap(), 3);
-        assert_eq!(*q.get(&VectorKey::new_from_str("axyz")).unwrap(), 6);
-        assert_eq!(*q.get(&VectorKey::new_from_str("xyz")).unwrap(), 5);
-
-        assert!(q.remove(&VectorKey::new_from_str("abcde")));
-        assert_eq!(q.get(&VectorKey::new_from_str("abcde")), None);
-        assert_eq!(*q.get(&VectorKey::new_from_str("abc")).unwrap(), 2);
-        assert_eq!(*q.get(&VectorKey::new_from_str("axyz")).unwrap(), 6);
-        assert!(q.remove(&VectorKey::new_from_str("abc")));
-        assert_eq!(q.get(&VectorKey::new_from_str("abc")), None);
+        assert!(q.remove(&ArrayKey::new_from_str("abcde")));
+        assert_eq!(q.get(&ArrayKey::new_from_str("abcde")), None);
+        assert_eq!(*q.get(&ArrayKey::new_from_str("abc")).unwrap(), 2);
+        assert_eq!(*q.get(&ArrayKey::new_from_str("axyz")).unwrap(), 6);
+        assert!(q.remove(&ArrayKey::new_from_str("abc")));
+        assert_eq!(q.get(&ArrayKey::new_from_str("abc")), None);
     }
 
     #[test]
     fn test_int_keys_get_set() {
         let mut q = AdaptiveRadixTree::<ArrPartial<16>, i32>::new();
-        q.insert::<VectorKey>(&500i32.into(), 3);
-        assert_eq!(q.get::<VectorKey>(&500i32.into()), Some(&3));
-        q.insert::<VectorKey>(&666i32.into(), 2);
-        assert_eq!(q.get::<VectorKey>(&666i32.into()), Some(&2));
-        q.insert::<VectorKey>(&1i32.into(), 1);
-        assert_eq!(q.get::<VectorKey>(&1i32.into()), Some(&1));
+        q.insert::<ArrayKey<16>>(&500i32.into(), 3);
+        assert_eq!(q.get::<ArrayKey<16>>(&500i32.into()), Some(&3));
+        q.insert::<ArrayKey<16>>(&666i32.into(), 2);
+        assert_eq!(q.get::<ArrayKey<16>>(&666i32.into()), Some(&2));
+        q.insert::<ArrayKey<16>>(&1i32.into(), 1);
+        assert_eq!(q.get::<ArrayKey<16>>(&1i32.into()), Some(&1));
     }
 
-    fn gen_random_string_keys(
+    fn gen_random_string_keys<const S: usize>(
         l1_prefix: usize,
         l2_prefix: usize,
         suffix: usize,
-    ) -> Vec<(VectorKey, String)> {
+    ) -> Vec<(ArrayKey<S>, String)> {
         let mut keys = Vec::new();
         let chars: Vec<char> = ('a'..='z').collect();
         for i in 0..chars.len() {
@@ -509,40 +468,23 @@ mod tests {
         for i in 0..count {
             let value = i;
             let rnd_key = rng.gen_range(0..count);
-            let rnd_key: VectorKey = rnd_key.into();
+            let rnd_key: ArrayKey<16> = rnd_key.into();
             if tree.get(&rnd_key).is_none() && tree.insert(&rnd_key, value).is_none() {
                 let result = tree.get(&rnd_key);
                 assert!(result.is_some());
                 assert_eq!(*result.unwrap(), value);
-                keys_inserted.push((rnd_key.clone(), value));
+                keys_inserted.push((rnd_key, value));
             }
         }
 
         let stats = tree.get_tree_stats();
         assert_eq!(stats.num_values, keys_inserted.len());
 
-        let mut n_checked = 0;
         for (key, value) in &keys_inserted {
-            n_checked += 1;
             let result = tree.get(key);
-            assert!(
-                result.is_some(),
-                "key: {:} should be {} was None; check #{}",
-                key_str_rep(key),
-                value,
-                n_checked
-            );
-            assert_eq!(
-                *result.unwrap(),
-                *value,
-                "key: {:} should be {} was {}, check #{}",
-                key_str_rep(key),
-                value,
-                result.unwrap(),
-                n_checked
-            );
+            assert!(result.is_some(),);
+            assert_eq!(*result.unwrap(), *value,);
         }
-        eprintln!("stats: {:?}", stats);
     }
 
     fn from_be_bytes_key(k: &Vec<u8>) -> u64 {
@@ -598,7 +540,7 @@ mod tests {
 
     // Compare the results of a range query on an AdaptiveRadixTree and a BTreeMap, because we can
     // safely assume the latter exhibits correct behavior.
-    fn test_range_matches<'a, K: Key, P: PrefixTraits, V: PartialEq + Debug + 'a>(
+    fn test_range_matches<'a, K: KeyTrait<P>, P: PrefixTraits, V: PartialEq + Debug + 'a>(
         art_range: tree::Range<'a, K, P, V>,
         btree_range: btree_map::Range<'a, u64, V>,
     ) {

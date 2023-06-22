@@ -1,10 +1,13 @@
 #![no_main]
+
+use std::collections::BTreeMap;
+
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
+
+use rart::keys::array_key::ArrayKey;
 use rart::partials::array_partial::ArrPartial;
-use rart::partials::key::ArrayKey;
 use rart::tree::AdaptiveRadixTree;
-use std::collections::BTreeMap;
 
 #[derive(Arbitrary, Debug)]
 enum MapMethod {
@@ -34,6 +37,7 @@ fuzz_target!(|methods: Vec<MapMethod>| {
 
                         let btree_insert = bt_map.insert(*key, *val);
                         let a_insert = art.insert(&art_key, *val);
+                        eprintln!("Insert: {:?} {:?} {:?}", key, val, a_insert);
                         assert_eq!(a_insert, btree_insert);
                     }
                 }
@@ -50,19 +54,31 @@ fuzz_target!(|methods: Vec<MapMethod>| {
 
                     let new_bt = bt_map.get(key);
                     let new_art = art.get(&art_key);
+                    eprintln!("Update: {:?} {:?} {:?}", key, val, new_art);
                     assert_eq!(new_art, new_bt);
                 }
                 MapMethod::Delete { key } => {
-                    bt_map.remove(key);
+                    let btr = bt_map.remove(key);
                     let art_key: ArrayKey<16> = ArrayKey::from(*key);
-                    art.remove(&art_key);
+                    let artr = art.remove(&art_key);
+                    eprintln!("Delete: {:?} {:?} {:}", key, artr, btr.is_some());
+                    assert_eq!(btr.is_some(), artr);
                 }
             }
         }
     }
 
-    for (k, v) in bt_map.iter() {
+    for (k, expected_value) in bt_map.iter() {
         let art_key: ArrayKey<16> = ArrayKey::from(*k);
-        assert_eq!(art.get(&art_key), Some(v));
+        let result = art.get(&art_key);
+        eprintln!("Cmp key {:?} {:?} {:?}", k, result, expected_value);
+        assert_eq!(
+            result,
+            Some(expected_value),
+            "Expected value for key {}: {:?} != {:?}",
+            k,
+            art.get(&art_key).copied(),
+            *expected_value
+        );
     }
 });

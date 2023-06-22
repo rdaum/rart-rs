@@ -1,13 +1,13 @@
 use std::mem::MaybeUninit;
 use std::ops::Index;
 
-use crate::utils::bitset::Bitset;
+use crate::utils::bitset::Bitset64;
 
 // BITSET_WIDTH must be RANGE_WIDTH / 64
 // Once generic_const_exprs is stabilized, we can use that to calculate this from a RANGE_WIDTH.
 // Until then, don't mess up.
 pub struct BitArray<X, const RANGE_WIDTH: usize, const BITSET_WIDTH: usize> {
-    bitset: Bitset<BITSET_WIDTH>,
+    bitset: Bitset64<BITSET_WIDTH>,
     storage: [MaybeUninit<X>; RANGE_WIDTH],
 }
 
@@ -18,7 +18,7 @@ impl<X, const RANGE_WIDTH: usize, const BITSET_WIDTH: usize>
         assert!(BITSET_WIDTH * 64 >= RANGE_WIDTH);
 
         Self {
-            bitset: Bitset::new(),
+            bitset: Bitset64::new(),
             storage: unsafe { MaybeUninit::uninit().assume_init() },
         }
     }

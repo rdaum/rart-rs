@@ -1,13 +1,28 @@
 use std::mem::MaybeUninit;
 
 use crate::mapping::indexed_mapping::IndexedMapping;
+use crate::mapping::sorted_keyed_mapping::SortedKeyedMapping;
 use crate::node::NodeMapping;
-use crate::utils::u8_keys::{u8_keys_find_insert_position, u8_keys_find_key_position};
+use crate::utils::bitset::Bitset16;
+use crate::utils::u8_keys::u8_keys_find_key_position;
 
+/// Maps a key to a node, using an unsorted array of keys and a corresponding array of nodes.
+/// Presence of a key at a position means there is a node at the same position in children.
+/// A bitmask is used to keep track of which keys are empty.
+/// The nodes are kept unsorted, so a linear search is used to find the key, but SIMD operations
+/// are used to speed up the search on platforms that have it.
+/// Likewise, appends are done by inserting at the first empty slot (by scanning bitset)
 pub struct KeyedMapping<N, const WIDTH: usize> {
     pub(crate) keys: [u8; WIDTH],
     pub(crate) children: Box<[MaybeUninit<N>; WIDTH]>,
     pub(crate) num_children: u8,
+    pub(crate) occupied_bitset: Bitset16<1>,
+}
+
+impl<N, const WIDTH: usize> Default for KeyedMapping<N, WIDTH> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<N, const WIDTH: usize> KeyedMapping<N, WIDTH> {
@@ -15,10 +30,9 @@ impl<N, const WIDTH: usize> KeyedMapping<N, WIDTH> {
     pub fn new() -> Self {
         Self {
             keys: [255; WIDTH],
-            // TODO for the 4-wide version, keeping this in box is excessive, as the node size
-            // will still be small. But to make the code simpler, we'll keep it in a box for now.
             children: Box::new(unsafe { MaybeUninit::uninit().assume_init() }),
             num_children: 0,
+            occupied_bitset: Default::default(),
         }
     }
 
@@ -31,7 +45,7 @@ impl<N, const WIDTH: usize> KeyedMapping<N, WIDTH> {
         new_mapping
     }
 
-    pub fn from_resized<const OLD_WIDTH: usize>(km: &mut KeyedMapping<N, OLD_WIDTH>) -> Self {
+    pub fn from_sorted<const OLD_WIDTH: usize>(km: &mut SortedKeyedMapping<N, OLD_WIDTH>) -> Self {
         let mut new = KeyedMapping::new();
         for i in 0..km.num_children as usize {
             new.keys[i] = km.keys[i];
@@ -42,28 +56,67 @@ impl<N, const WIDTH: usize> KeyedMapping<N, WIDTH> {
         new
     }
 
+    pub fn from_resized_grow<const OLD_WIDTH: usize>(km: &mut KeyedMapping<N, OLD_WIDTH>) -> Self {
+        assert!(WIDTH > OLD_WIDTH);
+        let mut new = KeyedMapping::new();
+
+        // Since we're larger than before, we can just copy over and expand everything, occupied
+        // or not.
+        new.occupied_bitset = std::mem::take(&mut km.occupied_bitset);
+        for i in 0..OLD_WIDTH {
+            new.keys[i] = km.keys[i];
+            new.children[i] = std::mem::replace(&mut km.children[i], MaybeUninit::uninit());
+        }
+        km.occupied_bitset.clear();
+        new.num_children = km.num_children;
+        new
+    }
+
+    pub fn from_resized_shrink<const OLD_WIDTH: usize>(
+        km: &mut KeyedMapping<N, OLD_WIDTH>,
+    ) -> Self {
+        assert!(WIDTH < OLD_WIDTH);
+        let mut new = KeyedMapping::new();
+        let mut cnt = 0;
+
+        // Since we're smaller, we compact empty spots out.
+        for i in 0..OLD_WIDTH {
+            if km.occupied_bitset.check(i) {
+                new.keys[cnt] = km.keys[i];
+                new.children[cnt] = std::mem::replace(&mut km.children[i], MaybeUninit::uninit());
+
+                new.occupied_bitset.set(cnt);
+                cnt += 1;
+            }
+        }
+        km.occupied_bitset.clear();
+        new.num_children = km.num_children;
+        km.num_children = 0;
+        new
+    }
+
     #[inline]
     pub(crate) fn iter(&self) -> impl Iterator<Item = (u8, &N)> {
         self.keys
             .iter()
-            .zip(self.children.iter())
-            .take(self.num_children as usize)
-            .map(|(&k, c)| (k, unsafe { c.assume_init_ref() }))
+            .enumerate()
+            .filter(|p| self.occupied_bitset.check(p.0))
+            .map(|(p, k)| (*k, unsafe { self.children[p].assume_init_ref() }))
     }
 }
 
 impl<N, const WIDTH: usize> NodeMapping<N> for KeyedMapping<N, WIDTH> {
     #[inline]
     fn add_child(&mut self, key: u8, node: N) {
-        let idx =
-            u8_keys_find_insert_position::<WIDTH>(key, &self.keys, self.num_children as usize)
-                .expect("add_child: no space left");
-        for i in (idx..self.num_children as usize).rev() {
-            self.keys[i + 1] = self.keys[i];
-            self.children[i + 1] = std::mem::replace(&mut self.children[i], MaybeUninit::uninit());
-        }
+        // Find an empty position by seeking for 255.
+        let idx = self
+            .occupied_bitset
+            .first_empty()
+            .expect("add_child: no space left");
+        assert!(idx < WIDTH);
         self.keys[idx] = key;
         self.children[idx].write(node);
+        self.occupied_bitset.set(idx);
         self.num_children += 1;
     }
 
@@ -72,36 +125,34 @@ impl<N, const WIDTH: usize> NodeMapping<N> for KeyedMapping<N, WIDTH> {
     }
 
     fn seek_child(&self, key: u8) -> Option<&N> {
-        let idx = u8_keys_find_key_position::<WIDTH>(key, &self.keys, self.num_children as usize)?;
+        let idx = u8_keys_find_key_position::<WIDTH>(key, &self.keys, WIDTH)?;
+        if !self.occupied_bitset.check(idx) {
+            return None;
+        }
         Some(unsafe { self.children[idx].assume_init_ref() })
     }
 
     fn seek_child_mut(&mut self, key: u8) -> Option<&mut N> {
-        let idx = u8_keys_find_key_position::<WIDTH>(key, &self.keys, self.num_children as usize)?;
+        let idx = u8_keys_find_key_position::<WIDTH>(key, &self.keys, WIDTH)?;
+        if !self.occupied_bitset.check(idx) {
+            return None;
+        }
         return Some(unsafe { self.children[idx].assume_init_mut() });
     }
 
     fn delete_child(&mut self, key: u8) -> Option<N> {
         // Find position of the key
-        let idx = self
-            .keys
-            .iter()
-            .take(self.num_children as usize)
-            .position(|&k| k == key)?;
+        let idx = u8_keys_find_key_position::<WIDTH>(key, &self.keys, WIDTH)?;
+
+        if !self.occupied_bitset.check(idx) {
+            return None;
+        }
 
         // Remove the value.
         let node = std::mem::replace(&mut self.children[idx], MaybeUninit::uninit());
 
-        // Shift keys and children to the left.
-        for i in idx..(WIDTH - 1) {
-            self.keys[i] = self.keys[i + 1];
-            self.children[i] = std::mem::replace(&mut self.children[i + 1], MaybeUninit::uninit());
-        }
-
-        // Fix the last key and child and adjust count.
-        self.keys[WIDTH - 1] = 255;
-        self.children[WIDTH - 1] = MaybeUninit::uninit();
-
+        self.keys[idx] = 255;
+        self.occupied_bitset.unset(idx);
         self.num_children -= 1;
 
         // Return what we deleted.
@@ -111,6 +162,7 @@ impl<N, const WIDTH: usize> NodeMapping<N> for KeyedMapping<N, WIDTH> {
     fn num_children(&self) -> usize {
         self.num_children as usize
     }
+
     #[inline(always)]
     fn width(&self) -> usize {
         WIDTH
@@ -119,16 +171,18 @@ impl<N, const WIDTH: usize> NodeMapping<N> for KeyedMapping<N, WIDTH> {
 
 impl<N, const WIDTH: usize> Drop for KeyedMapping<N, WIDTH> {
     fn drop(&mut self) {
-        for value in &mut self.children[..self.num_children as usize] {
-            unsafe { value.assume_init_drop() }
+        for i in self.occupied_bitset.iter() {
+            unsafe { self.children[i].assume_init_drop() }
         }
         self.num_children = 0;
+        self.occupied_bitset.clear();
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::mapping::keyed_mapping::{KeyedMapping, NodeMapping};
+    use crate::mapping::keyed_mapping::KeyedMapping;
+    use crate::node::NodeMapping;
 
     #[test]
     fn test_add_seek_delete() {
@@ -159,15 +213,18 @@ mod tests {
     #[test]
     // Verify that the memory width of the node is nice and compact.
     fn test_memory_width() {
-        // 16 is padded width for 4 children
-        // num_children = 1
-        // keys = 4
+        // num_children = 1 byte
+        // keys = 4 bytes
         // children array ptr = 8
-        // total = 13 pads out to 16
+        // bitset = 2
+        // total = 15 padded to 16 bytes
         assert_eq!(std::mem::size_of::<KeyedMapping<Box<u8>, 4>>(), 16);
 
-        // 32 is the padded size of the struct on account of
-        // num_children + keys (u8) + children ptrs
+        // num_children = 1 byte
+        // keys = 16 bytes
+        // children array ptr = 8
+        // bitset = 2
+        // total = 27 padded to 32 bytes
         assert_eq!(std::mem::size_of::<KeyedMapping<Box<u8>, 16>>(), 32);
     }
 }

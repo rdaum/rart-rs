@@ -15,7 +15,9 @@ impl<N> DirectMapping<N> {
         }
     }
 
-    pub(crate) fn from_indexed<const WIDTH: usize, const BITWIDTH: usize>(im: &mut IndexedMapping<N, WIDTH, BITWIDTH>) -> Self {
+    pub(crate) fn from_indexed<const WIDTH: usize, const BITWIDTH: usize>(
+        im: &mut IndexedMapping<N, WIDTH, BITWIDTH>,
+    ) -> Self {
         let mut new_mapping = DirectMapping::<N>::new();
         im.num_children = 0;
         im.move_into(&mut new_mapping);

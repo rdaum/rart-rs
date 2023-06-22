@@ -1,8 +1,8 @@
 use std::cmp::min;
 use std::ops::Index;
 
-use crate::partials::key::Key;
-use crate::Partial;
+use crate::keys::KeyTrait;
+use crate::partials::Partial;
 
 #[derive(Clone, Debug, Eq)]
 pub struct ArrPartial<const SIZE: usize> {
@@ -71,16 +71,24 @@ impl<const SIZE: usize> Partial for ArrPartial<SIZE> {
     }
 
     #[inline(always)]
-    fn length(&self) -> usize {
+    fn len(&self) -> usize {
         self.len
     }
 
     fn prefix_length_common(&self, other: &Self) -> usize {
-        let len = min(self.len, other.len);
+        self.prefix_length_slice(other.to_slice())
+    }
+
+    fn prefix_length_key<'a, P: Partial, K: KeyTrait<P> + 'a>(
+        &self,
+        key: &'a K,
+        at_depth: usize,
+    ) -> usize {
+        let len = min(self.len, key.len() - at_depth);
         let len = min(len, SIZE);
         let mut idx = 0;
         while idx < len {
-            if self.data[idx] != other.data[idx] {
+            if self.data[idx] != key.at(idx + at_depth) {
                 break;
             }
             idx += 1;
@@ -88,24 +96,12 @@ impl<const SIZE: usize> Partial for ArrPartial<SIZE> {
         idx
     }
 
-    fn prefix_length_key<K: Key>(&self, key: &K) -> usize {
-        let len = min(self.len, key.length());
+    fn prefix_length_slice(&self, slice: &[u8]) -> usize {
+        let len = min(self.len, slice.len());
         let len = min(len, SIZE);
         let mut idx = 0;
         while idx < len {
-            if self.data[idx] != key.at(idx) {
-                break;
-            }
-            idx += 1;
-        }
-        idx
-    }
-    fn prefix_length_slice(&self, key: &[u8]) -> usize {
-        let len = min(self.len, key.len());
-        let len = min(len, SIZE);
-        let mut idx = 0;
-        while idx < len {
-            if self.data[idx] != key[idx] {
+            if self.data[idx] != slice[idx] {
                 break;
             }
             idx += 1;
@@ -121,12 +117,6 @@ impl<const SIZE: usize> Partial for ArrPartial<SIZE> {
 impl<const SIZE: usize> From<&[u8]> for ArrPartial<SIZE> {
     fn from(src: &[u8]) -> Self {
         Self::from_slice(src)
-    }
-}
-
-impl<const SIZE: usize, K: Key> From<K> for ArrPartial<SIZE> {
-    fn from(src: K) -> Self {
-        Self::from_slice(src.as_slice())
     }
 }
 
@@ -161,7 +151,7 @@ mod tests {
     #[test]
     fn test_length() {
         let arr: ArrPartial<16> = ArrPartial::from_slice(b"Hello, world!");
-        assert_eq!(arr.length(), 13);
+        assert_eq!(arr.len(), 13);
     }
 
     #[test]
