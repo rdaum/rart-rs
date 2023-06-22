@@ -1,14 +1,22 @@
+use std::mem::MaybeUninit;
+
 use crate::mapping::direct_mapping::DirectMapping;
 use crate::mapping::keyed_mapping::KeyedMapping;
+use crate::mapping::sorted_keyed_mapping::SortedKeyedMapping;
 use crate::node::NodeMapping;
 use crate::utils::bitarray::BitArray;
-use std::mem::MaybeUninit;
 
 // A mapping from keys to separate child pointers.
 pub struct IndexedMapping<N, const WIDTH: usize, const BITWIDTH: usize> {
     child_ptr_indexes: Box<BitArray<u8, 256, 4>>,
     children: Box<BitArray<N, WIDTH, BITWIDTH>>,
     pub(crate) num_children: u8,
+}
+
+impl<N, const WIDTH: usize, const BITWIDTH: usize> Default for IndexedMapping<N, WIDTH, BITWIDTH> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<N, const WIDTH: usize, const BITWIDTH: usize> IndexedMapping<N, WIDTH, BITWIDTH> {
@@ -31,13 +39,28 @@ impl<N, const WIDTH: usize, const BITWIDTH: usize> IndexedMapping<N, WIDTH, BITW
         indexed
     }
 
-    pub fn from_keyed<const KM_WIDTH: usize>(km: &mut KeyedMapping<N, KM_WIDTH>) -> Self {
+    pub fn from_sorted_keyed<const KM_WIDTH: usize>(
+        km: &mut SortedKeyedMapping<N, KM_WIDTH>,
+    ) -> Self {
         let mut im: IndexedMapping<N, WIDTH, BITWIDTH> = IndexedMapping::new();
         for i in 0..km.num_children as usize {
             let stolen = std::mem::replace(&mut km.children[i], MaybeUninit::uninit());
             im.add_child(km.keys[i], unsafe { stolen.assume_init() });
         }
         km.num_children = 0;
+        im
+    }
+
+    pub fn from_keyed<const KM_WIDTH: usize>(km: &mut KeyedMapping<N, KM_WIDTH>) -> Self {
+        let mut im: IndexedMapping<N, WIDTH, BITWIDTH> = IndexedMapping::new();
+        for i in 0..KM_WIDTH {
+            if !km.occupied_bitset.check(i) {
+                continue;
+            }
+            let stolen = std::mem::replace(&mut km.children[i], MaybeUninit::uninit());
+            im.add_child(km.keys[i], unsafe { stolen.assume_init() });
+        }
+        km.occupied_bitset.clear();
         im
     }
 

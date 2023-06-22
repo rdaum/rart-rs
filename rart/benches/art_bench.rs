@@ -4,8 +4,8 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Through
 use rand::prelude::SliceRandom;
 use rand::{thread_rng, Rng};
 
+use rart::keys::array_key::ArrayKey;
 use rart::partials::array_partial::ArrPartial;
-use rart::partials::key::ArrayKey;
 use rart::tree::AdaptiveRadixTree;
 
 pub fn seq_insert(c: &mut Criterion) {

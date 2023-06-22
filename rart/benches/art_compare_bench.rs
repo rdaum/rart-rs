@@ -5,8 +5,8 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Through
 use rand::prelude::SliceRandom;
 use rand::{thread_rng, Rng};
 
+use rart::keys::array_key::ArrayKey;
 use rart::partials::array_partial::ArrPartial;
-use rart::partials::key::ArrayKey;
 use rart::tree::AdaptiveRadixTree;
 
 const SIZES: [u64; 4] = [1 << 15, 1 << 20, 1 << 22, 1 << 24];

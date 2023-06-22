@@ -1,13 +1,13 @@
 #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
 #[inline]
-fn x86_64_sse_seek_insert_pos(key: u8, keys: &[u8], num_children: usize) -> Option<usize> {
+fn x86_64_sse_seek_insert_pos_16(key: u8, keys: [u8; 16], num_children: usize) -> Option<usize> {
     use std::arch::x86_64::{
         __m128i, _mm_cmplt_epi8, _mm_loadu_si128, _mm_movemask_epi8, _mm_set1_epi8,
     };
 
     let bitfield = unsafe {
-        let key_vec = _mm_set1_epi8(key as i8);
-        let cmp = _mm_cmplt_epi8(key_vec, _mm_loadu_si128(keys.as_ptr() as *const __m128i));
+        let cmp_vec = _mm_set1_epi8(key as i8);
+        let cmp = _mm_cmplt_epi8(cmp_vec, _mm_loadu_si128(keys.as_ptr() as *const __m128i));
         let mask = (1 << num_children) - 1;
         _mm_movemask_epi8(cmp) & mask
     };
@@ -21,7 +21,7 @@ fn x86_64_sse_seek_insert_pos(key: u8, keys: &[u8], num_children: usize) -> Opti
 
 #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
 #[inline]
-fn x86_64_sse_find_key(key: u8, keys: &[u8], num_children: usize) -> Option<usize> {
+fn x86_64_sse_find_key_16_up_to(key: u8, keys: [u8; 16], num_children: usize) -> Option<usize> {
     use std::arch::x86_64::{
         __m128i, _mm_cmpeq_epi8, _mm_loadu_si128, _mm_movemask_epi8, _mm_set1_epi8,
     };
@@ -29,8 +29,33 @@ fn x86_64_sse_find_key(key: u8, keys: &[u8], num_children: usize) -> Option<usiz
     let bitfield = unsafe {
         let key_vec = _mm_set1_epi8(key as i8);
         let results = _mm_cmpeq_epi8(key_vec, _mm_loadu_si128(keys.as_ptr() as *const __m128i));
+        // AVX512 has _mm_cmpeq_epi8_mask which can allow us to skip this step and go direct to a
+        // bitmask from comparison results.
+        // ... but that's stdsimd nightly only for now, and also not available on all processors.
         let mask = (1 << num_children) - 1;
         _mm_movemask_epi8(results) & mask
+    };
+    if bitfield != 0 {
+        let idx = bitfield.trailing_zeros() as usize;
+        return Some(idx);
+    }
+    None
+}
+
+#[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
+#[inline]
+fn x86_64_sse_find_key_16(key: u8, keys: [u8; 16]) -> Option<usize> {
+    use std::arch::x86_64::{
+        __m128i, _mm_cmpeq_epi8, _mm_loadu_si128, _mm_movemask_epi8, _mm_set1_epi8,
+    };
+
+    let bitfield = unsafe {
+        let key_vec = _mm_set1_epi8(key as i8);
+        let results = _mm_cmpeq_epi8(key_vec, _mm_loadu_si128(keys.as_ptr() as *const __m128i));
+        // AVX512 has _mm_cmpeq_epi8_mask which can allow us to skip this step and go direct to a
+        // bitmask from comparison results.
+        // ... but that's stdsimd nightly only for now, and also not available on all processors.
+        _mm_movemask_epi8(results)
     };
     if bitfield != 0 {
         let idx = bitfield.trailing_zeros() as usize;
@@ -139,7 +164,64 @@ fn binary_find_key(key: u8, keys: &[u8], num_children: usize) -> Option<usize> {
 }
 
 #[allow(unreachable_code)]
+pub fn u8_keys_find_key_position_sorted<const WIDTH: usize>(
+    key: u8,
+    keys: &[u8],
+    num_children: usize,
+) -> Option<usize> {
+    // Width 4 and under, just use linear search.
+    if WIDTH <= 4 {
+        return (0..num_children).find(|&i| keys[i] == key);
+    }
+
+    // SIMD optimized forms of 16
+    if WIDTH == 16 {
+        #[cfg(all(
+            any(target_arch = "x86", target_arch = "x86_64"),
+            target_feature = "sse2"
+        ))]
+        {
+            return x86_64_sse_find_key_16_up_to(key, keys.try_into().unwrap(), num_children);
+        }
+
+        #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+        {
+            return aarch64_neon_find_key(key, &keys, num_children as usize);
+        }
+    }
+
+    // Fallback to binary search.
+    binary_find_key(key, keys, num_children)
+}
+
+#[allow(unreachable_code)]
 pub fn u8_keys_find_key_position<const WIDTH: usize>(
+    key: u8,
+    keys: &[u8],
+    num_children: usize,
+) -> Option<usize> {
+    // SIMD optimized forms of 16
+    if WIDTH == 16 {
+        #[cfg(all(
+            any(target_arch = "x86", target_arch = "x86_64"),
+            target_feature = "sse2"
+        ))]
+        {
+            return x86_64_sse_find_key_16(key, keys.try_into().unwrap());
+        }
+
+        #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+        {
+            return aarch64_neon_find_key(key, &keys, num_children as usize);
+        }
+    }
+
+    // Fallback to linear search for anything else (which is just WIDTH == 4, or if we have no
+    // SIMD support).
+    (0..num_children).find(|&i| keys[i] == key)
+}
+
+pub fn u8_keys_find_insert_position<const WIDTH: usize>(
     key: u8,
     keys: &[u8],
     num_children: usize,
@@ -150,43 +232,20 @@ pub fn u8_keys_find_key_position<const WIDTH: usize>(
             target_feature = "sse2"
         ))]
         {
-            return x86_64_sse_find_key(key, keys, num_children);
+            return x86_64_sse_seek_insert_pos_16(key, keys.try_into().unwrap(), num_children)
+                .or(Some(num_children));
         }
 
         #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
         {
-            return aarch64_neon_find_key(key, &keys, num_children as usize);
+            return aarch64_neon_seek_insert_pos(key, &keys, num_children as usize)
+                .or(Some(num_children));
         }
-
-        // Fallback to binary search.
-        binary_find_key(key, keys, num_children)
-    } else {
-        // Linear search seems to outperform binary search despite the array being sorted.
-        // This is probably because the array is so small.
-        (0..num_children).find(|&i| keys[i] == key)
     }
-}
 
-pub fn u8_keys_find_insert_position<const WIDTH: usize>(
-    key: u8,
-    keys: &[u8],
-    num_children: usize,
-) -> Option<usize> {
-    let idx = if WIDTH == 16 {
-        #[cfg(all(
-            any(target_arch = "x86", target_arch = "x86_64"),
-            target_feature = "sse2"
-        ))]
-        {
-            x86_64_sse_seek_insert_pos(key, keys, num_children)
-        }
-        #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
-        {
-            aarch64_neon_seek_insert_pos(key, &keys, num_children as usize)
-        }
-    } else {
-        // Fallback: use linear search to find the insertion point.
-        (0..num_children).rev().find(|&i| key < keys[i])
-    };
-    idx.or(Some(num_children))
+    // Fallback: use linear search to find the insertion point.
+    (0..num_children)
+        .rev()
+        .find(|&i| key < keys[i])
+        .or(Some(num_children))
 }
