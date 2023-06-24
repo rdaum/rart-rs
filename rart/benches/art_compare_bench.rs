@@ -1,3 +1,6 @@
+/// Comparitive benchmarks showing performnce of the radix tree in comparison to hashes and btrees
+/// for various numbers of keys and for various operations.
+/// Takes a long time to run.
 use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
 

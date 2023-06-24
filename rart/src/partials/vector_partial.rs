@@ -61,7 +61,7 @@ impl Partial for VectorPartial {
         key: &'a K,
         at_depth: usize,
     ) -> usize {
-        let len = min(self.data.len(), key.len() - at_depth);
+        let len = min(self.data.len(), key.length_at(at_depth));
         let mut idx = 0;
         while idx < len {
             if self.data[idx] != key.at(idx + at_depth) {

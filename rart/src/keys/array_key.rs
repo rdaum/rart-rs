@@ -27,7 +27,7 @@ impl<const N: usize> ArrayKey<N> {
     }
 
     pub fn new_from_str(s: &str) -> Self {
-        assert!(s.len() < N, "data length is greater than array length");
+        assert!(s.len() + 1 < N, "data length is greater than array length");
         let mut arr = [0; N];
         arr[..s.len()].copy_from_slice(s.as_bytes());
         Self {
@@ -37,7 +37,7 @@ impl<const N: usize> ArrayKey<N> {
     }
 
     pub fn new_from_string(s: &String) -> Self {
-        assert!(s.len() < N, "data length is greater than array length");
+        assert!(s.len() + 1 < N, "data length is greater than array length");
         let mut arr = [0; N];
         arr[..s.len()].copy_from_slice(s.as_bytes());
         Self {
@@ -55,8 +55,8 @@ impl<const N: usize> KeyTrait<ArrPartial<N>> for ArrayKey<N> {
     fn at(&self, pos: usize) -> u8 {
         self.data[pos]
     }
-    fn len(&self) -> usize {
-        self.len
+    fn length_at(&self, at_depth: usize) -> usize {
+        self.len - at_depth
     }
     fn to_prefix(&self, at_depth: usize) -> ArrPartial<N> {
         ArrPartial::from_slice(&self.data[at_depth..self.len])

@@ -84,13 +84,18 @@ where
                 return None;
             }
 
-            if cur_node.prefix.len() == (key.len() - depth) {
+            if cur_node.prefix.len() == (key.length_at(depth)) {
+                assert!(cur_node.is_leaf());
                 return cur_node.value();
             }
+            assert!(cur_node.num_children() > 0);
 
             let k = key.at(depth + cur_node.prefix.len());
             depth += cur_node.prefix.len();
-            cur_node = cur_node.seek_child(k)?;
+            cur_node = match cur_node.seek_child(k) {
+                None => return None,
+                Some(c) => c,
+            }
         }
     }
 
@@ -112,7 +117,7 @@ where
                 return None;
             }
 
-            if cur_node.prefix.len() == key.len() - depth {
+            if cur_node.prefix.len() == key.length_at(depth) {
                 return cur_node.value_mut();
             }
 
@@ -178,22 +183,25 @@ where
 
         let longest_common_prefix = cur_node_prefix.prefix_length_key(key, depth);
 
-        let is_prefix_match = min(cur_node_prefix.len(), key.len()) == longest_common_prefix;
+        let is_prefix_match =
+            min(cur_node_prefix.len(), key.length_at(depth)) == longest_common_prefix;
 
         // Prefix fully covers this node.
         // Either sets the value or replaces the old value already here.
-        if let NodeType::Leaf(ref mut v) = &mut cur_node.ntype {
-            if is_prefix_match && cur_node_prefix.len() == key.len() - depth {
+        if is_prefix_match && cur_node_prefix.len() == key.length_at(depth) {
+            if let NodeType::Leaf(ref mut v) = &mut cur_node.ntype {
                 return Some(std::mem::replace(v, value));
+            } else {
+                panic!("Node type mismatch")
             }
         }
 
         // Prefix is part of the current node, but doesn't fully cover it.
-        // We have to break this node up, creating a new parent node, and a sibling for us..
+        // We have to break this node up, creating a new parent node, and a sibling for our leaf.
         if !is_prefix_match {
             cur_node.prefix = cur_node_prefix.partial_after(longest_common_prefix);
 
-            // We will replace this node with a binary inner node. The new value will join the
+            // We will replace this leaf node with a new inner node. The new value will join the
             // current node as sibling, both a child of the new node.
             let n4 = Node::new_inner(cur_node_prefix.partial_before(longest_common_prefix));
 
@@ -234,65 +242,81 @@ where
         None
     }
 
-    pub fn remove<K: KeyTrait<P>>(&mut self, key: &K) -> bool {
-        if self.root.is_none() {
-            return false;
+    pub fn remove<K: KeyTrait<P>>(&mut self, key: &K) -> Option<V> {
+        let Some(root) = self.root.as_mut() else {
+            return None;
+        };
+
+        let prefix_common_match = root.prefix.prefix_length_key(key, 0);
+        if prefix_common_match != root.prefix.len() {
+            return None;
         }
 
-        AdaptiveRadixTree::remove_recurse(&mut self.root.as_mut(), key, 0)
+        // Special case, if the root is a leaf and matches the key, we can just remove it
+        // immediately. If it doesn't match our key, then we have nothing to do here anyways.
+        if root.is_leaf() {
+            // Move the value of the leaf in root. To do this, replace self.root  with None and
+            // then unwrap the value out of the Option & Leaf.
+            let stolen = self.root.take().unwrap();
+            let leaf = match stolen.ntype {
+                NodeType::Leaf(v) => v,
+                _ => unreachable!(),
+            };
+            return Some(leaf);
+        }
+
+        let result = AdaptiveRadixTree::remove_recurse(root, key, prefix_common_match);
+        if root.is_inner() && root.num_children() == 0 {
+            // Prune root if it's now empty.
+            self.root = None;
+        }
+        result
     }
 
     fn remove_recurse<K: KeyTrait<P>>(
-        cur_node_ptr: &mut Option<&mut Node<P, V>>,
+        parent_node: &mut Node<P, V>,
         key: &K,
         depth: usize,
-    ) -> bool {
-        if cur_node_ptr.is_none() {
-            return false;
+    ) -> Option<V> {
+        // Seek the child that matches the key at this depth, which is the first character at the
+        // depth we're at.
+        let c = key.at(depth);
+        let child_node = parent_node.seek_child_mut(c)?;
+
+        let prefix_common_match = child_node.prefix.prefix_length_key(key, depth);
+        if prefix_common_match != child_node.prefix.len() {
+            return None;
         }
 
-        let prefix = cur_node_ptr.as_ref().unwrap().prefix.clone();
-
-        let longest_common_prefix = prefix.prefix_length_key(key, depth);
-
-        if prefix.len() != longest_common_prefix {
-            // No prefix match, so we can't delete anything.
-            return false;
-        }
-        let prefix_matched = min(prefix.len(), key.len() - depth) == longest_common_prefix;
-
-        let Some(node) = cur_node_ptr else {
-            return false;
-        };
-
-        // Simplest scenario, we get to just drop the leaf node.
-        if prefix_matched && prefix.len() == key.len() - depth {
-            *cur_node_ptr = None;
-            return true;
-        }
-
-        let k = key.at(depth + longest_common_prefix);
-        let mut next = node.seek_child_mut(k);
-        if let Some(child_node) = &next {
-            // If we have no children, this node can be pruned out.
-            if child_node.num_children() == 0 {
-                // We can delete this leaf node.
-                if child_node.prefix.len() == key.len() - longest_common_prefix - depth {
-                    node.delete_child(k).expect("child not found");
-                    return true;
-                }
-                // Nowhere left to look.
-                return false;
+        // If the child is a leaf, and the prefix matches the key, we can remove it from this parent
+        // node. If the prefix does not match, then we have nothing to do here.
+        if child_node.is_leaf() {
+            if child_node.prefix.len() != (key.length_at(depth)) {
+                return None;
             }
-            // Go down the tree.
-            return AdaptiveRadixTree::remove_recurse(
-                &mut next,
-                key,
-                depth + longest_common_prefix,
-            );
+            let node = parent_node.delete_child(c).expect("child not found");
+            let v = match node.ntype {
+                NodeType::Leaf(v) => v,
+                _ => unreachable!(),
+            };
+            return Some(v);
         }
 
-        false
+        // Otherwise, recurse down the branch in that direction.
+        let result =
+            AdaptiveRadixTree::remove_recurse(child_node, key, depth + child_node.prefix.len());
+
+        if result.is_some() && child_node.is_inner() && child_node.num_children() == 0 {
+            let prefix = child_node.prefix.clone();
+            let deleted = parent_node
+                .delete_child(c)
+                .expect("expected empty inner node to be deleted");
+            assert_eq!(prefix.to_slice(), deleted.prefix.to_slice());
+        }
+
+        // TODO: Turn an inner node into a leaf if it has only one (leaf) child.
+
+        result
     }
 
     pub fn get_tree_stats(&self) -> TreeStats {
@@ -389,11 +413,11 @@ mod tests {
         assert_eq!(*q.get(&ArrayKey::new_from_str("axyz")).unwrap(), 6);
         assert_eq!(*q.get(&ArrayKey::new_from_str("xyz")).unwrap(), 5);
 
-        assert!(q.remove(&ArrayKey::new_from_str("abcde")));
+        assert_eq!(q.remove(&ArrayKey::new_from_str("abcde")), Some(3));
         assert_eq!(q.get(&ArrayKey::new_from_str("abcde")), None);
         assert_eq!(*q.get(&ArrayKey::new_from_str("abc")).unwrap(), 2);
         assert_eq!(*q.get(&ArrayKey::new_from_str("axyz")).unwrap(), 6);
-        assert!(q.remove(&ArrayKey::new_from_str("abc")));
+        assert_eq!(q.remove(&ArrayKey::new_from_str("abc")), Some(2));
         assert_eq!(q.get(&ArrayKey::new_from_str("abc")), None);
     }
 
@@ -538,6 +562,67 @@ mod tests {
         }
     }
 
+    #[test]
+    // The following cases were found by fuzzing, and identified bugs in `remove`
+    fn test_delete_regressions() {
+        // DO_INSERT,12297829382473034287,72245244022401706
+        // DO_INSERT,12297829382473034410,5425513372477729450
+        // DO_DELETE,12297829382473056255,Some(5425513372477729450),None
+        let mut tree = AdaptiveRadixTree::<ArrPartial<16>, usize>::new();
+        assert!(tree.insert(&ArrayKey::new_from_unsigned(12297829382473034287usize), 72245244022401706usize).is_none());
+        assert!(tree.insert(&ArrayKey::new_from_unsigned(12297829382473034410usize), 5425513372477729450usize).is_none());
+        // assert!(tree.remove(&ArrayKey::new_from_unsigned(12297829382473056255usize)).is_none());
+
+        let mut tree = AdaptiveRadixTree::<ArrPartial<16>, usize>::new();
+        // DO_INSERT,0,8101975729639522304
+        // DO_INSERT,4934144,18374809624973934592
+        // DO_DELETE,0,None,Some(8101975729639522304)
+        assert!(tree.insert(&ArrayKey::new_from_unsigned(0usize), 8101975729639522304usize).is_none());
+        assert!(tree.insert(&ArrayKey::new_from_unsigned(4934144usize), 18374809624973934592usize).is_none());
+        assert_eq!(tree.get(&ArrayKey::new_from_unsigned(0usize)), Some(&8101975729639522304usize));
+        assert_eq!(tree.remove(&ArrayKey::new_from_unsigned(0usize)), Some(8101975729639522304usize));
+        assert_eq!(tree.get(&ArrayKey::new_from_unsigned(4934144usize)), Some(&18374809624973934592usize));
+
+        // DO_INSERT,8102098874941833216,8101975729639522416
+        // DO_INSERT,8102099357864587376,18374810107896688752
+        // DO_DELETE,0,Some(8101975729639522416),None
+        let mut tree = AdaptiveRadixTree::<ArrPartial<16>, usize>::new();
+        assert!(tree.insert(&ArrayKey::new_from_unsigned(8102098874941833216usize), 8101975729639522416usize).is_none());
+        assert!(tree.insert(&ArrayKey::new_from_unsigned(8102099357864587376usize), 18374810107896688752usize).is_none());
+        assert_eq!(tree.get(&ArrayKey::new_from_unsigned(0usize)), None);
+        assert_eq!(tree.remove(&ArrayKey::new_from_unsigned(0usize)), None);
+    }
+
+    #[test]
+    fn test_delete() {
+        // Insert a bunch of random keys and values into both a btree and our tree, then iterate
+        // over the btree and delete the keys from our tree. Then, iterate over our tree and make
+        // sure it's empty.
+        let mut tree = AdaptiveRadixTree::<ArrPartial<16>, u64>::new();
+        let mut btree = BTreeMap::new();
+        let count = 5_000;
+        let mut rng = thread_rng();
+        for i in 0..count {
+            let _value = i;
+            let rnd_val = rng.gen_range(0..u64::MAX);
+            let rnd_key: ArrayKey<16> = rnd_val.into();
+            tree.insert(&rnd_key, rnd_val);
+            btree.insert(rnd_val, rnd_val);
+        }
+
+        for (key, value) in btree.iter() {
+            let key: ArrayKey<16> = (*key).into();
+            let get_result = tree.get(&key);
+            assert_eq!(
+                get_result.cloned(),
+                Some(*value),
+                "Key with prefix {:?} not found in tree; it should be",
+                key.to_prefix(0).to_slice()
+            );
+            let result = tree.remove(&key);
+            assert_eq!(result, Some(*value));
+        }
+    }
     // Compare the results of a range query on an AdaptiveRadixTree and a BTreeMap, because we can
     // safely assume the latter exhibits correct behavior.
     fn test_range_matches<'a, K: KeyTrait<P>, P: PrefixTraits, V: PartialEq + Debug + 'a>(
