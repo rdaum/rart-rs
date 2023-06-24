@@ -14,7 +14,7 @@ use crate::utils::u8_keys::{u8_keys_find_insert_position, u8_keys_find_key_posit
 /// order to keep the array sorted.
 /// *Note* this version is currently unused, as it is slower than the unsorted version on x86_64
 /// with sse. If benching on other platforms shows it to be faster, then we can use it, so the
-/// code is kept here.
+/// code is kept here. The bottleneck here is the constant shuffling of the keys in the array.
 pub struct SortedKeyedMapping<N, const WIDTH: usize> {
     pub(crate) keys: [u8; WIDTH],
     pub(crate) children: Box<[MaybeUninit<N>; WIDTH]>,

@@ -24,5 +24,11 @@ Some notes:
   * There are some bits of compartmentalized `unsafe` code for performance reasons, but the public API is safe.
   * Uses explicit SIMD optimizations for x86 SSE for the 16-child inner keyed node; an implementation for ARM NEON is also there, but doesn't really provide
 much performance benefit.
+  * A fuzz test (under `fuzz/`) is included, but will fully work for `nightly` only. Has already been used to identify 
+    some bugs
+  * So Much Depends On The Choice of Key & Partial Implementation. Fixed size stack allocated keys and partials   
+    outperform dynamic sized keys and partials in benchmarks.  So generally, ArrayKey/ArrayPartial is the way to go.
+  * The ergonomics of key creation is not great, but I'm not sure how to improve it. Suggestions welcome.
+  * Room for optimization in range query optimizations, where plenty of unnecessary copy operations are performed.
 
 More documentation to come. Still working at smoothing the rough corners. Contributions welcome.
