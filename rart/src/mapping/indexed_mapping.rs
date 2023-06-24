@@ -7,7 +7,7 @@ use crate::mapping::NodeMapping;
 use crate::utils::bitarray::BitArray;
 use crate::utils::bitset::{Bitset64, BitsetTrait};
 
-// A mapping from keys to separate child pointers.
+/// A mapping from keys to separate child pointers. 256 keys, usually 48 children.
 pub struct IndexedMapping<N, const WIDTH: usize, Bitset: BitsetTrait> {
     pub(crate) child_ptr_indexes: BitArray<u8, 256, Bitset64<4>>,
     pub(crate) children: BitArray<N, WIDTH, Bitset>,

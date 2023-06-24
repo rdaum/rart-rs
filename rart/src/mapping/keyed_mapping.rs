@@ -111,8 +111,9 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> NodeMapping<N, WIDTH>
     fn add_child(&mut self, key: u8, node: N) {
         // Find an empty position by looking into the bitset.
         let idx = self.children.first_empty().unwrap_or_else(|| {
+            // Invariant violated - upstream code should have checked for this.
             panic!(
-                "No no space in bit array in KeyedMapping of size {}; num children: {} \
+                "No space left in bit array in KeyedMapping of size {}; num children: {} \
                  bitset used size: {}; capacity: {} storage size: {} bit width: {}",
                 WIDTH,
                 self.num_children,
