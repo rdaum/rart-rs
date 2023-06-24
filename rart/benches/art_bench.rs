@@ -1,3 +1,5 @@
+/// Overall simple performance bench for static # of keys in a few secnarios. Here to quickly test\
+/// for regressions.
 use std::time::Instant;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};

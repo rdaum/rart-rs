@@ -8,10 +8,7 @@ where
     Prefix: Partial,
 {
     fn at(&self, pos: usize) -> u8;
-    fn len(&self) -> usize;
-    fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
+    fn length_at(&self, at_depth: usize) -> usize;
     fn to_prefix(&self, at_depth: usize) -> Prefix;
     fn matches_slice(&self, slice: &[u8]) -> bool;
 }

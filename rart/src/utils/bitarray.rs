@@ -1,25 +1,27 @@
 use std::mem::MaybeUninit;
 use std::ops::Index;
 
-use crate::utils::bitset::Bitset64;
+use crate::utils::bitset::BitsetTrait;
 
-// BITSET_WIDTH must be RANGE_WIDTH / 64
+// BITSET_WIDTH must be RANGE_WIDTH / 16
 // Once generic_const_exprs is stabilized, we can use that to calculate this from a RANGE_WIDTH.
 // Until then, don't mess up.
-pub struct BitArray<X, const RANGE_WIDTH: usize, const BITSET_WIDTH: usize> {
-    bitset: Bitset64<BITSET_WIDTH>,
-    storage: [MaybeUninit<X>; RANGE_WIDTH],
+pub struct BitArray<X, const RANGE_WIDTH: usize, BitsetType>
+where
+    BitsetType: BitsetTrait + std::default::Default,
+{
+    pub(crate) bitset: BitsetType,
+    storage: Box<[MaybeUninit<X>; RANGE_WIDTH]>,
 }
 
-impl<X, const RANGE_WIDTH: usize, const BITSET_WIDTH: usize>
-    BitArray<X, RANGE_WIDTH, BITSET_WIDTH>
+impl<X, const RANGE_WIDTH: usize, BitsetType> BitArray<X, RANGE_WIDTH, BitsetType>
+where
+    BitsetType: BitsetTrait + std::default::Default,
 {
     pub fn new() -> Self {
-        assert!(BITSET_WIDTH * 64 >= RANGE_WIDTH);
-
         Self {
-            bitset: Bitset64::new(),
-            storage: unsafe { MaybeUninit::uninit().assume_init() },
+            bitset: Default::default(),
+            storage: Box::new(unsafe { MaybeUninit::uninit().assume_init() }),
         }
     }
 
@@ -52,8 +54,23 @@ impl<X, const RANGE_WIDTH: usize, const BITSET_WIDTH: usize>
     }
 
     #[inline]
-    pub fn first_free_pos(&mut self) -> Option<usize> {
-        self.bitset.first_empty()
+    pub fn first_empty(&mut self) -> Option<usize> {
+        // Storage size of the bitset can be larger than the range width.
+        // For example: we have a RANGE_WIDTH of 48 and a bitset of 64x1 or 32x2.
+        // So we need to check that the first empty bit is within the range width, or people could
+        // get the idea they could append beyond our permitted range.
+        let Some(first_empty) = self.bitset.first_empty() else {
+            return None;
+        };
+        if first_empty > RANGE_WIDTH {
+            return None;
+        }
+        Some(first_empty)
+    }
+
+    #[inline]
+    pub fn check(&self, pos: usize) -> bool {
+        self.bitset.check(pos)
     }
 
     #[inline]
@@ -87,7 +104,7 @@ impl<X, const RANGE_WIDTH: usize, const BITSET_WIDTH: usize>
 
     #[inline]
     pub fn update(&mut self, pos: usize, x: X) -> Option<X> {
-        let old = self.erase_internal(pos);
+        let old = self.take_internal(pos);
         unsafe {
             self.storage[pos].as_mut_ptr().write(x);
         };
@@ -97,15 +114,14 @@ impl<X, const RANGE_WIDTH: usize, const BITSET_WIDTH: usize>
 
     #[inline]
     pub fn erase(&mut self, pos: usize) -> Option<X> {
-        let old = self.erase_internal(pos);
+        let old = self.take_internal(pos)?;
         self.bitset.unset(pos);
-        self.storage[pos] = MaybeUninit::uninit();
-        old
+        Some(old)
     }
 
     // Erase without updating index, used by update and erase
     #[inline]
-    fn erase_internal(&mut self, pos: usize) -> Option<X> {
+    fn take_internal(&mut self, pos: usize) -> Option<X> {
         assert!(pos < RANGE_WIDTH);
         if self.bitset.check(pos) {
             let old = std::mem::replace(&mut self.storage[pos], MaybeUninit::uninit());
@@ -163,16 +179,18 @@ impl<X, const RANGE_WIDTH: usize, const BITSET_WIDTH: usize>
     }
 }
 
-impl<X, const RANGE_WIDTH: usize, const BITSET_WIDTH: usize> Default
-    for BitArray<X, RANGE_WIDTH, BITSET_WIDTH>
+impl<X, const RANGE_WIDTH: usize, BitsetType> Default for BitArray<X, RANGE_WIDTH, BitsetType>
+where
+    BitsetType: BitsetTrait + std::default::Default,
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<X, const RANGE_WIDTH: usize, const BITSET_WIDTH: usize> Index<usize>
-    for BitArray<X, RANGE_WIDTH, BITSET_WIDTH>
+impl<X, const RANGE_WIDTH: usize, BitsetType> Index<usize> for BitArray<X, RANGE_WIDTH, BitsetType>
+where
+    BitsetType: BitsetTrait + std::default::Default,
 {
     type Output = X;
 
@@ -181,8 +199,9 @@ impl<X, const RANGE_WIDTH: usize, const BITSET_WIDTH: usize> Index<usize>
     }
 }
 
-impl<X, const RANGE_WIDTH: usize, const BITSET_WIDTH: usize> Drop
-    for BitArray<X, RANGE_WIDTH, BITSET_WIDTH>
+impl<X, const RANGE_WIDTH: usize, BitsetType> Drop for BitArray<X, RANGE_WIDTH, BitsetType>
+where
+    BitsetType: BitsetTrait + std::default::Default,
 {
     fn drop(&mut self) {
         for i in 0..RANGE_WIDTH {
@@ -197,23 +216,24 @@ impl<X, const RANGE_WIDTH: usize, const BITSET_WIDTH: usize> Drop
 #[cfg(test)]
 mod test {
     use crate::utils::bitarray::BitArray;
+    use crate::utils::bitset::Bitset16;
 
     #[test]
     fn u8_vector() {
-        let mut vec: BitArray<u8, 48, 1> = BitArray::new();
-        assert_eq!(vec.first_free_pos(), Some(0));
+        let mut vec: BitArray<u8, 48, Bitset16<3>> = BitArray::new();
+        assert_eq!(vec.first_empty(), Some(0));
         assert_eq!(vec.last_used_pos(), None);
         assert_eq!(vec.push(123), 0);
-        assert_eq!(vec.first_free_pos(), Some(1));
+        assert_eq!(vec.first_empty(), Some(1));
         assert_eq!(vec.last_used_pos(), Some(0));
         assert_eq!(vec.get(0), Some(&123));
         assert_eq!(vec.push(124), 1);
         assert_eq!(vec.push(55), 2);
         assert_eq!(vec.push(126), 3);
         assert_eq!(vec.pop(), Some(126));
-        assert_eq!(vec.first_free_pos(), Some(3));
+        assert_eq!(vec.first_empty(), Some(3));
         vec.erase(0);
-        assert_eq!(vec.first_free_pos(), Some(0));
+        assert_eq!(vec.first_empty(), Some(0));
         assert_eq!(vec.last_used_pos(), Some(2));
         assert_eq!(vec.size(), 2);
         vec.set(0, 126);

@@ -1,22 +1,29 @@
 use crate::mapping::indexed_mapping::IndexedMapping;
-use crate::node::NodeMapping;
+use crate::mapping::NodeMapping;
 use crate::utils::bitarray::BitArray;
+use crate::utils::bitset::{Bitset64, BitsetTrait};
 
-pub(crate) struct DirectMapping<N> {
-    pub(crate) children: Box<BitArray<N, 256, 4>>,
+pub struct DirectMapping<N> {
+    pub(crate) children: BitArray<N, 256, Bitset64<4>>,
     num_children: usize,
+}
+
+impl<N> Default for DirectMapping<N> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<N> DirectMapping<N> {
     pub fn new() -> Self {
         Self {
-            children: Box::new(BitArray::new()),
+            children: BitArray::new(),
             num_children: 0,
         }
     }
 
-    pub(crate) fn from_indexed<const WIDTH: usize, const BITWIDTH: usize>(
-        im: &mut IndexedMapping<N, WIDTH, BITWIDTH>,
+    pub fn from_indexed<const WIDTH: usize, FromBitset: BitsetTrait>(
+        im: &mut IndexedMapping<N, WIDTH, FromBitset>,
     ) -> Self {
         let mut new_mapping = DirectMapping::<N>::new();
         im.num_children = 0;
@@ -30,7 +37,7 @@ impl<N> DirectMapping<N> {
     }
 }
 
-impl<N> NodeMapping<N> for DirectMapping<N> {
+impl<N> NodeMapping<N, 256> for DirectMapping<N> {
     #[inline]
     fn add_child(&mut self, key: u8, node: N) {
         self.children.set(key as usize, node);
@@ -66,15 +73,11 @@ impl<N> NodeMapping<N> for DirectMapping<N> {
     fn num_children(&self) -> usize {
         self.num_children
     }
-
-    fn width(&self) -> usize {
-        256
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::node::NodeMapping;
+    use crate::mapping::NodeMapping;
 
     #[test]
     fn direct_mapping_test() {

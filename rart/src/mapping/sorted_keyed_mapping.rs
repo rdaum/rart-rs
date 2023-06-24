@@ -1,7 +1,8 @@
 use std::mem::MaybeUninit;
 
 use crate::mapping::indexed_mapping::IndexedMapping;
-use crate::node::NodeMapping;
+use crate::mapping::NodeMapping;
+use crate::utils::bitset::BitsetTrait;
 use crate::utils::u8_keys::{u8_keys_find_insert_position, u8_keys_find_key_position_sorted};
 
 /// Maps a key to a node, using a sorted array of keys and a corresponding array of nodes.
@@ -37,8 +38,8 @@ impl<N, const WIDTH: usize> SortedKeyedMapping<N, WIDTH> {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn from_indexed<const IDX_WIDTH: usize, const IDX_BITSIZE: usize>(
-        im: &mut IndexedMapping<N, IDX_WIDTH, IDX_BITSIZE>,
+    pub(crate) fn from_indexed<const IDX_WIDTH: usize, FromBitset: BitsetTrait>(
+        im: &mut IndexedMapping<N, IDX_WIDTH, FromBitset>,
     ) -> Self {
         let mut new_mapping = SortedKeyedMapping::new();
         im.num_children = 0;
@@ -68,7 +69,7 @@ impl<N, const WIDTH: usize> SortedKeyedMapping<N, WIDTH> {
     }
 }
 
-impl<N, const WIDTH: usize> NodeMapping<N> for SortedKeyedMapping<N, WIDTH> {
+impl<N, const WIDTH: usize> NodeMapping<N, WIDTH> for SortedKeyedMapping<N, WIDTH> {
     #[inline]
     fn add_child(&mut self, key: u8, node: N) {
         let idx =
@@ -125,10 +126,6 @@ impl<N, const WIDTH: usize> NodeMapping<N> for SortedKeyedMapping<N, WIDTH> {
     #[inline(always)]
     fn num_children(&self) -> usize {
         self.num_children as usize
-    }
-    #[inline(always)]
-    fn width(&self) -> usize {
-        WIDTH
     }
 }
 

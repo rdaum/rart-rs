@@ -3,27 +3,28 @@ use std::mem::MaybeUninit;
 use crate::mapping::direct_mapping::DirectMapping;
 use crate::mapping::keyed_mapping::KeyedMapping;
 use crate::mapping::sorted_keyed_mapping::SortedKeyedMapping;
-use crate::node::NodeMapping;
+use crate::mapping::NodeMapping;
 use crate::utils::bitarray::BitArray;
+use crate::utils::bitset::{Bitset64, BitsetTrait};
 
 // A mapping from keys to separate child pointers.
-pub struct IndexedMapping<N, const WIDTH: usize, const BITWIDTH: usize> {
-    child_ptr_indexes: Box<BitArray<u8, 256, 4>>,
-    children: Box<BitArray<N, WIDTH, BITWIDTH>>,
+pub struct IndexedMapping<N, const WIDTH: usize, Bitset: BitsetTrait> {
+    pub(crate) child_ptr_indexes: BitArray<u8, 256, Bitset64<4>>,
+    pub(crate) children: BitArray<N, WIDTH, Bitset>,
     pub(crate) num_children: u8,
 }
 
-impl<N, const WIDTH: usize, const BITWIDTH: usize> Default for IndexedMapping<N, WIDTH, BITWIDTH> {
+impl<N, const WIDTH: usize, Bitset: BitsetTrait> Default for IndexedMapping<N, WIDTH, Bitset> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<N, const WIDTH: usize, const BITWIDTH: usize> IndexedMapping<N, WIDTH, BITWIDTH> {
+impl<N, const WIDTH: usize, Bitset: BitsetTrait> IndexedMapping<N, WIDTH, Bitset> {
     pub fn new() -> Self {
         Self {
-            child_ptr_indexes: Box::new(BitArray::new()),
-            children: Box::new(BitArray::new()),
+            child_ptr_indexes: Default::default(),
+            children: BitArray::new(),
             num_children: 0,
         }
     }
@@ -42,7 +43,7 @@ impl<N, const WIDTH: usize, const BITWIDTH: usize> IndexedMapping<N, WIDTH, BITW
     pub fn from_sorted_keyed<const KM_WIDTH: usize>(
         km: &mut SortedKeyedMapping<N, KM_WIDTH>,
     ) -> Self {
-        let mut im: IndexedMapping<N, WIDTH, BITWIDTH> = IndexedMapping::new();
+        let mut im: IndexedMapping<N, WIDTH, Bitset> = IndexedMapping::new();
         for i in 0..km.num_children as usize {
             let stolen = std::mem::replace(&mut km.children[i], MaybeUninit::uninit());
             im.add_child(km.keys[i], unsafe { stolen.assume_init() });
@@ -51,20 +52,25 @@ impl<N, const WIDTH: usize, const BITWIDTH: usize> IndexedMapping<N, WIDTH, BITW
         im
     }
 
-    pub fn from_keyed<const KM_WIDTH: usize>(km: &mut KeyedMapping<N, KM_WIDTH>) -> Self {
-        let mut im: IndexedMapping<N, WIDTH, BITWIDTH> = IndexedMapping::new();
+    pub fn from_keyed<const KM_WIDTH: usize, FromBitset: BitsetTrait>(
+        km: &mut KeyedMapping<N, KM_WIDTH, FromBitset>,
+    ) -> Self {
+        let mut im: IndexedMapping<N, WIDTH, Bitset> = IndexedMapping::new();
         for i in 0..KM_WIDTH {
-            if !km.occupied_bitset.check(i) {
+            let Some(stolen) = km.children.erase(i) else {
                 continue;
-            }
-            let stolen = std::mem::replace(&mut km.children[i], MaybeUninit::uninit());
-            im.add_child(km.keys[i], unsafe { stolen.assume_init() });
+            };
+            im.add_child(km.keys[i], stolen);
         }
-        km.occupied_bitset.clear();
+        km.children.clear();
+        km.num_children = 0;
         im
     }
 
-    pub(crate) fn move_into<NM: NodeMapping<N>>(&mut self, nm: &mut NM) {
+    pub(crate) fn move_into<const NEW_WIDTH: usize, NM: NodeMapping<N, NEW_WIDTH>>(
+        &mut self,
+        nm: &mut NM,
+    ) {
         for (key, pos) in self.child_ptr_indexes.iter() {
             let node = self.children.erase(*pos as usize).unwrap();
             nm.add_child(key as u8, node);
@@ -78,11 +84,14 @@ impl<N, const WIDTH: usize, const BITWIDTH: usize> IndexedMapping<N, WIDTH, BITW
     }
 }
 
-impl<N, const WIDTH: usize, const BITWIDTH: usize> NodeMapping<N>
-    for IndexedMapping<N, WIDTH, BITWIDTH>
+impl<N, const WIDTH: usize, Bitset: BitsetTrait> NodeMapping<N, WIDTH>
+    for IndexedMapping<N, WIDTH, Bitset>
 {
     fn add_child(&mut self, key: u8, node: N) {
-        let pos = self.children.first_free_pos().unwrap();
+        let pos = self
+            .children
+            .first_empty()
+            .expect("No empty slots in IndexedMapping; full");
         self.child_ptr_indexes.set(key as usize, pos as u8);
         self.children.set(pos, node);
         self.num_children += 1;
@@ -121,14 +130,9 @@ impl<N, const WIDTH: usize, const BITWIDTH: usize> NodeMapping<N>
     fn num_children(&self) -> usize {
         self.num_children as usize
     }
-
-    #[inline]
-    fn width(&self) -> usize {
-        WIDTH
-    }
 }
 
-impl<N, const WIDTH: usize, const BITWIDTH: usize> Drop for IndexedMapping<N, WIDTH, BITWIDTH> {
+impl<N, const WIDTH: usize, Bitset: BitsetTrait> Drop for IndexedMapping<N, WIDTH, Bitset> {
     fn drop(&mut self) {
         if self.num_children == 0 {
             return;
@@ -141,11 +145,12 @@ impl<N, const WIDTH: usize, const BITWIDTH: usize> Drop for IndexedMapping<N, WI
 
 #[cfg(test)]
 mod test {
-    use crate::node::NodeMapping;
+    use crate::mapping::NodeMapping;
+    use crate::utils::bitset::Bitset16;
 
     #[test]
     fn test_basic_mapping() {
-        let mut mapping = super::IndexedMapping::<u8, 48, 1>::new();
+        let mut mapping = super::IndexedMapping::<u8, 48, Bitset16<3>>::new();
         for i in 0..48 {
             mapping.add_child(i, i);
             assert_eq!(*mapping.seek_child(i).unwrap(), i);

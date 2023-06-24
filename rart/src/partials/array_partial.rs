@@ -27,7 +27,7 @@ impl<const SIZE: usize> ArrPartial<SIZE> {
     }
 
     pub fn from_slice(src: &[u8]) -> Self {
-        assert!(src.len() <= SIZE);
+        assert!(src.len() < SIZE);
         let mut data = [0; SIZE];
         data[..src.len()].copy_from_slice(src);
         Self {
@@ -84,7 +84,7 @@ impl<const SIZE: usize> Partial for ArrPartial<SIZE> {
         key: &'a K,
         at_depth: usize,
     ) -> usize {
-        let len = min(self.len, key.len() - at_depth);
+        let len = min(self.len, key.length_at(at_depth));
         let len = min(len, SIZE);
         let mut idx = 0;
         while idx < len {

@@ -45,8 +45,8 @@ impl KeyTrait<VectorPartial> for VectorKey {
         self.data[pos]
     }
 
-    fn len(&self) -> usize {
-        self.data.len()
+    fn length_at(&self, at_depth: usize) -> usize {
+        self.data.len() - at_depth
     }
 
     fn to_prefix(&self, at_depth: usize) -> VectorPartial {

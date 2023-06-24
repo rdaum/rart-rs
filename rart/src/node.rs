@@ -1,28 +1,20 @@
 use crate::mapping::direct_mapping::DirectMapping;
 use crate::mapping::indexed_mapping::IndexedMapping;
 use crate::mapping::keyed_mapping::KeyedMapping;
+use crate::mapping::NodeMapping;
 use crate::partials::Partial;
+use crate::utils::bitset::{Bitset16, Bitset64, Bitset8};
 
 pub(crate) struct Node<P: Partial + Clone, V> {
     pub(crate) prefix: P,
     pub(crate) ntype: NodeType<P, V>,
 }
 
-pub trait NodeMapping<N> {
-    fn add_child(&mut self, key: u8, node: N);
-    fn update_child(&mut self, key: u8, node: N);
-    fn seek_child(&self, key: u8) -> Option<&N>;
-    fn seek_child_mut(&mut self, key: u8) -> Option<&mut N>;
-    fn delete_child(&mut self, key: u8) -> Option<N>;
-    fn num_children(&self) -> usize;
-    fn width(&self) -> usize;
-}
-
 pub(crate) enum NodeType<P: Partial + Clone, V> {
     Leaf(V),
-    Node4(KeyedMapping<Node<P, V>, 4>),
-    Node16(KeyedMapping<Node<P, V>, 16>),
-    Node48(IndexedMapping<Node<P, V>, 48, 1>),
+    Node4(KeyedMapping<Node<P, V>, 4, Bitset8<1>>),
+    Node16(KeyedMapping<Node<P, V>, 16, Bitset16<1>>),
+    Node48(IndexedMapping<Node<P, V>, 48, Bitset64<1>>),
     Node256(DirectMapping<Node<P, V>>),
 }
 
