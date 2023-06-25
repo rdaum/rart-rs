@@ -52,16 +52,18 @@ impl<const N: usize> ArrayKey<N> {
 }
 
 impl<const N: usize> KeyTrait<ArrPartial<N>> for ArrayKey<N> {
+    #[inline(always)]
     fn at(&self, pos: usize) -> u8 {
         self.data[pos]
     }
+    #[inline(always)]
     fn length_at(&self, at_depth: usize) -> usize {
         self.len - at_depth
     }
     fn to_prefix(&self, at_depth: usize) -> ArrPartial<N> {
         ArrPartial::from_slice(&self.data[at_depth..self.len])
     }
-
+    #[inline(always)]
     fn matches_slice(&self, slice: &[u8]) -> bool {
         &self.data[..self.len] == slice
     }

@@ -84,7 +84,7 @@ impl<const SIZE: usize> Partial for ArrPartial<SIZE> {
         key: &'a K,
         at_depth: usize,
     ) -> usize {
-        let len = min(self.len, key.length_at(at_depth));
+        let len = min(self.len, key.length_at(0));
         let len = min(len, SIZE);
         let mut idx = 0;
         while idx < len {

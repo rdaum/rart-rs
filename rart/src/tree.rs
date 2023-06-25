@@ -84,18 +84,12 @@ where
                 return None;
             }
 
-            if cur_node.prefix.len() == (key.length_at(depth)) {
-                assert!(cur_node.is_leaf());
+            if cur_node.prefix.len() == key.length_at(depth) {
                 return cur_node.value();
             }
-            assert!(cur_node.num_children() > 0);
-
             let k = key.at(depth + cur_node.prefix.len());
             depth += cur_node.prefix.len();
-            cur_node = match cur_node.seek_child(k) {
-                None => return None,
-                Some(c) => c,
-            }
+            cur_node = cur_node.seek_child(k)?
         }
     }
 
@@ -179,16 +173,14 @@ where
         value: V,
         depth: usize,
     ) -> Option<V> {
-        let cur_node_prefix = cur_node.prefix.clone();
-
-        let longest_common_prefix = cur_node_prefix.prefix_length_key(key, depth);
+        let longest_common_prefix = cur_node.prefix.prefix_length_key(key, depth);
 
         let is_prefix_match =
-            min(cur_node_prefix.len(), key.length_at(depth)) == longest_common_prefix;
+            min(cur_node.prefix.len(), key.length_at(depth)) == longest_common_prefix;
 
         // Prefix fully covers this node.
         // Either sets the value or replaces the old value already here.
-        if is_prefix_match && cur_node_prefix.len() == key.length_at(depth) {
+        if is_prefix_match && cur_node.prefix.len() == key.length_at(depth) {
             if let NodeType::Leaf(ref mut v) = &mut cur_node.ntype {
                 return Some(std::mem::replace(v, value));
             } else {
@@ -199,13 +191,14 @@ where
         // Prefix is part of the current node, but doesn't fully cover it.
         // We have to break this node up, creating a new parent node, and a sibling for our leaf.
         if !is_prefix_match {
-            cur_node.prefix = cur_node_prefix.partial_after(longest_common_prefix);
+            let new_prefix = cur_node.prefix.partial_after(longest_common_prefix);
+            let old_node_prefix = std::mem::replace(&mut cur_node.prefix, new_prefix);
 
             // We will replace this leaf node with a new inner node. The new value will join the
             // current node as sibling, both a child of the new node.
-            let n4 = Node::new_inner(cur_node_prefix.partial_before(longest_common_prefix));
+            let n4 = Node::new_inner(old_node_prefix.partial_before(longest_common_prefix));
 
-            let k1 = cur_node_prefix.at(longest_common_prefix);
+            let k1 = old_node_prefix.at(longest_common_prefix);
             let k2 = key.at(depth + longest_common_prefix);
 
             let replacement_current = std::mem::replace(cur_node, n4);
