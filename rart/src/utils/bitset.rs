@@ -42,65 +42,6 @@ where
         }
     }
 
-    pub fn first_empty(&self) -> Option<usize> {
-        for (i, b) in self.bitset.iter().enumerate() {
-            if b.is_zero() {
-                return Some(i << SHIFT);
-            }
-            if *b != StorageType::max_value() {
-                return Some((i << SHIFT) + b.trailing_ones() as usize);
-            }
-        }
-        None
-    }
-
-    #[inline]
-    pub fn set(&mut self, pos: usize) {
-        assert!(pos < STORAGE_WIDTH * BIT_WIDTH);
-        let v = self.bitset[pos >> SHIFT];
-        let shift: StorageType = StorageType::one() << (pos % BIT_WIDTH);
-        let v = v.bitor(shift);
-        self.bitset[pos >> SHIFT] = v;
-    }
-
-    #[inline]
-    pub fn unset(&mut self, pos: usize) {
-        assert!(pos < STORAGE_WIDTH * BIT_WIDTH);
-        let v = self.bitset[pos >> SHIFT];
-        let shift = StorageType::one() << (pos % BIT_WIDTH);
-        let v = v & shift.not();
-        self.bitset[pos >> SHIFT] = v;
-    }
-
-    #[inline]
-    pub fn check(&self, pos: usize) -> bool {
-        assert!(pos < STORAGE_WIDTH * BIT_WIDTH);
-        let shift: StorageType = StorageType::one() << (pos % BIT_WIDTH);
-        !(self.bitset[pos >> SHIFT] & shift).is_zero()
-    }
-
-    #[inline]
-    pub fn clear(&mut self) {
-        self.bitset.fill(StorageType::zero());
-    }
-
-    pub fn last(&self) -> Option<usize> {
-        for (i, b) in self.bitset.iter().enumerate() {
-            if !b.is_zero() {
-                return Some((i << SHIFT) + (BIT_WIDTH - 1) - b.leading_zeros() as usize);
-            }
-        }
-        None
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.bitset.iter().all(|x| x.is_zero())
-    }
-
-    pub fn size(&self) -> usize {
-        self.bitset.iter().map(|x| x.count_ones() as usize).sum()
-    }
-
     pub fn iter(&self) -> impl Iterator<Item = usize> + '_ {
         self.bitset.iter().enumerate().flat_map(|(i, b)| {
             (0..BIT_WIDTH).filter_map(move |j| {
