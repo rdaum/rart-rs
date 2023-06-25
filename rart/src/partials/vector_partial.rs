@@ -3,8 +3,9 @@ use std::cmp::min;
 use crate::keys::KeyTrait;
 use crate::partials::Partial;
 
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct VectorPartial {
-    data: Vec<u8>,
+    data: Box<[u8]>,
 }
 
 impl VectorPartial {
@@ -12,12 +13,11 @@ impl VectorPartial {
         let mut data = Vec::with_capacity(src.len() + 1);
         data.extend_from_slice(src);
         data.push(0);
-        Self { data }
+        Self { data: data.into_boxed_slice() }
     }
 
     pub fn from_slice(src: &[u8]) -> Self {
-        let data = Vec::from(src);
-        Self { data }
+        Self { data: Box::from(src) }
     }
 
     pub fn to_slice(&self) -> &[u8] {
@@ -25,29 +25,35 @@ impl VectorPartial {
     }
 }
 
+impl From<&[u8]> for VectorPartial {
+    fn from(src: &[u8]) -> Self {
+        Self::from_slice(src)
+    }
+}
+
 impl Partial for VectorPartial {
     fn partial_before(&self, length: usize) -> Self {
-        let mut data = Vec::with_capacity(length);
-        data.extend_from_slice(&self.data[..length]);
-        Self { data }
+        assert!(length <= self.data.len());
+        VectorPartial::from_slice(&self.data[..length])
     }
 
     fn partial_from(&self, src_offset: usize, length: usize) -> Self {
-        let mut data = Vec::with_capacity(length);
-        data.extend_from_slice(&self.data[src_offset..src_offset + length]);
-        Self { data }
+        assert!(src_offset + length <= self.data.len());
+        VectorPartial::from_slice(&self.data[src_offset..src_offset + length])
     }
 
     fn partial_after(&self, start: usize) -> Self {
-        let mut data = Vec::with_capacity(self.data.len() - start);
-        data.extend_from_slice(&self.data[start..]);
-        Self { data }
+        assert!(start <= self.data.len());
+        VectorPartial::from_slice(&self.data[start..self.data.len()])
     }
 
+    #[inline(always)]
     fn at(&self, pos: usize) -> u8 {
+        assert!(pos < self.data.len());
         self.data[pos]
     }
 
+    #[inline(always)]
     fn len(&self) -> usize {
         self.data.len()
     }
@@ -61,7 +67,7 @@ impl Partial for VectorPartial {
         key: &'a K,
         at_depth: usize,
     ) -> usize {
-        let len = min(self.data.len(), key.length_at(at_depth));
+        let len = min(self.data.len(), key.length_at(0));
         let mut idx = 0;
         while idx < len {
             if self.data[idx] != key.at(idx + at_depth) {
@@ -85,6 +91,6 @@ impl Partial for VectorPartial {
     }
 
     fn to_slice(&self) -> &[u8] {
-        &self.data
+        &self.data[..self.data.len()]
     }
 }

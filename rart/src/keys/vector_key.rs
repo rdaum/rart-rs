@@ -8,7 +8,7 @@ use crate::partials::vector_partial::VectorPartial;
 // Owns variable sized key data. Used especially for strings where a null-termination is required.
 #[derive(Clone)]
 pub struct VectorKey {
-    data: Vec<u8>,
+    data: Box<[u8]>,
 }
 
 impl VectorKey {
@@ -16,23 +16,23 @@ impl VectorKey {
         let mut data = Vec::with_capacity(s.len() + 1);
         data.extend_from_slice(s.as_bytes());
         data.push(0);
-        Self { data }
+        Self { data: data.into_boxed_slice() }
     }
 
     pub fn new_from_str(s: &str) -> Self {
         let mut data = Vec::with_capacity(s.len() + 1);
         data.extend_from_slice(s.as_bytes());
         data.push(0);
-        Self { data }
+        Self { data: data.into_boxed_slice() }
     }
 
     pub fn new_from_slice(data: &[u8]) -> Self {
         let data = Vec::from(data);
-        Self { data }
+        Self { data: data.into_boxed_slice() }
     }
 
     pub fn new_from_vec(data: Vec<u8>) -> Self {
-        Self { data }
+        Self { data: data.into_boxed_slice() }
     }
 
     pub fn new_from_unsigned<T: Unsigned + ToBytes>(un: T) -> Self {
@@ -50,11 +50,11 @@ impl KeyTrait<VectorPartial> for VectorKey {
     }
 
     fn to_prefix(&self, at_depth: usize) -> VectorPartial {
-        VectorPartial::from_slice(&self.data.as_slice()[at_depth..])
+        VectorPartial::from_slice(&self.data[at_depth..])
     }
 
     fn matches_slice(&self, slice: &[u8]) -> bool {
-        self.data.len() == slice.len() && self.data == slice
+        self.data.len() == slice.len() && &self.data[..] == slice
     }
 }
 
