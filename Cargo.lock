@@ -425,6 +425,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ab1bc2a289d34bd04a330323ac98a1b4bc82c9d9fcb1e66b63caa84da26b575"
 
 [[package]]
+name = "paste"
+version = "1.0.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f746c4065a8fa3fe23974dd82f15431cc8d40779821001404d10d2e79ca7d79"
+
+[[package]]
 name = "plotters"
 version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -514,6 +520,7 @@ dependencies = [
  "csv",
  "num-traits 0.2.15 (git+https://github.com/rust-num/num-traits.git?rev=c696ef9e8b51a15fb47dbc9a0e1c783f9c615d8a)",
  "rand",
+ "simdeez",
 ]
 
 [[package]]
@@ -626,6 +633,16 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "simdeez"
+version = "2.0.0-dev3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f03e3cf4b84e534adb37350c2ad56fb27e58d10eb2fe8daffc26103b8ae39d3f"
+dependencies = [
+ "cfg-if",
+ "paste",
 ]
 
 [[package]]
