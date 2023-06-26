@@ -3,7 +3,7 @@ use std::mem::MaybeUninit;
 use crate::mapping::indexed_mapping::IndexedMapping;
 use crate::mapping::NodeMapping;
 use crate::utils::bitset::BitsetTrait;
-use crate::utils::u8_keys::{u8_keys_find_insert_position, u8_keys_find_key_position_sorted};
+use crate::utils::u8_keys::{u8_keys_find_insert_position_sorted, u8_keys_find_key_position_sorted};
 
 /// Maps a key to a node, using a sorted array of keys and a corresponding array of nodes.
 /// Presence of a key at a position means there is a node at the same position in children.
@@ -73,7 +73,7 @@ impl<N, const WIDTH: usize> NodeMapping<N, WIDTH> for SortedKeyedMapping<N, WIDT
     #[inline]
     fn add_child(&mut self, key: u8, node: N) {
         let idx =
-            u8_keys_find_insert_position::<WIDTH>(key, &self.keys, self.num_children as usize)
+            u8_keys_find_insert_position_sorted::<WIDTH>(key, &self.keys, self.num_children as usize)
                 .expect("add_child: no space left");
         for i in (idx..self.num_children as usize).rev() {
             self.keys[i + 1] = self.keys[i];

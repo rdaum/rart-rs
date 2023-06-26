@@ -14,8 +14,13 @@ criterion = { version = "0.5.1", features = ["html_reports"] }
 rand = "0.8"
 csv="1.2.1"
 
+[features]
+default = []
+simd_keys = ["dep:simdeez"]
+
 [dependencies]
 num-traits = { git = "https://github.com/rust-num/num-traits.git", rev = "c696ef9e8b51a15fb47dbc9a0e1c783f9c615d8a" }
+simdeez = { version = "2.0.0-dev3", optional = true }
 
 [[bench]]
 name = "art_bench"
