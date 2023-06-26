@@ -15,7 +15,7 @@ rand = "0.8"
 csv="1.2.1"
 
 [features]
-default = []
+default = ["simd_keys"]
 simd_keys = ["dep:simdeez"]
 
 [dependencies]
