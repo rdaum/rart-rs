@@ -4,6 +4,17 @@ use std::ops::Index;
 use num_traits::PrimInt;
 
 pub trait BitsetTrait: Default {
+    // Total size of the bitset in bits.
+    const BITSET_WIDTH: usize;
+    // Total size of the bitset in bytes.
+    const STORAGE_WIDTH_BYTES: usize;
+    // Bit shift factor -- e.g. 3 for 8, 4 for 16, etc.
+    const BIT_SHIFT: usize;
+    // Bit width of each storage unit.
+    const STORAGE_BIT_WIDTH: usize;
+    // Total size of storage in its internal storage width (e.g. u16, u32, etc.)
+    const STORAGE_WIDTH: usize;
+
     fn first_empty(&self) -> Option<usize>;
     fn set(&mut self, pos: usize);
     fn unset(&mut self, pos: usize);
@@ -18,21 +29,14 @@ pub trait BitsetTrait: Default {
     fn as_bitmask(&self) -> u128;
 }
 
-// TODO: The bulk of these parameters can be deleted and automatically derived when
-// generic_const_exprs lands in stable.
-pub struct Bitset<
-    StorageType,
-    const BIT_WIDTH: usize,
-    const SHIFT: usize,
-    const STORAGE_WIDTH: usize,
-> where
+pub struct Bitset<StorageType, const STORAGE_WIDTH: usize>
+where
     StorageType: PrimInt,
 {
     bitset: [StorageType; STORAGE_WIDTH],
 }
 
-impl<StorageType, const BIT_WIDTH: usize, const SHIFT: usize, const STORAGE_WIDTH: usize>
-    Bitset<StorageType, BIT_WIDTH, SHIFT, STORAGE_WIDTH>
+impl<StorageType, const STORAGE_WIDTH: usize> Bitset<StorageType, STORAGE_WIDTH>
 where
     StorageType: PrimInt,
 {
@@ -44,10 +48,10 @@ where
 
     pub fn iter(&self) -> impl Iterator<Item = usize> + '_ {
         self.bitset.iter().enumerate().flat_map(|(i, b)| {
-            (0..BIT_WIDTH).filter_map(move |j| {
+            (0..Self::STORAGE_BIT_WIDTH).filter_map(move |j| {
                 let b: u64 = b.to_u64().unwrap();
                 if (b) & (1 << j) != 0 {
-                    Some((i << SHIFT) + j)
+                    Some((i << Self::BIT_SHIFT) + j)
                 } else {
                     None
                 }
@@ -56,18 +60,23 @@ where
     }
 }
 
-impl<StorageType, const BIT_WIDTH: usize, const SHIFT: usize, const STORAGE_WIDTH: usize>
-    BitsetTrait for Bitset<StorageType, BIT_WIDTH, SHIFT, STORAGE_WIDTH>
+impl<StorageType, const STORAGE_WIDTH: usize> BitsetTrait for Bitset<StorageType, STORAGE_WIDTH>
 where
     StorageType: PrimInt,
 {
+    const BITSET_WIDTH: usize = Self::STORAGE_BIT_WIDTH * STORAGE_WIDTH;
+    const STORAGE_WIDTH_BYTES: usize = Self::BITSET_WIDTH / 8;
+    const BIT_SHIFT: usize = Self::STORAGE_BIT_WIDTH.trailing_zeros() as usize;
+    const STORAGE_BIT_WIDTH: usize = std::mem::size_of::<StorageType>() * 8;
+    const STORAGE_WIDTH: usize = STORAGE_WIDTH;
+
     fn first_empty(&self) -> Option<usize> {
         for (i, b) in self.bitset.iter().enumerate() {
             if b.is_zero() {
-                return Some(i << SHIFT);
+                return Some(i << Self::BIT_SHIFT);
             }
             if *b != StorageType::max_value() {
-                return Some((i << SHIFT) + b.trailing_ones() as usize);
+                return Some((i << Self::BIT_SHIFT) + b.trailing_ones() as usize);
             }
         }
         None
@@ -75,27 +84,27 @@ where
 
     #[inline]
     fn set(&mut self, pos: usize) {
-        assert!(pos < STORAGE_WIDTH * BIT_WIDTH);
-        let v = self.bitset[pos >> SHIFT];
-        let shift: StorageType = StorageType::one() << (pos % BIT_WIDTH);
+        assert!(pos < Self::BITSET_WIDTH);
+        let v = self.bitset[pos >> Self::BIT_SHIFT];
+        let shift: StorageType = StorageType::one() << (pos % Self::STORAGE_BIT_WIDTH);
         let v = v.bitor(shift);
-        self.bitset[pos >> SHIFT] = v;
+        self.bitset[pos >> Self::BIT_SHIFT] = v;
     }
 
     #[inline]
     fn unset(&mut self, pos: usize) {
-        assert!(pos < STORAGE_WIDTH * BIT_WIDTH);
-        let v = self.bitset[pos >> SHIFT];
-        let shift = StorageType::one() << (pos % BIT_WIDTH);
+        assert!(pos < Self::BITSET_WIDTH);
+        let v = self.bitset[pos >> Self::BIT_SHIFT];
+        let shift = StorageType::one() << (pos % Self::STORAGE_BIT_WIDTH);
         let v = v & shift.not();
-        self.bitset[pos >> SHIFT] = v;
+        self.bitset[pos >> Self::BIT_SHIFT] = v;
     }
 
     #[inline]
     fn check(&self, pos: usize) -> bool {
-        assert!(pos < STORAGE_WIDTH * BIT_WIDTH);
-        let shift: StorageType = StorageType::one() << (pos % BIT_WIDTH);
-        !(self.bitset[pos >> SHIFT] & shift).is_zero()
+        assert!(pos < Self::BITSET_WIDTH);
+        let shift: StorageType = StorageType::one() << (pos % Self::STORAGE_BIT_WIDTH);
+        !(self.bitset[pos >> Self::BIT_SHIFT] & shift).is_zero()
     }
 
     #[inline]
@@ -106,7 +115,10 @@ where
     fn last(&self) -> Option<usize> {
         for (i, b) in self.bitset.iter().enumerate() {
             if !b.is_zero() {
-                return Some((i << SHIFT) + (BIT_WIDTH - 1) - b.leading_zeros() as usize);
+                return Some(
+                    (i << Self::BIT_SHIFT) + (Self::STORAGE_BIT_WIDTH - 1)
+                        - b.leading_zeros() as usize,
+                );
             }
         }
         None
@@ -121,34 +133,33 @@ where
     }
 
     fn bit_width(&self) -> usize {
-        BIT_WIDTH
+        Self::STORAGE_BIT_WIDTH
     }
 
     fn capacity(&self) -> usize {
-        self.bitset.len() * BIT_WIDTH
+        Self::BITSET_WIDTH
     }
 
     fn storage_width(&self) -> usize {
-        self.bitset.len()
+        Self::STORAGE_WIDTH
     }
 
     fn as_bitmask(&self) -> u128 {
-        assert!(BIT_WIDTH <= 128);
+        assert!(Self::STORAGE_BIT_WIDTH <= 128);
         let mut mask = 0u128;
         // copy bit-level representation, unsafe ptr copy
         unsafe {
             std::ptr::copy_nonoverlapping(
                 self.bitset.as_ptr() as *const u8,
                 &mut mask as *mut u128 as *mut u8,
-                min(128, STORAGE_WIDTH * BIT_WIDTH),
+                min(16, Self::STORAGE_WIDTH_BYTES),
             );
         }
         mask
     }
 }
 
-impl<StorageType, const BIT_WIDTH: usize, const SHIFT: usize, const STORAGE_WIDTH: usize> Default
-    for Bitset<StorageType, BIT_WIDTH, SHIFT, STORAGE_WIDTH>
+impl<StorageType, const STORAGE_WIDTH: usize> Default for Bitset<StorageType, STORAGE_WIDTH>
 where
     StorageType: PrimInt,
 {
@@ -157,8 +168,7 @@ where
     }
 }
 
-impl<StorageType, const BIT_WIDTH: usize, const SHIFT: usize, const STORAGE_WIDTH: usize>
-    Index<usize> for Bitset<StorageType, BIT_WIDTH, SHIFT, STORAGE_WIDTH>
+impl<StorageType, const STORAGE_WIDTH: usize> Index<usize> for Bitset<StorageType, STORAGE_WIDTH>
 where
     StorageType: PrimInt,
 {
@@ -174,10 +184,10 @@ where
     }
 }
 
-pub type Bitset64<const STORAGE_WIDTH_U64: usize> = Bitset<u64, 64, 6, STORAGE_WIDTH_U64>;
-pub type Bitset32<const STORAGE_WIDTH_U32: usize> = Bitset<u32, 32, 5, STORAGE_WIDTH_U32>;
-pub type Bitset16<const STORAGE_WIDTH_U16: usize> = Bitset<u16, 16, 4, STORAGE_WIDTH_U16>;
-pub type Bitset8<const STORAGE_WIDTH_U8: usize> = Bitset<u8, 8, 3, STORAGE_WIDTH_U8>;
+pub type Bitset64<const STORAGE_WIDTH_U64: usize> = Bitset<u64, STORAGE_WIDTH_U64>;
+pub type Bitset32<const STORAGE_WIDTH_U32: usize> = Bitset<u32, STORAGE_WIDTH_U32>;
+pub type Bitset16<const STORAGE_WIDTH_U16: usize> = Bitset<u16, STORAGE_WIDTH_U16>;
+pub type Bitset8<const STORAGE_WIDTH_U8: usize> = Bitset<u8, STORAGE_WIDTH_U8>;
 
 #[cfg(test)]
 mod tests {
@@ -186,6 +196,22 @@ mod tests {
     #[test]
     fn test_first_free_8s() {
         let mut bs = super::Bitset8::<4>::new();
+        bs.set(1);
+        bs.set(3);
+        assert_eq!(bs.first_empty(), Some(0));
+        bs.set(0);
+        assert_eq!(bs.first_empty(), Some(2));
+
+        // Now fill it up and verify none.
+        for i in 0..bs.capacity() {
+            bs.set(i);
+        }
+        assert_eq!(bs.first_empty(), None);
+    }
+
+    #[test]
+    fn test_first_free_8_2() {
+        let mut bs = super::Bitset8::<2>::new();
         bs.set(1);
         bs.set(3);
         assert_eq!(bs.first_empty(), Some(0));
