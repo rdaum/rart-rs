@@ -1,15 +1,15 @@
 use crate::node::Node;
-use crate::tree::PrefixTraits;
+use crate::partials::Partial;
 
 type IterEntry<'a, P, V> = (u8, &'a Node<P, V>);
 type NodeIterator<'a, P, V> = dyn Iterator<Item = IterEntry<'a, P, V>> + 'a;
 
-pub struct Iter<'a, P: PrefixTraits + 'a, V> {
+pub struct Iter<'a, P: Partial + 'a, V> {
     inner: Box<dyn Iterator<Item = (Vec<u8>, &'a V)> + 'a>,
     _marker: std::marker::PhantomData<P>,
 }
 
-struct IterInner<'a, P: PrefixTraits + 'a, V> {
+struct IterInner<'a, P: Partial + 'a, V> {
     node_iter_stack: Vec<Box<NodeIterator<'a, P, V>>>,
 
     // Pushed and popped with prefix portions as we descend the tree,
@@ -17,7 +17,7 @@ struct IterInner<'a, P: PrefixTraits + 'a, V> {
     cur_prefix_length: usize,
 }
 
-impl<'a, P: PrefixTraits + 'a, V> IterInner<'a, P, V> {
+impl<'a, P: Partial + 'a, V> IterInner<'a, P, V> {
     pub fn new(node: &'a Node<P, V>) -> Self {
         let node_iter_stack = vec![node.iter()];
 
@@ -29,7 +29,7 @@ impl<'a, P: PrefixTraits + 'a, V> IterInner<'a, P, V> {
     }
 }
 
-impl<'a, P: PrefixTraits + 'a, V> Iter<'a, P, V> {
+impl<'a, P: Partial + 'a, V> Iter<'a, P, V> {
     pub(crate) fn new(node: Option<&'a Node<P, V>>) -> Self {
         if node.is_none() {
             return Self {
@@ -45,7 +45,7 @@ impl<'a, P: PrefixTraits + 'a, V> Iter<'a, P, V> {
     }
 }
 
-impl<'a, P: PrefixTraits + 'a, V> Iterator for Iter<'a, P, V> {
+impl<'a, P: Partial + 'a, V> Iterator for Iter<'a, P, V> {
     type Item = (Vec<u8>, &'a V);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -53,7 +53,7 @@ impl<'a, P: PrefixTraits + 'a, V> Iterator for Iter<'a, P, V> {
     }
 }
 
-impl<'a, P: PrefixTraits + 'a, V> Iterator for IterInner<'a, P, V> {
+impl<'a, P: Partial + 'a, V> Iterator for IterInner<'a, P, V> {
     type Item = (Vec<u8>, &'a V);
 
     fn next(&mut self) -> Option<Self::Item> {

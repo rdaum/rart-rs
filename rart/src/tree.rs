@@ -26,23 +26,24 @@ pub struct TreeStats {
     pub max_height: usize,
 }
 
-pub trait PrefixTraits: Partial + Clone + PartialEq + Debug + for<'a> From<&'a [u8]> {}
-impl<T: Partial + Clone + PartialEq + Debug + for<'a> From<&'a [u8]>> PrefixTraits for T {}
-
-pub struct AdaptiveRadixTree<P, V>
+pub struct AdaptiveRadixTree<KeyType, ValueType>
 where
-    P: PrefixTraits,
+    KeyType: KeyTrait,
 {
-    root: Option<Node<P, V>>,
+    root: Option<Node<KeyType::PartialType, ValueType>>,
+    _phantom: std::marker::PhantomData<KeyType>,
 }
 
-impl<P: PrefixTraits, V> Default for AdaptiveRadixTree<P, V> {
+impl<KeyType: KeyTrait, ValueType> Default for AdaptiveRadixTree<KeyType, ValueType> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-fn update_tree_stats<P: Partial + Clone, V>(tree_stats: &mut TreeStats, node: &Node<P, V>) {
+fn update_tree_stats<PartialType: Partial, ValueType>(
+    tree_stats: &mut TreeStats,
+    node: &Node<PartialType, ValueType>,
+) {
     tree_stats
         .node_stats
         .entry(node.capacity())
@@ -58,24 +59,34 @@ fn update_tree_stats<P: Partial + Clone, V>(tree_stats: &mut TreeStats, node: &N
         });
 }
 
-impl<P, V> AdaptiveRadixTree<P, V>
+impl<KeyType, ValueType> AdaptiveRadixTree<KeyType, ValueType>
 where
-    P: PrefixTraits,
+    KeyType: KeyTrait,
 {
     pub fn new() -> Self {
-        Self { root: None }
+        Self {
+            root: None,
+            _phantom: Default::default(),
+        }
     }
 
-    pub fn get<K>(&self, key: &K) -> Option<&V>
+    #[inline]
+    pub fn get<Key>(&self, key: Key) -> Option<&ValueType>
     where
-        K: KeyTrait<P>,
+        Key: Into<KeyType>,
     {
+        self.get_k(&key.into())
+    }
+
+    #[inline]
+    pub fn get_k(&self, key: &KeyType) -> Option<&ValueType> {
         AdaptiveRadixTree::get_iterate(self.root.as_ref()?, key)
     }
-    fn get_iterate<'a, K>(cur_node: &'a Node<P, V>, key: &K) -> Option<&'a V>
-    where
-        K: KeyTrait<P>,
-    {
+
+    fn get_iterate<'a>(
+        cur_node: &'a Node<KeyType::PartialType, ValueType>,
+        key: &KeyType,
+    ) -> Option<&'a ValueType> {
         let mut cur_node = cur_node;
         let mut depth = 0;
         loop {
@@ -93,16 +104,23 @@ where
         }
     }
 
-    pub fn get_mut<K>(&mut self, key: &K) -> Option<&mut V>
-    where
-        K: KeyTrait<P>,
+    #[inline]
+    pub fn get_mut<Key>(&mut self, key: Key) -> Option<&mut ValueType>
+        where
+            Key: Into<KeyType>,
     {
+        self.get_mut_k(&key.into())
+    }
+
+    #[inline]
+    pub fn get_mut_k(&mut self, key: &KeyType) -> Option<&mut ValueType> {
         AdaptiveRadixTree::get_iterate_mut(self.root.as_mut()?, key)
     }
-    fn get_iterate_mut<'a, K>(cur_node: &'a mut Node<P, V>, key: &K) -> Option<&'a mut V>
-    where
-        K: KeyTrait<P>,
-    {
+
+    fn get_iterate_mut<'a>(
+        cur_node: &'a mut Node<KeyType::PartialType, ValueType>,
+        key: &KeyType,
+    ) -> Option<&'a mut ValueType> {
         let mut cur_node = cur_node;
         let mut depth = 0;
         loop {
@@ -121,13 +139,13 @@ where
         }
     }
 
-    pub fn iter(&self) -> Iter<P, V> {
+    pub fn iter(&self) -> Iter<KeyType::PartialType, ValueType> {
         Iter::new(self.root.as_ref())
     }
 
-    pub fn range<'a, K: KeyTrait<P>, R>(&'a self, range: R) -> Range<K, P, V>
+    pub fn range<'a, R>(&'a self, range: R) -> Range<KeyType, ValueType>
     where
-        R: RangeBounds<K> + 'a,
+        R: RangeBounds<KeyType> + 'a,
     {
         if self.root.is_none() {
             return Range::empty();
@@ -156,9 +174,16 @@ where
         Range::empty()
     }
 
-    pub fn insert<K: KeyTrait<P>>(&mut self, key: &K, value: V) -> Option<V> {
+    pub fn insert<KV>(&mut self, key: KV, value: ValueType) -> Option<ValueType>
+    where
+        KV: Into<KeyType>,
+    {
+        self.insert_k(&key.into(), value)
+    }
+
+    pub fn insert_k(&mut self, key: &KeyType, value: ValueType) -> Option<ValueType> {
         if self.root.is_none() {
-            self.root = Some(Node::new_leaf(key.to_prefix(0), value));
+            self.root = Some(Node::new_leaf(key.to_partial(0), value));
             return None;
         };
 
@@ -167,12 +192,12 @@ where
         AdaptiveRadixTree::insert_recurse(root, key, value, 0)
     }
 
-    fn insert_recurse<K: KeyTrait<P>>(
-        cur_node: &mut Node<P, V>,
-        key: &K,
-        value: V,
+    fn insert_recurse(
+        cur_node: &mut Node<KeyType::PartialType, ValueType>,
+        key: &KeyType,
+        value: ValueType,
         depth: usize,
-    ) -> Option<V> {
+    ) -> Option<ValueType> {
         let longest_common_prefix = cur_node.prefix.prefix_length_key(key, depth);
 
         let is_prefix_match =
@@ -205,7 +230,7 @@ where
 
             // We've deferred creating the leaf til now so that we can take ownership over the
             // key after other things are done peering at it.
-            let new_leaf = Node::new_leaf(key.to_prefix(depth + longest_common_prefix), value);
+            let new_leaf = Node::new_leaf(key.to_partial(depth + longest_common_prefix), value);
 
             // Add the old leaf node as a child of the new inner node.
             cur_node.add_child(k1, replacement_current);
@@ -230,12 +255,19 @@ where
 
         // We should not be a leaf at this point. If so, something bad has happened.
         assert!(cur_node.is_inner());
-        let new_leaf = Node::new_leaf(key.to_prefix(depth + longest_common_prefix), value);
+        let new_leaf = Node::new_leaf(key.to_partial(depth + longest_common_prefix), value);
         cur_node.add_child(k, new_leaf);
         None
     }
 
-    pub fn remove<K: KeyTrait<P>>(&mut self, key: &K) -> Option<V> {
+    pub fn remove<KV>(&mut self, key: KV) -> Option<ValueType>
+    where
+        KV: Into<KeyType>,
+    {
+        self.remove_k(&key.into())
+    }
+
+    pub fn remove_k(&mut self, key: &KeyType) -> Option<ValueType> {
         let Some(root) = self.root.as_mut() else {
             return None;
         };
@@ -266,11 +298,11 @@ where
         result
     }
 
-    fn remove_recurse<K: KeyTrait<P>>(
-        parent_node: &mut Node<P, V>,
-        key: &K,
+    fn remove_recurse(
+        parent_node: &mut Node<KeyType::PartialType, ValueType>,
+        key: &KeyType,
         depth: usize,
-    ) -> Option<V> {
+    ) -> Option<ValueType> {
         // Seek the child that matches the key at this depth, which is the first character at the
         // depth we're at.
         let c = key.at(depth);
@@ -287,7 +319,7 @@ where
             if child_node.prefix.len() != (key.length_at(depth)) {
                 return None;
             }
-            let node = parent_node.delete_child(c).expect("child not found");
+            let node = parent_node.delete_child(c).unwrap();
             let v = match node.ntype {
                 NodeType::Leaf(v) => v,
                 _ => unreachable!(),
@@ -302,8 +334,7 @@ where
         if result.is_some() && child_node.is_inner() && child_node.num_children() == 0 {
             let prefix = child_node.prefix.clone();
             let deleted = parent_node
-                .delete_child(c)
-                .expect("expected empty inner node to be deleted");
+                .delete_child(c).unwrap();
             assert_eq!(prefix.to_slice(), deleted.prefix.to_slice());
         }
 
@@ -325,7 +356,11 @@ where
             return stats;
         }
 
-        AdaptiveRadixTree::get_tree_stats_recurse(self.root.as_ref().unwrap(), &mut stats, 1);
+        AdaptiveRadixTree::<KeyType, ValueType>::get_tree_stats_recurse(
+            self.root.as_ref().unwrap(),
+            &mut stats,
+            1,
+        );
 
         let total_inner_nodes = stats
             .node_stats
@@ -346,7 +381,11 @@ where
         stats
     }
 
-    fn get_tree_stats_recurse(node: &Node<P, V>, tree_stats: &mut TreeStats, height: usize) {
+    fn get_tree_stats_recurse(
+        node: &Node<KeyType::PartialType, ValueType>,
+        tree_stats: &mut TreeStats,
+        height: usize,
+    ) {
         if height > tree_stats.max_height {
             tree_stats.max_height = height;
         }
@@ -362,7 +401,11 @@ where
             }
         }
         for (_k, child) in node.iter() {
-            AdaptiveRadixTree::get_tree_stats_recurse(child, tree_stats, height + 1);
+            AdaptiveRadixTree::<KeyType, ValueType>::get_tree_stats_recurse(
+                child,
+                tree_stats,
+                height + 1,
+            );
         }
     }
 }
@@ -377,52 +420,51 @@ mod tests {
 
     use crate::keys::array_key::ArrayKey;
     use crate::keys::KeyTrait;
-    use crate::partials::array_partial::ArrPartial;
     use crate::tree;
-    use crate::tree::{AdaptiveRadixTree, PrefixTraits};
+    use crate::tree::AdaptiveRadixTree;
 
     #[test]
     fn test_root_set_get() {
-        let mut q = AdaptiveRadixTree::<ArrPartial<16>, i32>::new();
+        let mut q = AdaptiveRadixTree::<ArrayKey<16>, i32>::new();
         let key = ArrayKey::new_from_str("abc");
-        assert!(q.insert(&key, 1).is_none());
-        assert_eq!(q.get(&key), Some(&1));
+        assert!(q.insert("abc", 1).is_none());
+        assert_eq!(q.get_k(&key), Some(&1));
     }
 
     #[test]
     fn test_string_keys_get_set() {
-        let mut q = AdaptiveRadixTree::<ArrPartial<16>, i32>::new();
-        q.insert(&ArrayKey::new_from_str("abcd"), 1);
-        q.insert(&ArrayKey::new_from_str("abc"), 2);
-        q.insert(&ArrayKey::new_from_str("abcde"), 3);
-        q.insert(&ArrayKey::new_from_str("xyz"), 4);
-        q.insert(&ArrayKey::new_from_str("xyz"), 5);
-        q.insert(&ArrayKey::new_from_str("axyz"), 6);
-        q.insert(&ArrayKey::new_from_str("1245zzz"), 6);
+        let mut q = AdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+        q.insert("abcd", 1);
+        q.insert("abc", 2);
+        q.insert("abcde", 3);
+        q.insert("xyz", 4);
+        q.insert("xyz", 5);
+        q.insert("axyz", 6);
+        q.insert("1245zzz", 6);
 
-        assert_eq!(*q.get(&ArrayKey::new_from_str("abcd")).unwrap(), 1);
-        assert_eq!(*q.get(&ArrayKey::new_from_str("abc")).unwrap(), 2);
-        assert_eq!(*q.get(&ArrayKey::new_from_str("abcde")).unwrap(), 3);
-        assert_eq!(*q.get(&ArrayKey::new_from_str("axyz")).unwrap(), 6);
-        assert_eq!(*q.get(&ArrayKey::new_from_str("xyz")).unwrap(), 5);
+        assert_eq!(*q.get("abcd").unwrap(), 1);
+        assert_eq!(*q.get("abc").unwrap(), 2);
+        assert_eq!(*q.get("abcde").unwrap(), 3);
+        assert_eq!(*q.get("axyz").unwrap(), 6);
+        assert_eq!(*q.get("xyz").unwrap(), 5);
 
-        assert_eq!(q.remove(&ArrayKey::new_from_str("abcde")), Some(3));
-        assert_eq!(q.get(&ArrayKey::new_from_str("abcde")), None);
-        assert_eq!(*q.get(&ArrayKey::new_from_str("abc")).unwrap(), 2);
-        assert_eq!(*q.get(&ArrayKey::new_from_str("axyz")).unwrap(), 6);
-        assert_eq!(q.remove(&ArrayKey::new_from_str("abc")), Some(2));
-        assert_eq!(q.get(&ArrayKey::new_from_str("abc")), None);
+        assert_eq!(q.remove("abcde"), Some(3));
+        assert_eq!(q.get("abcde"), None);
+        assert_eq!(*q.get("abc").unwrap(), 2);
+        assert_eq!(*q.get("axyz").unwrap(), 6);
+        assert_eq!(q.remove("abc"), Some(2));
+        assert_eq!(q.get("abc"), None);
     }
 
     #[test]
     fn test_int_keys_get_set() {
-        let mut q = AdaptiveRadixTree::<ArrPartial<16>, i32>::new();
-        q.insert::<ArrayKey<16>>(&500i32.into(), 3);
-        assert_eq!(q.get::<ArrayKey<16>>(&500i32.into()), Some(&3));
-        q.insert::<ArrayKey<16>>(&666i32.into(), 2);
-        assert_eq!(q.get::<ArrayKey<16>>(&666i32.into()), Some(&2));
-        q.insert::<ArrayKey<16>>(&1i32.into(), 1);
-        assert_eq!(q.get::<ArrayKey<16>>(&1i32.into()), Some(&1));
+        let mut q = AdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+        q.insert_k(&500i32.into(), 3);
+        assert_eq!(q.get_k(&500i32.into()), Some(&3));
+        q.insert_k(&666i32.into(), 2);
+        assert_eq!(q.get_k(&666i32.into()), Some(&2));
+        q.insert_k(&1i32.into(), 1);
+        assert_eq!(q.get_k(&1i32.into()), Some(&1));
     }
 
     fn gen_random_string_keys<const S: usize>(
@@ -454,19 +496,19 @@ mod tests {
 
     #[test]
     fn test_bulk_random_string_query() {
-        let mut tree = AdaptiveRadixTree::<ArrPartial<16>, String>::new();
+        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, String>::new();
         let keys = gen_random_string_keys(3, 2, 3);
         let mut num_inserted = 0;
         for (_i, key) in keys.iter().enumerate() {
-            if tree.insert(&key.0, key.1.clone()).is_none() {
+            if tree.insert_k(&key.0, key.1.clone()).is_none() {
                 num_inserted += 1;
-                assert!(tree.get(&key.0).is_some());
+                assert!(tree.get_k(&key.0).is_some());
             }
         }
         let mut rng = thread_rng();
         for _i in 0..5_000_000 {
             let entry = &keys[rng.gen_range(0..keys.len())];
-            let val = tree.get(&entry.0);
+            let val = tree.get_k(&entry.0);
             assert!(val.is_some());
             assert_eq!(*val.unwrap(), entry.1);
         }
@@ -478,16 +520,15 @@ mod tests {
 
     #[test]
     fn test_random_numeric_insert_get() {
-        let mut tree = AdaptiveRadixTree::<ArrPartial<16>, u64>::new();
-        let count = 100_000;
+        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, u64>::new();
+        let count = 9_000_000;
         let mut rng = thread_rng();
         let mut keys_inserted = vec![];
         for i in 0..count {
             let value = i;
             let rnd_key = rng.gen_range(0..count);
-            let rnd_key: ArrayKey<16> = rnd_key.into();
-            if tree.get(&rnd_key).is_none() && tree.insert(&rnd_key, value).is_none() {
-                let result = tree.get(&rnd_key);
+            if tree.get(rnd_key).is_none() && tree.insert(rnd_key, value).is_none() {
+                let result = tree.get(rnd_key);
                 assert!(result.is_some());
                 assert_eq!(*result.unwrap(), value);
                 keys_inserted.push((rnd_key, value));
@@ -519,7 +560,7 @@ mod tests {
 
     #[test]
     fn test_iter() {
-        let mut tree = AdaptiveRadixTree::<ArrPartial<16>, u64>::new();
+        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, u64>::new();
         let count = 10000;
         let mut rng = thread_rng();
         let mut keys_inserted = BTreeSet::new();
@@ -527,8 +568,8 @@ mod tests {
             let _value = i;
             let rnd_val = rng.gen_range(0..count);
             let rnd_key: ArrayKey<16> = rnd_val.into();
-            if tree.get(&rnd_key).is_none() && tree.insert(&rnd_key, rnd_val).is_none() {
-                let result = tree.get(&rnd_key);
+            if tree.get_k(&rnd_key).is_none() && tree.insert_k(&rnd_key, rnd_val).is_none() {
+                let result = tree.get_k(&rnd_key);
                 assert!(result.is_some());
                 assert_eq!(*result.unwrap(), rnd_val);
                 keys_inserted.insert((rnd_val, rnd_val));
@@ -561,29 +602,39 @@ mod tests {
         // DO_INSERT,12297829382473034287,72245244022401706
         // DO_INSERT,12297829382473034410,5425513372477729450
         // DO_DELETE,12297829382473056255,Some(5425513372477729450),None
-        let mut tree = AdaptiveRadixTree::<ArrPartial<16>, usize>::new();
-        assert!(tree.insert(&ArrayKey::new_from_unsigned(12297829382473034287usize), 72245244022401706usize).is_none());
-        assert!(tree.insert(&ArrayKey::new_from_unsigned(12297829382473034410usize), 5425513372477729450usize).is_none());
+        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, usize>::new();
+        assert!(tree
+            .insert(12297829382473034287usize, 72245244022401706usize)
+            .is_none());
+        assert!(tree
+            .insert(12297829382473034410usize, 5425513372477729450usize)
+            .is_none());
         // assert!(tree.remove(&ArrayKey::new_from_unsigned(12297829382473056255usize)).is_none());
 
-        let mut tree = AdaptiveRadixTree::<ArrPartial<16>, usize>::new();
+        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, usize>::new();
         // DO_INSERT,0,8101975729639522304
         // DO_INSERT,4934144,18374809624973934592
         // DO_DELETE,0,None,Some(8101975729639522304)
-        assert!(tree.insert(&ArrayKey::new_from_unsigned(0usize), 8101975729639522304usize).is_none());
-        assert!(tree.insert(&ArrayKey::new_from_unsigned(4934144usize), 18374809624973934592usize).is_none());
-        assert_eq!(tree.get(&ArrayKey::new_from_unsigned(0usize)), Some(&8101975729639522304usize));
-        assert_eq!(tree.remove(&ArrayKey::new_from_unsigned(0usize)), Some(8101975729639522304usize));
-        assert_eq!(tree.get(&ArrayKey::new_from_unsigned(4934144usize)), Some(&18374809624973934592usize));
+        assert!(tree.insert(0usize, 8101975729639522304usize).is_none());
+        assert!(tree
+            .insert(4934144usize, 18374809624973934592usize)
+            .is_none());
+        assert_eq!(tree.get(0usize), Some(&8101975729639522304usize));
+        assert_eq!(tree.remove(0usize), Some(8101975729639522304usize));
+        assert_eq!(tree.get(4934144usize), Some(&18374809624973934592usize));
 
         // DO_INSERT,8102098874941833216,8101975729639522416
         // DO_INSERT,8102099357864587376,18374810107896688752
         // DO_DELETE,0,Some(8101975729639522416),None
-        let mut tree = AdaptiveRadixTree::<ArrPartial<16>, usize>::new();
-        assert!(tree.insert(&ArrayKey::new_from_unsigned(8102098874941833216usize), 8101975729639522416usize).is_none());
-        assert!(tree.insert(&ArrayKey::new_from_unsigned(8102099357864587376usize), 18374810107896688752usize).is_none());
-        assert_eq!(tree.get(&ArrayKey::new_from_unsigned(0usize)), None);
-        assert_eq!(tree.remove(&ArrayKey::new_from_unsigned(0usize)), None);
+        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, usize>::new();
+        assert!(tree
+            .insert(8102098874941833216usize, 8101975729639522416usize)
+            .is_none());
+        assert!(tree
+            .insert(8102099357864587376usize, 18374810107896688752usize)
+            .is_none());
+        assert_eq!(tree.get(0usize), None);
+        assert_eq!(tree.remove(0usize), None);
     }
 
     #[test]
@@ -591,7 +642,7 @@ mod tests {
         // Insert a bunch of random keys and values into both a btree and our tree, then iterate
         // over the btree and delete the keys from our tree. Then, iterate over our tree and make
         // sure it's empty.
-        let mut tree = AdaptiveRadixTree::<ArrPartial<16>, u64>::new();
+        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, u64>::new();
         let mut btree = BTreeMap::new();
         let count = 5_000;
         let mut rng = thread_rng();
@@ -599,28 +650,28 @@ mod tests {
             let _value = i;
             let rnd_val = rng.gen_range(0..u64::MAX);
             let rnd_key: ArrayKey<16> = rnd_val.into();
-            tree.insert(&rnd_key, rnd_val);
+            tree.insert_k(&rnd_key, rnd_val);
             btree.insert(rnd_val, rnd_val);
         }
 
         for (key, value) in btree.iter() {
             let key: ArrayKey<16> = (*key).into();
-            let get_result = tree.get(&key);
+            let get_result = tree.get_k(&key);
             assert_eq!(
                 get_result.cloned(),
                 Some(*value),
                 "Key with prefix {:?} not found in tree; it should be",
-                key.to_prefix(0).to_slice()
+                key.to_partial(0).to_slice()
             );
-            let result = tree.remove(&key);
+            let result = tree.remove_k(&key);
             assert_eq!(result, Some(*value));
         }
     }
     // Compare the results of a range query on an AdaptiveRadixTree and a BTreeMap, because we can
     // safely assume the latter exhibits correct behavior.
-    fn test_range_matches<'a, K: KeyTrait<P>, P: PrefixTraits, V: PartialEq + Debug + 'a>(
-        art_range: tree::Range<'a, K, P, V>,
-        btree_range: btree_map::Range<'a, u64, V>,
+    fn test_range_matches<'a, KeyType: KeyTrait, ValueType: PartialEq + Debug + 'a>(
+        art_range: tree::Range<'a, KeyType, ValueType>,
+        btree_range: btree_map::Range<'a, u64, ValueType>,
     ) {
         for (art_entry, btree_entry) in art_range.zip(btree_range) {
             let art_key = from_be_bytes_key(&art_entry.0);
@@ -631,7 +682,7 @@ mod tests {
 
     #[test]
     fn test_range() {
-        let mut tree = AdaptiveRadixTree::<ArrPartial<16>, u64>::new();
+        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, u64>::new();
         let count = 10000;
         let mut rng = thread_rng();
         let mut keys_inserted = BTreeMap::new();
@@ -639,8 +690,8 @@ mod tests {
             let _value = i;
             let rnd_val = rng.gen_range(0..count);
             let rnd_key: ArrayKey<16> = rnd_val.into();
-            if tree.get(&rnd_key).is_none() && tree.insert(&rnd_key, rnd_val).is_none() {
-                let result = tree.get(&rnd_key);
+            if tree.get_k(&rnd_key).is_none() && tree.insert_k(&rnd_key, rnd_val).is_none() {
+                let result = tree.get_k(&rnd_key);
                 assert!(result.is_some());
                 assert_eq!(*result.unwrap(), rnd_val);
                 keys_inserted.insert(rnd_val, rnd_val);

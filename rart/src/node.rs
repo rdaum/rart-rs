@@ -5,12 +5,12 @@ use crate::mapping::NodeMapping;
 use crate::partials::Partial;
 use crate::utils::bitset::{Bitset16, Bitset64, Bitset8};
 
-pub(crate) struct Node<P: Partial + Clone, V> {
+pub(crate) struct Node<P: Partial, V> {
     pub(crate) prefix: P,
     pub(crate) ntype: NodeType<P, V>,
 }
 
-pub(crate) enum NodeType<P: Partial + Clone, V> {
+pub(crate) enum NodeType<P: Partial, V> {
     Leaf(V),
     Node4(KeyedMapping<Node<P, V>, 4, Bitset8<1>>),
     Node16(KeyedMapping<Node<P, V>, 16, Bitset16<1>>),
@@ -18,11 +18,11 @@ pub(crate) enum NodeType<P: Partial + Clone, V> {
     Node256(DirectMapping<Node<P, V>>),
 }
 
-impl<P: Partial + Clone, V> Node<P, V> {
+impl<P: Partial, V> Node<P, V> {
     #[inline]
-    pub(crate) fn new_leaf(key: P, value: V) -> Node<P, V> {
+    pub(crate) fn new_leaf(partial: P, value: V) -> Node<P, V> {
         Self {
-            prefix: key,
+            prefix: partial,
             ntype: NodeType::Leaf(value),
         }
     }

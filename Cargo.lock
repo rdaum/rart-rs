@@ -128,7 +128,7 @@ dependencies = [
  "criterion-plot",
  "is-terminal",
  "itertools",
- "num-traits 0.2.15 (registry+https://github.com/rust-lang/crates.io-index)",
+ "num-traits",
  "once_cell",
  "oorandom",
  "plotters",
@@ -286,6 +286,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fed44880c466736ef9a5c5b5facefb5ed0785676d0c02d612db14e54f0d84286"
 
 [[package]]
+name = "iai-callgrind"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76579762a383d5da364779d780704f93898c620703c27087b766700a87e5a8c2"
+
+[[package]]
 name = "io-lifetimes"
 version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -395,14 +401,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "num-traits"
-version = "0.2.15"
-source = "git+https://github.com/rust-num/num-traits.git?rev=c696ef9e8b51a15fb47dbc9a0e1c783f9c615d8a#c696ef9e8b51a15fb47dbc9a0e1c783f9c615d8a"
-dependencies = [
- "autocfg",
-]
-
-[[package]]
 name = "num_cpus"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -436,7 +434,7 @@ version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2c224ba00d7cadd4d5c660deaf2098e5e80e07846537c51f9cfa4be50c1fd45"
 dependencies = [
- "num-traits 0.2.15 (registry+https://github.com/rust-lang/crates.io-index)",
+ "num-traits",
  "plotters-backend",
  "plotters-svg",
  "wasm-bindgen",
@@ -518,7 +516,9 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "csv",
- "num-traits 0.2.15 (git+https://github.com/rust-num/num-traits.git?rev=c696ef9e8b51a15fb47dbc9a0e1c783f9c615d8a)",
+ "iai-callgrind",
+ "num-traits",
+ "paste",
  "rand",
  "simdeez",
 ]

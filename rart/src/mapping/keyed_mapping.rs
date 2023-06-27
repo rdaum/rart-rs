@@ -110,19 +110,7 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> NodeMapping<N, WIDTH>
     #[inline]
     fn add_child(&mut self, key: u8, node: N) {
         // Find an empty position by looking into the bitset.
-        let idx = self.children.first_empty().unwrap_or_else(|| {
-            // Invariant violated - upstream code should have checked for this.
-            panic!(
-                "No space left in bit array in KeyedMapping of size {}; num children: {} \
-                 bitset used size: {}; capacity: {} storage size: {} bit width: {}",
-                WIDTH,
-                self.num_children,
-                self.children.size(),
-                self.children.bitset.capacity(),
-                self.children.bitset.storage_width(),
-                self.children.bitset.bit_width()
-            )
-        });
+        let idx = self.children.first_empty().unwrap();
         assert!(idx < WIDTH);
         self.keys[idx] = key;
         self.children.set(idx, node);
@@ -134,21 +122,18 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> NodeMapping<N, WIDTH>
     }
 
     fn seek_child(&self, key: u8) -> Option<&N> {
-        let idx =
-            u8_keys_find_key_position::<WIDTH, _>(key, &self.keys, &self.children.bitset)?;
+        let idx = u8_keys_find_key_position::<WIDTH, _>(key, &self.keys, &self.children.bitset)?;
         self.children.get(idx)
     }
 
     fn seek_child_mut(&mut self, key: u8) -> Option<&mut N> {
-        let idx =
-            u8_keys_find_key_position::<WIDTH, _>(key, &self.keys, &self.children.bitset)?;
+        let idx = u8_keys_find_key_position::<WIDTH, _>(key, &self.keys, &self.children.bitset)?;
         self.children.get_mut(idx)
     }
 
     fn delete_child(&mut self, key: u8) -> Option<N> {
         // Find position of the key
-        let idx =
-            u8_keys_find_key_position::<WIDTH, _>(key, &self.keys, &self.children.bitset)?;
+        let idx = u8_keys_find_key_position::<WIDTH, _>(key, &self.keys, &self.children.bitset)?;
         let result = self.children.erase(idx);
         if result.is_some() {
             self.keys[idx] = 255;

@@ -21,10 +21,9 @@ pub trait Partial {
     /// Returns the length of the common prefix between `self` and `other`.
     fn prefix_length_common(&self, other: &Self) -> usize;
     /// Returns the length of the common prefix between `self` and `key`.
-    fn prefix_length_key<'a, P, K>(&self, key: &'a K, at_depth: usize) -> usize
+    fn prefix_length_key<'a, K>(&self, key: &'a K, at_depth: usize) -> usize
     where
-        P: Partial,
-        K: KeyTrait<P> + 'a;
+        K: KeyTrait<PartialType = Self> + 'a;
     /// Returns the length of the common prefix between `self` and `slice`.
     fn prefix_length_slice(&self, slice: &[u8]) -> usize;
     /// Return a slice form of the partial. Warning: could take copy, depending on the implementation.

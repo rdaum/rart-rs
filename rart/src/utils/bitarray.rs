@@ -25,14 +25,14 @@ where
         }
     }
 
-    pub fn push(&mut self, x: X) -> usize {
-        let pos = self.bitset.first_empty().expect("BitArray is full");
+    pub fn push(&mut self, x: X) -> Option<usize> {
+        let pos = self.bitset.first_empty()?;
         assert!(pos < RANGE_WIDTH);
         self.bitset.set(pos);
         unsafe {
             self.storage[pos].as_mut_ptr().write(x);
         }
-        pos
+        Some(pos)
     }
 
     pub fn pop(&mut self) -> Option<X> {
@@ -223,13 +223,13 @@ mod test {
         let mut vec: BitArray<u8, 48, Bitset16<3>> = BitArray::new();
         assert_eq!(vec.first_empty(), Some(0));
         assert_eq!(vec.last_used_pos(), None);
-        assert_eq!(vec.push(123), 0);
+        assert_eq!(vec.push(123).unwrap(), 0);
         assert_eq!(vec.first_empty(), Some(1));
         assert_eq!(vec.last_used_pos(), Some(0));
         assert_eq!(vec.get(0), Some(&123));
-        assert_eq!(vec.push(124), 1);
-        assert_eq!(vec.push(55), 2);
-        assert_eq!(vec.push(126), 3);
+        assert_eq!(vec.push(124).unwrap(), 1);
+        assert_eq!(vec.push(55).unwrap(), 2);
+        assert_eq!(vec.push(126).unwrap(), 3);
         assert_eq!(vec.pop(), Some(126));
         assert_eq!(vec.first_empty(), Some(3));
         vec.erase(0);

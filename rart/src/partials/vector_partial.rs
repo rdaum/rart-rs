@@ -1,5 +1,6 @@
 use std::cmp::min;
 
+use crate::keys::vector_key::VectorKey;
 use crate::keys::KeyTrait;
 use crate::partials::Partial;
 
@@ -13,11 +14,15 @@ impl VectorPartial {
         let mut data = Vec::with_capacity(src.len() + 1);
         data.extend_from_slice(src);
         data.push(0);
-        Self { data: data.into_boxed_slice() }
+        Self {
+            data: data.into_boxed_slice(),
+        }
     }
 
     pub fn from_slice(src: &[u8]) -> Self {
-        Self { data: Box::from(src) }
+        Self {
+            data: Box::from(src),
+        }
     }
 
     pub fn to_slice(&self) -> &[u8] {
@@ -62,11 +67,10 @@ impl Partial for VectorPartial {
         self.prefix_length_slice(other.to_slice())
     }
 
-    fn prefix_length_key<'a, P: Partial, K: KeyTrait<P> + 'a>(
-        &self,
-        key: &'a K,
-        at_depth: usize,
-    ) -> usize {
+    fn prefix_length_key<'a, K>(&self, key: &'a K, at_depth: usize) -> usize
+    where
+        K: KeyTrait<PartialType = Self> + 'a,
+    {
         let len = min(self.data.len(), key.length_at(0));
         let mut idx = 0;
         while idx < len {
@@ -92,5 +96,11 @@ impl Partial for VectorPartial {
 
     fn to_slice(&self) -> &[u8] {
         &self.data[..self.data.len()]
+    }
+}
+
+impl From<VectorKey> for VectorPartial {
+    fn from(value: VectorKey) -> Self {
+        value.to_partial(0)
     }
 }
