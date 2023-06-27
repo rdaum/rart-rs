@@ -1,7 +1,5 @@
 use std::mem;
 
-use num_traits::{ToBytes, Unsigned};
-
 use crate::keys::KeyTrait;
 use crate::partials::array_partial::ArrPartial;
 
@@ -20,10 +18,6 @@ impl<const N: usize> ArrayKey<N> {
             data: arr,
             len: data.len(),
         }
-    }
-
-    pub fn new_from_unsigned<T: Unsigned + ToBytes>(un: T) -> Self {
-        Self::new_from_slice(un.to_be_bytes().as_ref())
     }
 
     pub fn new_from_str(s: &str) -> Self {
@@ -51,7 +45,10 @@ impl<const N: usize> ArrayKey<N> {
     }
 }
 
-impl<const N: usize> KeyTrait<ArrPartial<N>> for ArrayKey<N> {
+impl<const N: usize> KeyTrait for ArrayKey<N> {
+    type PartialType = ArrPartial<N>;
+    const MAXIMUM_SIZE: Option<usize> = Some(N);
+
     #[inline(always)]
     fn at(&self, pos: usize) -> u8 {
         self.data[pos]
@@ -60,54 +57,12 @@ impl<const N: usize> KeyTrait<ArrPartial<N>> for ArrayKey<N> {
     fn length_at(&self, at_depth: usize) -> usize {
         self.len - at_depth
     }
-    fn to_prefix(&self, at_depth: usize) -> ArrPartial<N> {
+    fn to_partial(&self, at_depth: usize) -> ArrPartial<N> {
         ArrPartial::from_slice(&self.data[at_depth..self.len])
     }
     #[inline(always)]
     fn matches_slice(&self, slice: &[u8]) -> bool {
         &self.data[..self.len] == slice
-    }
-}
-
-impl<const N: usize> From<u8> for ArrayKey<N> {
-    fn from(data: u8) -> Self {
-        Self::new_from_unsigned(data)
-    }
-}
-
-impl<const N: usize> From<u16> for ArrayKey<N> {
-    fn from(data: u16) -> Self {
-        Self::new_from_unsigned(data)
-    }
-}
-
-impl<const N: usize> From<u32> for ArrayKey<N> {
-    fn from(data: u32) -> Self {
-        Self::new_from_unsigned(data)
-    }
-}
-
-impl<const N: usize> From<u64> for ArrayKey<N> {
-    fn from(data: u64) -> Self {
-        Self::new_from_unsigned(data)
-    }
-}
-
-impl<const N: usize> From<u128> for ArrayKey<N> {
-    fn from(data: u128) -> Self {
-        Self::new_from_unsigned(data)
-    }
-}
-
-impl<const N: usize> From<usize> for ArrayKey<N> {
-    fn from(data: usize) -> Self {
-        Self::new_from_unsigned(data)
-    }
-}
-
-impl<const N: usize> From<&str> for ArrayKey<N> {
-    fn from(data: &str) -> Self {
-        Self::new_from_str(data)
     }
 }
 
@@ -121,60 +76,64 @@ impl<const N: usize> From<&String> for ArrayKey<N> {
         Self::new_from_string(data)
     }
 }
+impl<const N: usize> From<&str> for ArrayKey<N> {
+    fn from(data: &str) -> Self {
+        Self::new_from_str(data)
+    }
+}
+macro_rules! impl_from_unsigned {
+    ( $($t:ty),* ) => {
+    $(
+    impl<const N: usize> From< $t > for ArrayKey<N>
+    {
+        fn from(data: $t) -> Self {
+            Self::new_from_slice(data.to_be_bytes().as_ref())
+        }
+    }
+    impl<const N: usize> From< &$t > for ArrayKey<N>
+    {
+        fn from(data: &$t) -> Self {
+            Self::new_from_slice(data.to_be_bytes().as_ref())
+        }
+    }
+    ) *
+    }
+}
+impl_from_unsigned!(u8, u16, u32, u64, usize, u128);
 
 impl<const N: usize> From<i8> for ArrayKey<N> {
     fn from(val: i8) -> Self {
         let v: u8 = unsafe { mem::transmute(val) };
         let i = (v ^ 0x80) & 0x80;
         let j = i | (v & 0x7F);
-        ArrayKey::new_from_unsigned(j)
+        let mut data = [0; N];
+        data[0] = j;
+        Self { data, len: 1 }
     }
 }
 
-impl<const N: usize> From<i16> for ArrayKey<N> {
-    fn from(val: i16) -> Self {
-        let v: u16 = unsafe { mem::transmute(val) };
-        let xor = 1 << 15;
-        let i = (v ^ xor) & xor;
-        let j = i | (v & (u16::MAX >> 1));
-        ArrayKey::new_from_unsigned(j)
-    }
+macro_rules! impl_from_signed {
+    ( $t:ty, $tu:ty ) => {
+        impl<const N: usize> From<$t> for ArrayKey<N> {
+            fn from(val: $t) -> Self {
+                let v: $tu = unsafe { mem::transmute(val) };
+                let xor = 1 << (std::mem::size_of::<$tu>() - 1);
+                let i = (v ^ xor) & xor;
+                let j = i | (v & (<$tu>::MAX >> 1));
+                ArrayKey::new_from_slice(j.to_be_bytes().as_ref())
+            }
+        }
+
+        impl<const N: usize> From<&$t> for ArrayKey<N> {
+            fn from(val: &$t) -> Self {
+                (*val).into()
+            }
+        }
+    };
 }
 
-impl<const N: usize> From<i32> for ArrayKey<N> {
-    fn from(val: i32) -> Self {
-        let v: u32 = unsafe { mem::transmute(val) };
-        let xor = 1 << 31;
-        let i = (v ^ xor) & xor;
-        let j = i | (v & (u32::MAX >> 1));
-        ArrayKey::new_from_unsigned(j)
-    }
-}
-impl<const N: usize> From<i64> for ArrayKey<N> {
-    fn from(val: i64) -> Self {
-        let v: u64 = unsafe { mem::transmute(val) };
-        let xor = 1 << 63;
-        let i = (v ^ xor) & xor;
-        let j = i | (v & (u64::MAX >> 1));
-        ArrayKey::new_from_unsigned(j)
-    }
-}
-impl<const N: usize> From<i128> for ArrayKey<N> {
-    fn from(val: i128) -> Self {
-        let v: u128 = unsafe { mem::transmute(val) };
-        let xor = 1 << 127;
-        let i = (v ^ xor) & xor;
-        let j = i | (v & (u128::MAX >> 1));
-        ArrayKey::new_from_unsigned(j)
-    }
-}
-
-impl<const N: usize> From<isize> for ArrayKey<N> {
-    fn from(val: isize) -> Self {
-        let v: usize = unsafe { mem::transmute(val) };
-        let xor = 1 << 63;
-        let i = (v ^ xor) & xor;
-        let j = i | (v & (usize::MAX >> 1));
-        ArrayKey::new_from_unsigned(j)
-    }
-}
+impl_from_signed!(i16, u16);
+impl_from_signed!(i32, u32);
+impl_from_signed!(i64, u64);
+impl_from_signed!(i128, u128);
+impl_from_signed!(isize, usize);

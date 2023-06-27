@@ -48,7 +48,6 @@ fn binary_find_key(key: u8, keys: &[u8], num_children: usize) -> Option<usize> {
     None
 }
 
-#[allow(unreachable_code)]
 pub fn u8_keys_find_key_position_sorted<const WIDTH: usize>(
     key: u8,
     keys: &[u8],
@@ -61,7 +60,7 @@ pub fn u8_keys_find_key_position_sorted<const WIDTH: usize>(
 
     #[cfg(feature = "simd_keys")]
     if WIDTH >= 16 {
-        return simd_keys::simdeez_find_key(key, keys.try_into().unwrap(), (1 << num_children) - 1);
+        return simd_keys::simdeez_find_key(key, keys, (1 << num_children) - 1);
     }
 
     // Fallback to binary search.
@@ -75,11 +74,7 @@ pub fn u8_keys_find_insert_position_sorted<const WIDTH: usize>(
 ) -> Option<usize> {
     #[cfg(feature = "simd_keys")]
     if WIDTH >= 16 {
-        return simd_keys::simdeez_find_insert_pos(
-            key,
-            keys.try_into().unwrap(),
-            (1 << num_children) - 1,
-        );
+        return simd_keys::simdeez_find_insert_pos(key, keys, (1 << num_children) - 1);
     }
 
     // Fallback: use linear search to find the insertion point.
@@ -89,7 +84,6 @@ pub fn u8_keys_find_insert_position_sorted<const WIDTH: usize>(
         .or(Some(num_children))
 }
 
-#[allow(unreachable_code)]
 pub fn u8_keys_find_key_position<const WIDTH: usize, Bitset: BitsetTrait>(
     key: u8,
     keys: &[u8],
@@ -103,7 +97,7 @@ pub fn u8_keys_find_key_position<const WIDTH: usize, Bitset: BitsetTrait>(
         if key == 255 {
             mask &= children_bitmask.as_bitmask() as u32;
         }
-        return simd_keys::simdeez_find_key(key, keys.try_into().unwrap(), mask);
+        return simd_keys::simdeez_find_key(key, keys, mask);
     }
 
     // Fallback to linear search for anything else (which is just WIDTH == 4, or if we have no

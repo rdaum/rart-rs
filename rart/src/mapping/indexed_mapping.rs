@@ -91,7 +91,7 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> NodeMapping<N, WIDTH>
         let pos = self
             .children
             .first_empty()
-            .expect("No empty slots in IndexedMapping; full");
+            .unwrap();
         self.child_ptr_indexes.set(key as usize, pos as u8);
         self.children.set(pos, node);
         self.num_children += 1;

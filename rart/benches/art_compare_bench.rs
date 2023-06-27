@@ -9,19 +9,19 @@ use rand::prelude::SliceRandom;
 use rand::{thread_rng, Rng};
 
 use rart::keys::array_key::ArrayKey;
-use rart::partials::array_partial::ArrPartial;
+
 use rart::tree::AdaptiveRadixTree;
 
-const SIZES: [u64; 4] = [1 << 15, 1 << 20, 1 << 22, 1 << 24];
+const TREE_SIZES: [u64; 4] = [1 << 15, 1 << 20, 1 << 22, 1 << 24];
 
 pub fn seq_insert(c: &mut Criterion) {
     let mut group = c.benchmark_group("seq_insert");
     group.throughput(Throughput::Elements(1));
     group.bench_function("seq_insert", |b| {
-        let mut tree = AdaptiveRadixTree::<ArrPartial<16>, _>::new();
+        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, _>::new();
         let mut key = 0u64;
         b.iter(|| {
-            tree.insert::<ArrayKey<16>>(&key.into(), key);
+            tree.insert(key, key);
             key += 1;
         })
     });
@@ -57,20 +57,20 @@ pub fn rand_insert(c: &mut Criterion) {
     let cached_keys = gen_cached_keys(3, 2, 3);
 
     group.bench_function("art_cached_keys", |b| {
-        let mut tree = AdaptiveRadixTree::<ArrPartial<16>, _>::new();
+        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, _>::new();
         let mut rng = thread_rng();
         b.iter(|| {
             let key = &cached_keys[rng.gen_range(0..cached_keys.len())];
-            tree.insert(&key.0, key.1.clone());
+            tree.insert_k(&key.0, key.1.clone());
         })
     });
 
     group.bench_function("art", |b| {
-        let mut tree = AdaptiveRadixTree::<ArrPartial<16>, _>::new();
+        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, _>::new();
         let mut rng = thread_rng();
         b.iter(|| {
             let key = &keys[rng.gen_range(0..keys.len())];
-            tree.insert::<ArrayKey<16>>(&key.into(), key.clone());
+            tree.insert(key, key.clone());
         })
     });
 
@@ -98,14 +98,14 @@ pub fn seq_delete(c: &mut Criterion) {
     let mut group = c.benchmark_group("seq_delete");
     group.throughput(Throughput::Elements(1));
     group.bench_function("art", |b| {
-        let mut tree = AdaptiveRadixTree::<ArrPartial<16>, _>::new();
+        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, _>::new();
         b.iter_custom(|iters| {
             for i in 0..iters {
-                tree.insert::<ArrayKey<16>>(&i.into(), i);
+                tree.insert(i, i);
             }
             let start = Instant::now();
             for i in 0..iters {
-                tree.remove::<ArrayKey<16>>(&i.into());
+                tree.remove(i);
             }
             start.elapsed()
         })
@@ -149,26 +149,26 @@ pub fn rand_delete(c: &mut Criterion) {
 
     group.throughput(Throughput::Elements(1));
     group.bench_function("art", |b| {
-        let mut tree = AdaptiveRadixTree::<ArrPartial<16>, _>::new();
+        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, _>::new();
         let mut rng = thread_rng();
         for key in &keys {
-            tree.insert::<ArrayKey<16>>(&key.into(), key);
+            tree.insert(key, key);
         }
         b.iter(|| {
             let key = &keys[rng.gen_range(0..keys.len())];
-            criterion::black_box(tree.remove::<ArrayKey<16>>(&key.into()));
+            criterion::black_box(tree.remove(key));
         })
     });
 
     group.bench_function("art_cached_keys", |b| {
-        let mut tree = AdaptiveRadixTree::<ArrPartial<16>, _>::new();
+        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, _>::new();
         let mut rng = thread_rng();
         for key in &cached_keys {
-            tree.insert(&key.0, key.1.clone());
+            tree.insert_k(&key.0, key.1.clone());
         }
         b.iter(|| {
             let key = &cached_keys[rng.gen_range(0..keys.len())];
-            criterion::black_box(tree.remove(&key.0));
+            criterion::black_box(tree.remove_k(&key.0));
         })
     });
     group.bench_function("hash", |b| {
@@ -202,23 +202,23 @@ pub fn rand_get(c: &mut Criterion) {
 
     group.throughput(Throughput::Elements(1));
     {
-        for size in SIZES {
+        for size in TREE_SIZES {
             group.bench_with_input(BenchmarkId::new("art", size), &size, |b, size| {
-                let mut tree = AdaptiveRadixTree::<ArrPartial<16>, _>::new();
+                let mut tree = AdaptiveRadixTree::<ArrayKey<16>, _>::new();
                 for i in 0..*size {
-                    tree.insert::<ArrayKey<16>>(&i.into(), i);
+                    tree.insert(i, i);
                 }
                 let mut rng = thread_rng();
                 b.iter(|| {
                     let key = rng.gen_range(0..*size);
-                    criterion::black_box(tree.get::<ArrayKey<16>>(&key.into()));
+                    criterion::black_box(tree.get(key));
                 })
             });
         }
     }
     group.throughput(Throughput::Elements(1));
     {
-        for size in SIZES {
+        for size in TREE_SIZES {
             group.bench_with_input(BenchmarkId::new("btree", size), &size, |b, size| {
                 let mut tree = BTreeMap::new();
                 for i in 0..*size {
@@ -234,7 +234,7 @@ pub fn rand_get(c: &mut Criterion) {
     }
 
     {
-        for size in SIZES {
+        for size in TREE_SIZES {
             group.bench_with_input(BenchmarkId::new("hash", size), &size, |b, size| {
                 let mut tree = HashMap::new();
                 for i in 0..*size {
@@ -258,16 +258,16 @@ pub fn rand_get_str(c: &mut Criterion) {
     let cached_keys = gen_cached_keys(3, 2, 3);
 
     {
-        for size in SIZES {
+        for size in TREE_SIZES {
             group.bench_with_input(BenchmarkId::new("art", size), &size, |b, _size| {
-                let mut tree = AdaptiveRadixTree::<ArrPartial<16>, _>::new();
+                let mut tree = AdaptiveRadixTree::<ArrayKey<16>, _>::new();
                 for (i, key) in keys.iter().enumerate() {
-                    tree.insert::<ArrayKey<16>>(&key.into(), i);
+                    tree.insert(key, i);
                 }
                 let mut rng = thread_rng();
                 b.iter(|| {
                     let key = &keys[rng.gen_range(0..keys.len())];
-                    criterion::black_box(tree.get::<ArrayKey<16>>(&key.into()));
+                    criterion::black_box(tree.get(key));
                 })
             });
         }
@@ -275,19 +275,19 @@ pub fn rand_get_str(c: &mut Criterion) {
 
     group.throughput(Throughput::Elements(1));
     {
-        for size in SIZES {
+        for size in TREE_SIZES {
             group.bench_with_input(
                 BenchmarkId::new("art_cached_keys", size),
                 &size,
                 |b, _size| {
-                    let mut tree = AdaptiveRadixTree::<ArrPartial<16>, _>::new();
+                    let mut tree = AdaptiveRadixTree::<ArrayKey<16>, _>::new();
                     for (i, key) in cached_keys.iter().enumerate() {
-                        tree.insert(&key.0, i);
+                        tree.insert_k(&key.0, i);
                     }
                     let mut rng = thread_rng();
                     b.iter(|| {
                         let key = &cached_keys[rng.gen_range(0..keys.len())];
-                        criterion::black_box(tree.get(&key.0));
+                        criterion::black_box(tree.get_k(&key.0));
                     })
                 },
             );
@@ -295,7 +295,7 @@ pub fn rand_get_str(c: &mut Criterion) {
     }
 
     {
-        for size in SIZES {
+        for size in TREE_SIZES {
             group.bench_with_input(BenchmarkId::new("btree", size), &size, |b, _size| {
                 let mut tree = BTreeMap::new();
                 for (i, key) in keys.iter().enumerate() {
@@ -311,7 +311,7 @@ pub fn rand_get_str(c: &mut Criterion) {
     }
 
     {
-        for size in SIZES {
+        for size in TREE_SIZES {
             group.bench_with_input(BenchmarkId::new("hash", size), &size, |b, _size| {
                 let mut tree = HashMap::new();
                 for (i, key) in keys.iter().enumerate() {
@@ -334,22 +334,22 @@ pub fn seq_get(c: &mut Criterion) {
 
     group.throughput(Throughput::Elements(1));
     {
-        for size in SIZES {
+        for size in TREE_SIZES {
             group.bench_with_input(BenchmarkId::new("art", size), &size, |b, size| {
-                let mut tree = AdaptiveRadixTree::<ArrPartial<16>, _>::new();
+                let mut tree = AdaptiveRadixTree::<ArrayKey<16>, _>::new();
                 for i in 0..*size {
-                    tree.insert::<ArrayKey<16>>(&i.into(), i);
+                    tree.insert(i, i);
                 }
                 let mut key = 0u64;
                 b.iter(|| {
-                    criterion::black_box(tree.get::<ArrayKey<16>>(&key.into()));
+                    criterion::black_box(tree.get(key));
                     key += 1;
                 })
             });
         }
     }
     {
-        for size in SIZES {
+        for size in TREE_SIZES {
             group.bench_with_input(BenchmarkId::new("btree", size), &size, |b, size| {
                 let mut tree = BTreeMap::new();
                 for i in 0..*size {
@@ -365,7 +365,7 @@ pub fn seq_get(c: &mut Criterion) {
     }
 
     {
-        for size in SIZES {
+        for size in TREE_SIZES {
             group.bench_with_input(BenchmarkId::new("hash", size), &size, |b, size| {
                 let mut tree = HashMap::new();
                 for i in 0..*size {

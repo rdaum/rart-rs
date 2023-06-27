@@ -1,6 +1,7 @@
 use std::cmp::min;
 use std::ops::Index;
 
+use crate::keys::array_key::ArrayKey;
 use crate::keys::KeyTrait;
 use crate::partials::Partial;
 
@@ -79,11 +80,10 @@ impl<const SIZE: usize> Partial for ArrPartial<SIZE> {
         self.prefix_length_slice(other.to_slice())
     }
 
-    fn prefix_length_key<'a, P: Partial, K: KeyTrait<P> + 'a>(
-        &self,
-        key: &'a K,
-        at_depth: usize,
-    ) -> usize {
+    fn prefix_length_key<'a, K>(&self, key: &'a K, at_depth: usize) -> usize
+    where
+        K: KeyTrait<PartialType = Self> + 'a,
+    {
         let len = min(self.len, key.length_at(0));
         let len = min(len, SIZE);
         let mut idx = 0;
@@ -117,6 +117,12 @@ impl<const SIZE: usize> Partial for ArrPartial<SIZE> {
 impl<const SIZE: usize> From<&[u8]> for ArrPartial<SIZE> {
     fn from(src: &[u8]) -> Self {
         Self::from_slice(src)
+    }
+}
+
+impl<const SIZE: usize> From<ArrayKey<SIZE>> for ArrPartial<SIZE> {
+    fn from(value: ArrayKey<SIZE>) -> Self {
+        value.to_partial(0)
     }
 }
 
