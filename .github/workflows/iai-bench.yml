@@ -1,4 +1,4 @@
-name: Run IAI Callgrind Microbenchmark
+name: Run Callgrind Microbenchmark
 
 on:
   push:
@@ -11,27 +11,20 @@ env:
   RUST_BACKTRACE: "1"
 
 jobs:
-  deny:
-    name: Check dependencies/ubuntu-latest
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: EmbarkStudios/cargo-deny-action@v1
-        with:
-          rust-version: "1.70.0"
-
   base:
-    name: Build, check and test
+    name: Build and run microbenchmarks
     strategy:
       fail-fast: false
       matrix:
         toolchain:
-          - "1.70.0"
           - stable
           - nightly
         include:
-          - toolchain: "1.70.0"
+          - toolchain: nightly
+            components: rustfmt
+          - toolchain: stable
             components: rustfmt, clippy
+
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
