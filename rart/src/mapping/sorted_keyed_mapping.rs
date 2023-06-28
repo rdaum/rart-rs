@@ -78,7 +78,8 @@ impl<N, const WIDTH: usize> NodeMapping<N, WIDTH> for SortedKeyedMapping<N, WIDT
             key,
             &self.keys,
             self.num_children as usize,
-        ).unwrap();
+        )
+        .unwrap();
 
         for i in (idx..self.num_children as usize).rev() {
             self.keys[i + 1] = self.keys[i];

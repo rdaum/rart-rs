@@ -106,8 +106,8 @@ where
 
     #[inline]
     pub fn get_mut<Key>(&mut self, key: Key) -> Option<&mut ValueType>
-        where
-            Key: Into<KeyType>,
+    where
+        Key: Into<KeyType>,
     {
         self.get_mut_k(&key.into())
     }
@@ -333,8 +333,7 @@ where
 
         if result.is_some() && child_node.is_inner() && child_node.num_children() == 0 {
             let prefix = child_node.prefix.clone();
-            let deleted = parent_node
-                .delete_child(c).unwrap();
+            let deleted = parent_node.delete_child(c).unwrap();
             assert_eq!(prefix.to_slice(), deleted.prefix.to_slice());
         }
 

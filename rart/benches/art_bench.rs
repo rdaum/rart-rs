@@ -1,6 +1,6 @@
 /// Overall simple performance bench for static # of keys in a few secnarios. Here to quickly test\
 /// for regressions.
-use std::time::{Instant, Duration};
+use std::time::{Duration, Instant};
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rand::prelude::SliceRandom;
@@ -95,35 +95,35 @@ pub fn rand_get_str(c: &mut Criterion) {
     let cached_keys = gen_cached_keys(3, 2, 3);
     group.throughput(Throughput::Elements(1));
     for size in TREE_SIZES {
-        group.bench_with_input(
-            BenchmarkId::new("cached_keys", size),
-            &size,
-            |b, _size| {
-                let mut tree = AdaptiveRadixTree::<ArrayKey<16>, _>::new();
-                for (i, key) in cached_keys.iter().enumerate() {
-                    tree.insert_k(&key.0, i);
-                }
-                let mut rng = thread_rng();
-                b.iter(|| {
-                    let key = &cached_keys[rng.gen_range(0..keys.len())];
-                    criterion::black_box(tree.get_k(&key.0));
-                })
-            },
-        );
-    }
-
-    for size in TREE_SIZES {
-        group.bench_with_input(BenchmarkId::new("uncached_keys", size), &size, |b, _size| {
+        group.bench_with_input(BenchmarkId::new("cached_keys", size), &size, |b, _size| {
             let mut tree = AdaptiveRadixTree::<ArrayKey<16>, _>::new();
-            for (i, key) in keys.iter().enumerate() {
-                tree.insert(key, i);
+            for (i, key) in cached_keys.iter().enumerate() {
+                tree.insert_k(&key.0, i);
             }
             let mut rng = thread_rng();
             b.iter(|| {
-                let key = &keys[rng.gen_range(0..keys.len())];
-                criterion::black_box(tree.get(key));
+                let key = &cached_keys[rng.gen_range(0..keys.len())];
+                criterion::black_box(tree.get_k(&key.0));
             })
         });
+    }
+
+    for size in TREE_SIZES {
+        group.bench_with_input(
+            BenchmarkId::new("uncached_keys", size),
+            &size,
+            |b, _size| {
+                let mut tree = AdaptiveRadixTree::<ArrayKey<16>, _>::new();
+                for (i, key) in keys.iter().enumerate() {
+                    tree.insert(key, i);
+                }
+                let mut rng = thread_rng();
+                b.iter(|| {
+                    let key = &keys[rng.gen_range(0..keys.len())];
+                    criterion::black_box(tree.get(key));
+                })
+            },
+        );
     }
 
     group.finish();

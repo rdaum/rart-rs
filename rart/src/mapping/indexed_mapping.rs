@@ -88,10 +88,7 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> NodeMapping<N, WIDTH>
     for IndexedMapping<N, WIDTH, Bitset>
 {
     fn add_child(&mut self, key: u8, node: N) {
-        let pos = self
-            .children
-            .first_empty()
-            .unwrap();
+        let pos = self.children.first_empty().unwrap();
         self.child_ptr_indexes.set(key as usize, pos as u8);
         self.children.set(pos, node);
         self.num_children += 1;
