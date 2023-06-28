@@ -1,0 +1,63 @@
+name: Run IAI Callgrind Microbenchmark
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  deny:
+    name: Check dependencies/ubuntu-latest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: EmbarkStudios/cargo-deny-action@v1
+        with:
+          rust-version: "1.70.0"
+
+  base:
+    name: Build, check and test
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain:
+          - "1.70.0"
+          - stable
+          - nightly
+        include:
+          - toolchain: "1.70.0"
+            components: rustfmt, clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          components: ${{ matrix.components }}
+      - name: Prepare
+        if: matrix.toolchain != 'stable'
+        run: |
+          rustup toolchain install stable --no-self-update --component clippy
+      - uses: Swatinem/rust-cache@v2.2.0
+        with:
+          key: ubuntu-latest_${{ matrix.toolchain }}"
+      - name: Install valgrind
+        run: sudo apt-get -y update && sudo apt-get -y install valgrind
+      - name: Info
+        run: |
+          set -x
+          uname -a
+          pwd
+          rustup --version
+          rustup show
+          rustup component list --installed
+          valgrind --version
+      - name: Install callgrind runner
+        run: cargo install --version 0.3.1 iai-callgrind-runner
+      - name: Bench
+        run: cargo bench --all-features --bench art_iai_bench
