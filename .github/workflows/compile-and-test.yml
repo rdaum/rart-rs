@@ -2,7 +2,7 @@ name: Build, lint, test, and doc
 
 on:
   push:
-    branches: ["main", "cicd", "release", "develop"]
+    branches: ["main"]
   pull_request:
     branches: ["main"]
 
