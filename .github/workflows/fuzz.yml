@@ -33,5 +33,7 @@ jobs:
           key: ubuntu-latest_${{ matrix.toolchain }}"
       - name: Build
         run: cargo build --all-features
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
       - name: Get fuzzy for 30 seconds
         run: cargo fuzz run rart_check -- -max_total_time=30s
