@@ -5,6 +5,27 @@ mod simd_keys {
     use simdeez::*;
     use simdeez::{prelude::*, simd_runtime_generate};
 
+    /*
+        fn x86_64_sse_seek_insert_pos_16(key: u8, keys: [u8; 16], num_children: usize) -> Option<usize> {
+        use std::arch::x86_64::{
+            __m128i, _mm_cmplt_epi8, _mm_loadu_si128, _mm_movemask_epi8, _mm_set1_epi8,
+        };
+
+        let bitfield = unsafe {
+            let cmp_vec = _mm_set1_epi8(key as i8);
+            let cmp = _mm_cmplt_epi8(cmp_vec, _mm_loadu_si128(keys.as_ptr() as *const __m128i));
+            let mask = (1 << num_children) - 1;
+            _mm_movemask_epi8(cmp) & mask
+        };
+
+        if bitfield != 0 {
+            let idx = bitfield.trailing_zeros() as usize;
+            return Some(idx);
+        }
+        None
+    }
+
+         */
     simd_runtime_generate!(
         pub fn simdeez_find_insert_pos(key: u8, keys: &[u8], ff_mask_out: u32) -> Option<usize> {
             let key_cmp_vec = S::Vi8::set1(key as i8);
@@ -74,7 +95,8 @@ pub fn u8_keys_find_insert_position_sorted<const WIDTH: usize>(
 ) -> Option<usize> {
     #[cfg(feature = "simd_keys")]
     if WIDTH >= 16 {
-        return simd_keys::simdeez_find_insert_pos(key, keys, (1 << num_children) - 1);
+        return simd_keys::simdeez_find_insert_pos(key, keys, (1 << num_children) - 1)
+            .or(Some(num_children));
     }
 
     // Fallback: use linear search to find the insertion point.

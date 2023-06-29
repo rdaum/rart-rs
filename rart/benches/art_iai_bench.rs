@@ -8,7 +8,6 @@ use rart::tree::AdaptiveRadixTree;
 const TREE_SIZES: [u64; 4] = [1 << 14, 1 << 16, 1 << 18, 1 << 20];
 
 #[export_name = "tree_setup"]
-#[inline(never)]
 fn setup_tree(n: usize) -> AdaptiveRadixTree<ArrayKey<16>, u64> {
     let mut tree = AdaptiveRadixTree::<ArrayKey<16>, _>::new();
 
