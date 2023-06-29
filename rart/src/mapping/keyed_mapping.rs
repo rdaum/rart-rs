@@ -70,6 +70,16 @@ where
         new
     }
 
+    // Return the key and value of the only child, and remove it from the mapping.
+    pub fn take_value_for_leaf(&mut self) -> (u8, N) {
+        assert!(self.num_children == 1);
+        let first_child_pos = self.children.first_used().unwrap();
+        let key = self.keys[first_child_pos];
+        let value = self.children.erase(first_child_pos).unwrap();
+        self.num_children -= 1;
+        (key, value)
+    }
+
     pub fn from_resized_shrink<const OLD_WIDTH: usize, OldBitset: BitsetTrait>(
         km: &mut KeyedMapping<N, OLD_WIDTH, OldBitset>,
     ) -> Self {

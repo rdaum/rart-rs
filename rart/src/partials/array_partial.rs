@@ -65,6 +65,17 @@ impl<const SIZE: usize> Partial for ArrPartial<SIZE> {
         ArrPartial::from_slice(&self.data[start..self.len])
     }
 
+    fn partial_extended_with(&self, other: &Self) -> Self {
+        assert!(self.len + other.len < SIZE);
+        let mut data = [0; SIZE];
+        data[..self.len].copy_from_slice(&self.data[..self.len]);
+        data[self.len..self.len + other.len].copy_from_slice(&other.data[..other.len]);
+        Self {
+            data,
+            len: self.len + other.len,
+        }
+    }
+
     #[inline(always)]
     fn at(&self, pos: usize) -> u8 {
         assert!(pos < self.len);

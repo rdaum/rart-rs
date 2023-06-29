@@ -10,6 +10,8 @@ pub trait Partial {
     fn partial_from(&self, src_offset: usize, length: usize) -> Self;
     /// Returns a partial from `start` onwards.
     fn partial_after(&self, start: usize) -> Self;
+    /// Extends the partial with another partial.
+    fn partial_extended_with(&self, other: &Self) -> Self;
     /// Returns the byte at `pos`.
     fn at(&self, pos: usize) -> u8;
     /// Returns the length of the partial.

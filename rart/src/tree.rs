@@ -331,13 +331,13 @@ where
         let result =
             AdaptiveRadixTree::remove_recurse(child_node, key, depth + child_node.prefix.len());
 
+        // If after this our child we just recursed into no longer has children of its own, it can
+        // be collapsed into us. In this way we can prune the tree as we go.
         if result.is_some() && child_node.is_inner() && child_node.num_children() == 0 {
             let prefix = child_node.prefix.clone();
             let deleted = parent_node.delete_child(c).unwrap();
             assert_eq!(prefix.to_slice(), deleted.prefix.to_slice());
         }
-
-        // TODO: Turn an inner node into a leaf if it has only one (leaf) child.
 
         result
     }
