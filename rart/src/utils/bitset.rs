@@ -16,6 +16,7 @@ pub trait BitsetTrait: Default {
     const STORAGE_WIDTH: usize;
 
     fn first_empty(&self) -> Option<usize>;
+    fn first_set(&self) -> Option<usize>;
     fn set(&mut self, pos: usize);
     fn unset(&mut self, pos: usize);
     fn check(&self, pos: usize) -> bool;
@@ -77,6 +78,15 @@ where
             }
             if *b != StorageType::max_value() {
                 return Some((i << Self::BIT_SHIFT) + b.trailing_ones() as usize);
+            }
+        }
+        None
+    }
+
+    fn first_set(&self) -> Option<usize> {
+        for (i, b) in self.bitset.iter().enumerate() {
+            if !b.is_zero() {
+                return Some((i << Self::BIT_SHIFT) + b.trailing_zeros() as usize);
             }
         }
         None

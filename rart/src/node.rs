@@ -141,7 +141,15 @@ impl<P: Partial, V> Node<P, V> {
 
     pub(crate) fn delete_child(&mut self, key: u8) -> Option<Node<P, V>> {
         match &mut self.ntype {
-            NodeType::Node4(dm) => dm.delete_child(key),
+            NodeType::Node4(dm) => {
+                let node = dm.delete_child(key);
+
+                if self.num_children() == 1 {
+                    self.shrink();
+                }
+
+                node
+            }
             NodeType::Node16(dm) => {
                 let node = dm.delete_child(key);
 
@@ -187,8 +195,14 @@ impl<P: Partial, V> Node<P, V> {
 
     fn shrink(&mut self) {
         match &mut self.ntype {
-            NodeType::Node4(_) => {
-                unreachable!("Should never shrink a node4")
+            NodeType::Node4(km) => {
+                // A node4 with only one child has its childed collapsed into it.
+                // If our child is a leaf, that means we have become a leaf, and we can shrink no
+                // more beyond this.
+                let (_, child) = km.take_value_for_leaf();
+                let prefix = child.prefix;
+                self.ntype = child.ntype;
+                self.prefix = self.prefix.partial_extended_with(&prefix);
             }
             NodeType::Node16(km) => {
                 self.ntype = NodeType::Node4(KeyedMapping::from_resized_shrink(km));

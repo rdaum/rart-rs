@@ -52,6 +52,15 @@ impl Partial for VectorPartial {
         VectorPartial::from_slice(&self.data[start..self.data.len()])
     }
 
+    fn partial_extended_with(&self, other: &Self) -> Self {
+        let mut data = Vec::with_capacity(self.data.len() + other.data.len());
+        data.extend_from_slice(&self.data);
+        data.extend_from_slice(&other.data);
+        Self {
+            data: data.into_boxed_slice(),
+        }
+    }
+
     #[inline(always)]
     fn at(&self, pos: usize) -> u8 {
         assert!(pos < self.data.len());

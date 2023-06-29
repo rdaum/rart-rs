@@ -54,6 +54,11 @@ where
     }
 
     #[inline]
+    pub fn first_used(&self) -> Option<usize> {
+        self.bitset.first_set()
+    }
+
+    #[inline]
     pub fn first_empty(&mut self) -> Option<usize> {
         // Storage size of the bitset can be larger than the range width.
         // For example: we have a RANGE_WIDTH of 48 and a bitset of 64x1 or 32x2.
