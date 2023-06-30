@@ -13,7 +13,6 @@ edition = "2021"
 criterion = { version = "0.5.1", features = ["html_reports"] }
 iai-callgrind = "0.3.1"
 paste = "1.0.12"
-
 rand = "0.8"
 csv="1.2.1"
 
@@ -24,6 +23,7 @@ simd_keys = ["dep:simdeez"]
 [dependencies]
 num-traits = "0.2.15"
 simdeez = { version = "2.0.0-dev3", optional = true }
+bitintr = "0.3.0"
 
 [[bench]]
 name = "art_bench"

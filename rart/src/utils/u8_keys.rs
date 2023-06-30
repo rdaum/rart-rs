@@ -5,27 +5,6 @@ mod simd_keys {
     use simdeez::*;
     use simdeez::{prelude::*, simd_runtime_generate};
 
-    /*
-        fn x86_64_sse_seek_insert_pos_16(key: u8, keys: [u8; 16], num_children: usize) -> Option<usize> {
-        use std::arch::x86_64::{
-            __m128i, _mm_cmplt_epi8, _mm_loadu_si128, _mm_movemask_epi8, _mm_set1_epi8,
-        };
-
-        let bitfield = unsafe {
-            let cmp_vec = _mm_set1_epi8(key as i8);
-            let cmp = _mm_cmplt_epi8(cmp_vec, _mm_loadu_si128(keys.as_ptr() as *const __m128i));
-            let mask = (1 << num_children) - 1;
-            _mm_movemask_epi8(cmp) & mask
-        };
-
-        if bitfield != 0 {
-            let idx = bitfield.trailing_zeros() as usize;
-            return Some(idx);
-        }
-        None
-    }
-
-         */
     simd_runtime_generate!(
         pub fn simdeez_find_insert_pos(key: u8, keys: &[u8], ff_mask_out: u32) -> Option<usize> {
             let key_cmp_vec = S::Vi8::set1(key as i8);
@@ -55,6 +34,7 @@ mod simd_keys {
     );
 }
 
+#[cfg(not(feature = "simd_keys"))]
 fn binary_find_key(key: u8, keys: &[u8], num_children: usize) -> Option<usize> {
     let mut left = 0;
     let mut right = num_children;
@@ -80,11 +60,12 @@ pub fn u8_keys_find_key_position_sorted<const WIDTH: usize>(
     }
 
     #[cfg(feature = "simd_keys")]
-    if WIDTH >= 16 {
-        return simd_keys::simdeez_find_key(key, keys, (1 << num_children) - 1);
+    {
+        simd_keys::simdeez_find_key(key, keys, (1 << num_children) - 1)
     }
 
     // Fallback to binary search.
+    #[cfg(not(feature = "simd_keys"))]
     binary_find_key(key, keys, num_children)
 }
 
@@ -94,12 +75,13 @@ pub fn u8_keys_find_insert_position_sorted<const WIDTH: usize>(
     num_children: usize,
 ) -> Option<usize> {
     #[cfg(feature = "simd_keys")]
-    if WIDTH >= 16 {
-        return simd_keys::simdeez_find_insert_pos(key, keys, (1 << num_children) - 1)
-            .or(Some(num_children));
+    {
+        simd_keys::simdeez_find_insert_pos(key, keys, (1 << num_children) - 1)
+            .or(Some(num_children))
     }
 
     // Fallback: use linear search to find the insertion point.
+    #[cfg(not(feature = "simd_keys"))]
     (0..num_children)
         .rev()
         .find(|&i| key < keys[i])
@@ -111,26 +93,28 @@ pub fn u8_keys_find_key_position<const WIDTH: usize, Bitset: BitsetTrait>(
     keys: &[u8],
     children_bitmask: &Bitset,
 ) -> Option<usize> {
-    // // SIMD optimized forms of 16
+    // SIMD optimized
     #[cfg(feature = "simd_keys")]
-    if WIDTH >= 16 {
+    {
         // Special 0xff key is special
         let mut mask = (1 << WIDTH) - 1;
         if key == 255 {
             mask &= children_bitmask.as_bitmask() as u32;
         }
-        return simd_keys::simdeez_find_key(key, keys, mask);
+        simd_keys::simdeez_find_key(key, keys, mask)
     }
 
-    // Fallback to linear search for anything else (which is just WIDTH == 4, or if we have no
-    // SIMD support).
-    for (i, k) in keys.iter().enumerate() {
-        if key == 255 && !children_bitmask.check(i) {
-            continue;
+    #[cfg(not(feature = "simd_keys"))]
+    {
+        // Fallback to linear search for non-SIMD.
+        for (i, k) in keys.iter().enumerate() {
+            if key == 255 && !children_bitmask.check(i) {
+                continue;
+            }
+            if *k == key {
+                return Some(i);
+            }
         }
-        if *k == key {
-            return Some(i);
-        }
+        None
     }
-    None
 }
