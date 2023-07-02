@@ -1,7 +1,7 @@
-use crate::node::Node;
+use crate::node::{DefaultNode, Node};
 use crate::partials::Partial;
 
-type IterEntry<'a, P, V> = (u8, &'a Node<P, V>);
+type IterEntry<'a, P, V> = (u8, &'a DefaultNode<P, V>);
 type NodeIterator<'a, P, V> = dyn Iterator<Item = IterEntry<'a, P, V>> + 'a;
 
 pub struct Iter<'a, P: Partial + 'a, V> {
@@ -18,7 +18,7 @@ struct IterInner<'a, P: Partial + 'a, V> {
 }
 
 impl<'a, P: Partial + 'a, V> IterInner<'a, P, V> {
-    pub fn new(node: &'a Node<P, V>) -> Self {
+    pub fn new(node: &'a DefaultNode<P, V>) -> Self {
         let node_iter_stack = vec![node.iter()];
 
         Self {
@@ -30,7 +30,7 @@ impl<'a, P: Partial + 'a, V> IterInner<'a, P, V> {
 }
 
 impl<'a, P: Partial + 'a, V> Iter<'a, P, V> {
-    pub(crate) fn new(node: Option<&'a Node<P, V>>) -> Self {
+    pub(crate) fn new(node: Option<&'a DefaultNode<P, V>>) -> Self {
         if node.is_none() {
             return Self {
                 inner: Box::new(std::iter::empty()),

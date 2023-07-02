@@ -8,6 +8,7 @@ use libfuzzer_sys::fuzz_target;
 use rart::keys::array_key::ArrayKey;
 
 use rart::tree::AdaptiveRadixTree;
+use rart::TreeTrait;
 
 #[derive(Arbitrary, Debug)]
 enum MapMethod {

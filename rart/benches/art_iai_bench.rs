@@ -4,6 +4,7 @@ use rand::{thread_rng, Rng};
 
 use rart::keys::array_key::ArrayKey;
 use rart::tree::AdaptiveRadixTree;
+use rart::TreeTrait;
 
 const TREE_SIZES: [u64; 4] = [1 << 14, 1 << 16, 1 << 18, 1 << 20];
 

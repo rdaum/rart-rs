@@ -9,6 +9,7 @@ use rand::{thread_rng, Rng};
 use rart::keys::array_key::ArrayKey;
 
 use rart::tree::AdaptiveRadixTree;
+use rart::TreeTrait;
 
 // Variations on the number of keys to insert into the tree for benchmarks that measure retrievals
 const TREE_SIZES: [u64; 4] = [1 << 15, 1 << 20, 1 << 22, 1 << 24];
