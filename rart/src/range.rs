@@ -39,7 +39,7 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial, V> RangeInner<'a, K, V> {
 impl<'a, K: KeyTrait + 'a, V> RangeInnerTrait<'a, K, V> for RangeInner<'a, K, V> {
     fn next(&mut self) -> InnerResult<'a, V> {
         let Some(next) = self.iter.next() else {
-            return InnerResult::Iter(None)
+            return InnerResult::Iter(None);
         };
         let next_key = next.0.as_slice();
         match &self.end {
