@@ -23,7 +23,7 @@ simd_keys = ["dep:simdeez"]
 [dependencies]
 num-traits = "0.2.15"
 simdeez = { version = "2.0.0-dev3", optional = true }
-bitintr = "0.3.0"
+parking_lot_core = "0.9.7"
 
 [[bench]]
 name = "art_bench"
