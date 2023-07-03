@@ -2,6 +2,10 @@ use crate::node::Node;
 use crate::partials::Partial;
 use std::collections::HashMap;
 
+pub trait TreeStatsTrait {
+    fn get_tree_stats(&self) -> TreeStats;
+}
+
 #[derive(Debug)]
 pub struct NodeStats {
     pub width: usize,
@@ -9,6 +13,18 @@ pub struct NodeStats {
     pub total_children: usize,
     pub density: f64,
 }
+
+impl Default for NodeStats {
+    fn default() -> Self {
+        Self {
+            width: 0,
+            total_nodes: 0,
+            total_children: 0,
+            density: 0.0,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct TreeStats {
     pub node_stats: HashMap<usize, NodeStats>,
@@ -17,6 +33,19 @@ pub struct TreeStats {
     pub num_inner_nodes: usize,
     pub total_density: f64,
     pub max_height: usize,
+}
+
+impl Default for TreeStats {
+    fn default() -> Self {
+        Self {
+            node_stats: Default::default(),
+            num_leaves: 0,
+            num_values: 0,
+            num_inner_nodes: 0,
+            total_density: 0.0,
+            max_height: 0,
+        }
+    }
 }
 
 pub(crate) fn update_tree_stats<NodeType, PartialType, ValueType>(
