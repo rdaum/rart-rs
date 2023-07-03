@@ -7,7 +7,7 @@ use crossbeam_utils::Backoff;
 
 use crate::utils::PhantomUnsend;
 
-pub const DEFAULT_MAX_RETRIES: u8 = 20;
+pub const DEFAULT_MAX_RETRIES: u8 = 100;
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum LockError {
