@@ -146,6 +146,11 @@ mod test {
     use crate::utils::bitset::Bitset16;
 
     #[test]
+    fn test_fits_in_cache_line() {
+        assert!(std::mem::size_of::<super::IndexedMapping<u8, 48, Bitset16<3>>>() <= 64);
+    }
+
+    #[test]
     fn test_basic_mapping() {
         let mut mapping = super::IndexedMapping::<u8, 48, Bitset16<3>>::new();
         for i in 0..48 {
