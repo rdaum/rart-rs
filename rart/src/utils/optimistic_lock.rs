@@ -3,7 +3,7 @@ use std::fmt::{Display, Formatter};
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use parking_lot_core::SpinWait;
+use crossbeam_utils::Backoff;
 
 use crate::utils::PhantomUnsend;
 
@@ -72,7 +72,7 @@ impl<V> OptimisticLock<V> {
     where
         ReadFunction: Fn(&V) -> ReadResult,
     {
-        let mut spin = SpinWait::new();
+        let backoff = Backoff::new();
         let mut tries = 0;
 
         // Repeatedly perform operation 'f' on the value, until the version is stable (should be
@@ -89,7 +89,7 @@ impl<V> OptimisticLock<V> {
                 Ok(_) => return Ok(operation_result),
                 Err(LockError::Retry) => {
                     tries += 1;
-                    spin.spin();
+                    backoff.spin();
                     continue;
                 }
                 Err(e) => return Err(e),
@@ -106,7 +106,7 @@ impl<V> OptimisticLock<V> {
         ReadFunction: Fn(&V) -> V,
         WriteFunction: Fn(&V) -> V,
     {
-        let mut spin = SpinWait::new();
+        let backoff = Backoff::new();
         let mut tries = 0;
 
         // Repeatedly perform operation 'f' on the value, until the version is stable (should be
@@ -131,7 +131,7 @@ impl<V> OptimisticLock<V> {
                 }
                 Err(LockError::Retry) => {
                     tries += 1;
-                    spin.spin();
+                    backoff.spin();
                     continue;
                 }
                 Err(e) => return Err(e),
