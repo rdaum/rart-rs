@@ -171,7 +171,13 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> Drop for KeyedMapping<N, WIDTH,
 mod tests {
     use crate::mapping::keyed_mapping::KeyedMapping;
     use crate::mapping::NodeMapping;
-    use crate::utils::bitset::Bitset8;
+    use crate::utils::bitset::{Bitset16, Bitset8};
+
+    #[test]
+    fn test_fits_in_cache_line() {
+        assert!(std::mem::size_of::<KeyedMapping<u8, 4, Bitset8<4>>>() <= 64);
+        assert!(std::mem::size_of::<KeyedMapping<u8, 16, Bitset16<1>>>() <= 64);
+    }
 
     #[test]
     fn test_add_seek_delete() {
