@@ -8,18 +8,24 @@ use crate::utils::bitset::{Bitset16, Bitset64, Bitset8};
 pub trait Node<P: Partial, V> {
     fn new_leaf(partial: P, value: V) -> Self;
     fn new_inner(prefix: P) -> Self;
-    fn value_mut(&mut self) -> Option<&mut V>;
+
     fn value(&self) -> Option<&V>;
+    fn value_mut(&mut self) -> Option<&mut V>;
+
     fn is_leaf(&self) -> bool;
     fn is_inner(&self) -> bool;
-    fn num_children(&self) -> usize;
+
     fn seek_child(&self, key: u8) -> Option<&Self>;
     fn seek_child_mut(&mut self, key: u8) -> Option<&mut Self>;
+
+    fn add_child(&mut self, key: u8, node: Self);
+
     fn delete_child(&mut self, key: u8) -> Option<Self>
     where
         Self: Sized;
-    fn add_child(&mut self, key: u8, node: Self);
+
     fn capacity(&self) -> usize;
+    fn num_children(&self) -> usize;
 }
 
 pub struct DefaultNode<P: Partial, V> {
@@ -76,15 +82,6 @@ impl<P: Partial, V> Node<P, V> for DefaultNode<P, V> {
         !self.is_leaf()
     }
 
-    fn num_children(&self) -> usize {
-        match &self.content {
-            Content::Node4(n) => n.num_children(),
-            Content::Node16(n) => n.num_children(),
-            Content::Node48(n) => n.num_children(),
-            Content::Node256(n) => n.num_children(),
-            Content::Leaf(_) => 0,
-        }
-    }
     fn seek_child(&self, key: u8) -> Option<&Self> {
         if self.num_children() == 0 {
             return None;
@@ -98,7 +95,6 @@ impl<P: Partial, V> Node<P, V> for DefaultNode<P, V> {
             Content::Leaf(_) => None,
         }
     }
-
     fn seek_child_mut(&mut self, key: u8) -> Option<&mut Self> {
         match &mut self.content {
             Content::Node4(km) => km.seek_child_mut(key),
@@ -179,6 +175,16 @@ impl<P: Partial, V> Node<P, V> for DefaultNode<P, V> {
             Content::Node16 { .. } => 16,
             Content::Node48 { .. } => 48,
             Content::Node256 { .. } => 256,
+            Content::Leaf(_) => 0,
+        }
+    }
+
+    fn num_children(&self) -> usize {
+        match &self.content {
+            Content::Node4(n) => n.num_children(),
+            Content::Node16(n) => n.num_children(),
+            Content::Node48(n) => n.num_children(),
+            Content::Node256(n) => n.num_children(),
             Content::Leaf(_) => 0,
         }
     }

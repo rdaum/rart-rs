@@ -7,63 +7,8 @@ use crate::keys::KeyTrait;
 use crate::node::{Content, DefaultNode, Node};
 use crate::partials::Partial;
 use crate::range::Range;
-use crate::stats::{update_tree_stats, TreeStats};
+use crate::stats::{update_tree_stats, TreeStats, TreeStatsTrait};
 use crate::TreeTrait;
-
-impl<KeyType: KeyTrait, ValueType> TreeTrait<KeyType, ValueType>
-    for AdaptiveRadixTree<KeyType, ValueType>
-{
-    type NodeType = DefaultNode<KeyType::PartialType, ValueType>;
-
-    #[inline]
-    fn get_k(&self, key: &KeyType) -> Option<&ValueType> {
-        AdaptiveRadixTree::get_iterate(self.root.as_ref()?, key)
-    }
-    #[inline]
-    fn get_mut_k(&mut self, key: &KeyType) -> Option<&mut ValueType> {
-        AdaptiveRadixTree::get_iterate_mut(self.root.as_mut()?, key)
-    }
-    fn insert_k(&mut self, key: &KeyType, value: ValueType) -> Option<ValueType> {
-        if self.root.is_none() {
-            self.root = Some(DefaultNode::new_leaf(key.to_partial(0), value));
-            return None;
-        };
-
-        let root = self.root.as_mut().unwrap();
-
-        AdaptiveRadixTree::insert_recurse(root, key, value, 0)
-    }
-    fn remove_k(&mut self, key: &KeyType) -> Option<ValueType> {
-        let Some(root) = self.root.as_mut() else {
-            return None;
-        };
-
-        let prefix_common_match = root.prefix.prefix_length_key(key, 0);
-        if prefix_common_match != root.prefix.len() {
-            return None;
-        }
-
-        // Special case, if the root is a leaf and matches the key, we can just remove it
-        // immediately. If it doesn't match our key, then we have nothing to do here anyways.
-        if root.is_leaf() {
-            // Move the value of the leaf in root. To do this, replace self.root  with None and
-            // then unwrap the value out of the Option & Leaf.
-            let stolen = self.root.take().unwrap();
-            let leaf = match stolen.content {
-                Content::Leaf(v) => v,
-                _ => unreachable!(),
-            };
-            return Some(leaf);
-        }
-
-        let result = AdaptiveRadixTree::remove_recurse(root, key, prefix_common_match);
-        if root.is_inner() && root.num_children() == 0 {
-            // Prune root if it's now empty.
-            self.root = None;
-        }
-        result
-    }
-}
 
 pub struct AdaptiveRadixTree<KeyType, ValueType>
 where
@@ -89,7 +34,145 @@ where
             _phantom: Default::default(),
         }
     }
+}
 
+// Implementation of the public API for the tree.
+impl<KeyType: KeyTrait, ValueType> TreeTrait<KeyType, ValueType>
+    for AdaptiveRadixTree<KeyType, ValueType>
+{
+    type NodeType = DefaultNode<KeyType::PartialType, ValueType>;
+
+    #[inline]
+    fn get_k(&self, key: &KeyType) -> Option<&ValueType> {
+        AdaptiveRadixTree::get_iterate(self.root.as_ref()?, key)
+    }
+
+    #[inline]
+    fn get_mut_k(&mut self, key: &KeyType) -> Option<&mut ValueType> {
+        AdaptiveRadixTree::get_iterate_mut(self.root.as_mut()?, key)
+    }
+
+    #[inline]
+    fn insert_k(&mut self, key: &KeyType, value: ValueType) -> Option<ValueType> {
+        if self.root.is_none() {
+            self.root = Some(DefaultNode::new_leaf(key.to_partial(0), value));
+            return None;
+        };
+
+        let root = self.root.as_mut().unwrap();
+
+        AdaptiveRadixTree::insert_recurse(root, key, value, 0)
+    }
+
+    fn remove_k(&mut self, key: &KeyType) -> Option<ValueType> {
+        let root = self.root.as_mut()?;
+
+        // Don't bother doing anything if there's no prefix match on the root at all.
+        let prefix_common_match = root.prefix.prefix_length_key(key, 0);
+        if prefix_common_match != root.prefix.len() {
+            return None;
+        }
+
+        // Special case, if the root is a leaf and matches the key, we can just remove it
+        // immediately. If it doesn't match our key, then we have nothing to do here anyways.
+        if root.is_leaf() {
+            // Move the value of the leaf in root. To do this, replace self.root  with None and
+            // then unwrap the value out of the Option & Leaf.
+            let stolen = self.root.take().unwrap();
+            let leaf = match stolen.content {
+                Content::Leaf(v) => v,
+                _ => unreachable!(),
+            };
+            return Some(leaf);
+        }
+
+        let result = AdaptiveRadixTree::remove_recurse(root, key, prefix_common_match);
+
+        // Prune root out if it's now empty.
+        if root.is_inner() && root.num_children() == 0 {
+            self.root = None;
+        }
+        result
+    }
+
+    fn iter(&self) -> Iter<KeyType::PartialType, ValueType> {
+        Iter::new(self.root.as_ref())
+    }
+
+    fn range<'a, R>(&'a self, range: R) -> Range<KeyType, ValueType>
+    where
+        R: RangeBounds<KeyType> + 'a,
+    {
+        if self.root.is_none() {
+            return Range::empty();
+        }
+
+        let mut iter = self.iter();
+
+        let start_key = match range.start_bound() {
+            Bound::Included(start_key) | Bound::Excluded(start_key) => start_key,
+            Bound::Unbounded => {
+                let bound = range.end_bound().cloned();
+                return Range::for_iter(iter, bound);
+            }
+        };
+
+        while let Some((k_vec, _)) = iter.next() {
+            if start_key.matches_slice(k_vec.as_slice()) {
+                if let Bound::Excluded(_) = range.start_bound() {
+                    iter.next();
+                }
+                let bound = range.end_bound().cloned();
+                return Range::for_iter(iter, bound);
+            }
+        }
+
+        Range::empty()
+    }
+}
+
+impl<KeyType, ValueType> TreeStatsTrait for AdaptiveRadixTree<KeyType, ValueType>
+where
+    KeyType: KeyTrait,
+{
+    fn get_tree_stats(&self) -> TreeStats {
+        let mut stats = TreeStats::default();
+
+        if self.root.is_none() {
+            return stats;
+        }
+
+        AdaptiveRadixTree::<KeyType, ValueType>::get_tree_stats_recurse(
+            self.root.as_ref().unwrap(),
+            &mut stats,
+            1,
+        );
+
+        let total_inner_nodes = stats
+            .node_stats
+            .values()
+            .map(|ns| ns.total_nodes)
+            .sum::<usize>();
+        let mut total_children = 0;
+        let mut total_width = 0;
+        for ns in stats.node_stats.values_mut() {
+            total_children += ns.total_children;
+            total_width += ns.width * ns.total_nodes;
+            ns.density = ns.total_children as f64 / (ns.width * ns.total_nodes) as f64;
+        }
+        let total_density = total_children as f64 / total_width as f64;
+        stats.num_inner_nodes = total_inner_nodes;
+        stats.total_density = total_density;
+
+        stats
+    }
+}
+
+// Internals implementation
+impl<KeyType, ValueType> AdaptiveRadixTree<KeyType, ValueType>
+where
+    KeyType: KeyTrait,
+{
     fn get_iterate<'a>(
         cur_node: &'a <Self as TreeTrait<KeyType, ValueType>>::NodeType,
         key: &KeyType,
@@ -131,41 +214,6 @@ where
             depth += cur_node.prefix.len();
             cur_node = cur_node.seek_child_mut(k)?;
         }
-    }
-
-    pub fn iter(&self) -> Iter<KeyType::PartialType, ValueType> {
-        Iter::new(self.root.as_ref())
-    }
-
-    pub fn range<'a, R>(&'a self, range: R) -> Range<KeyType, ValueType>
-    where
-        R: RangeBounds<KeyType> + 'a,
-    {
-        if self.root.is_none() {
-            return Range::empty();
-        }
-
-        let mut iter = self.iter();
-
-        let start_key = match range.start_bound() {
-            Bound::Included(start_key) | Bound::Excluded(start_key) => start_key,
-            Bound::Unbounded => {
-                let bound = range.end_bound().cloned();
-                return Range::for_iter(iter, bound);
-            }
-        };
-
-        while let Some((k_vec, _)) = iter.next() {
-            if start_key.matches_slice(k_vec.as_slice()) {
-                if let Bound::Excluded(_) = range.start_bound() {
-                    iter.next();
-                }
-                let bound = range.end_bound().cloned();
-                return Range::for_iter(iter, bound);
-            }
-        }
-
-        Range::empty()
     }
 
     fn insert_recurse(
@@ -281,44 +329,6 @@ where
         result
     }
 
-    pub fn get_tree_stats(&self) -> TreeStats {
-        let mut stats = TreeStats {
-            node_stats: Default::default(),
-            num_leaves: 0,
-            num_values: 0,
-            num_inner_nodes: 0,
-            total_density: 0.0,
-            max_height: 0,
-        };
-        if self.root.is_none() {
-            return stats;
-        }
-
-        AdaptiveRadixTree::<KeyType, ValueType>::get_tree_stats_recurse(
-            self.root.as_ref().unwrap(),
-            &mut stats,
-            1,
-        );
-
-        let total_inner_nodes = stats
-            .node_stats
-            .values()
-            .map(|ns| ns.total_nodes)
-            .sum::<usize>();
-        let mut total_children = 0;
-        let mut total_width = 0;
-        for ns in stats.node_stats.values_mut() {
-            total_children += ns.total_children;
-            total_width += ns.width * ns.total_nodes;
-            ns.density = ns.total_children as f64 / (ns.width * ns.total_nodes) as f64;
-        }
-        let total_density = total_children as f64 / total_width as f64;
-        stats.num_inner_nodes = total_inner_nodes;
-        stats.total_density = total_density;
-
-        stats
-    }
-
     fn get_tree_stats_recurse(
         node: &<Self as TreeTrait<KeyType, ValueType>>::NodeType,
         tree_stats: &mut TreeStats,
@@ -358,6 +368,7 @@ mod tests {
 
     use crate::keys::array_key::ArrayKey;
     use crate::keys::KeyTrait;
+    use crate::stats::TreeStatsTrait;
     use crate::tree::AdaptiveRadixTree;
     use crate::{tree, TreeTrait};
 
