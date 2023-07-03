@@ -49,11 +49,11 @@ impl<V> OptimisticLock<V> {
         }
     }
 
-    pub fn with_max_retries(storage: V) -> Self {
+    pub fn with_max_retries(storage: V, max_retries: usize) -> Self {
         Self {
             version_and_lock: AtomicU64::new(2),
             storage: UnsafeCell::new(storage),
-            max_retries: DEFAULT_MAX_RETRIES,
+            max_retries: max_retries as u8,
         }
     }
 
