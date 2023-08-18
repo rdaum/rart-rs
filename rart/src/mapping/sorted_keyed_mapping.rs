@@ -38,6 +38,14 @@ impl<N, const WIDTH: usize> SortedKeyedMapping<N, WIDTH> {
             num_children: 0,
         }
     }
+    // Return the key and value of the only child, and remove it from the mapping.
+    pub fn take_value_for_leaf(&mut self) -> (u8, N) {
+        assert!(self.num_children == 1);
+        let value = std::mem::replace(&mut self.children[0], MaybeUninit::uninit());
+        let key = self.keys[0];
+        self.num_children = 0;
+        (key, unsafe { value.assume_init() })
+    }
 
     #[allow(dead_code)]
     pub(crate) fn from_indexed<const IDX_WIDTH: usize, FromBitset: BitsetTrait>(

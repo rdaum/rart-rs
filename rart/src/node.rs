@@ -1,9 +1,10 @@
 use crate::mapping::direct_mapping::DirectMapping;
 use crate::mapping::indexed_mapping::IndexedMapping;
-use crate::mapping::keyed_mapping::KeyedMapping;
+
+use crate::mapping::sorted_keyed_mapping::SortedKeyedMapping;
 use crate::mapping::NodeMapping;
 use crate::partials::Partial;
-use crate::utils::bitset::{Bitset16, Bitset64, Bitset8};
+use crate::utils::bitset::{Bitset64};
 
 pub trait Node<P: Partial, V> {
     fn new_leaf(partial: P, value: V) -> Self;
@@ -35,8 +36,8 @@ pub struct DefaultNode<P: Partial, V> {
 
 pub(crate) enum Content<P: Partial, V> {
     Leaf(V),
-    Node4(KeyedMapping<DefaultNode<P, V>, 4, Bitset8<1>>),
-    Node16(KeyedMapping<DefaultNode<P, V>, 16, Bitset16<1>>),
+    Node4(SortedKeyedMapping<DefaultNode<P, V>, 4>),
+    Node16(SortedKeyedMapping<DefaultNode<P, V>, 16>),
     Node48(IndexedMapping<DefaultNode<P, V>, 48, Bitset64<1>>),
     Node256(DirectMapping<DefaultNode<P, V>>),
 }
@@ -52,7 +53,7 @@ impl<P: Partial, V> Node<P, V> for DefaultNode<P, V> {
 
     #[inline]
     fn new_inner(prefix: P) -> Self {
-        let nt = Content::Node4(KeyedMapping::new());
+        let nt = Content::Node4(SortedKeyedMapping::new());
         Self {
             prefix,
             content: nt,
@@ -194,7 +195,7 @@ impl<P: Partial, V> DefaultNode<P, V> {
     #[inline]
     #[allow(dead_code)]
     pub fn new_4(prefix: P) -> Self {
-        let nt = Content::Node4(KeyedMapping::new());
+        let nt = Content::Node4(SortedKeyedMapping::new());
         Self {
             prefix,
             content: nt,
@@ -204,7 +205,7 @@ impl<P: Partial, V> DefaultNode<P, V> {
     #[inline]
     #[allow(dead_code)]
     pub fn new_16(prefix: P) -> Self {
-        let nt = Content::Node16(KeyedMapping::new());
+        let nt = Content::Node16(SortedKeyedMapping::new());
         Self {
             prefix,
             content: nt,
@@ -255,10 +256,10 @@ impl<P: Partial, V> DefaultNode<P, V> {
                 self.prefix = self.prefix.partial_extended_with(&prefix);
             }
             Content::Node16(km) => {
-                self.content = Content::Node4(KeyedMapping::from_resized_shrink(km));
+                self.content = Content::Node4(SortedKeyedMapping::from_resized(km));
             }
             Content::Node48(im) => {
-                let new_node = Content::Node16(KeyedMapping::from_indexed(im));
+                let new_node = Content::Node16(SortedKeyedMapping::from_indexed(im));
                 self.content = new_node;
             }
             Content::Node256(dm) => {
@@ -271,9 +272,11 @@ impl<P: Partial, V> DefaultNode<P, V> {
     fn grow(&mut self) {
         match &mut self.content {
             Content::Node4(km) => {
-                self.content = Content::Node16(KeyedMapping::from_resized_grow(km))
+                self.content = Content::Node16(SortedKeyedMapping::from_resized(km))
             }
-            Content::Node16(km) => self.content = Content::Node48(IndexedMapping::from_keyed(km)),
+            Content::Node16(km) => {
+                self.content = Content::Node48(IndexedMapping::from_sorted_keyed(km))
+            }
             Content::Node48(im) => {
                 self.content = Content::Node256(DirectMapping::from_indexed(im));
             }
@@ -289,7 +292,6 @@ impl<P: Partial, V> DefaultNode<P, V> {
         self.capacity() - self.num_children()
     }
 
-    #[allow(dead_code)]
     pub fn iter(&self) -> Box<dyn Iterator<Item = (u8, &Self)> + '_> {
         return match &self.content {
             Content::Node4(n) => Box::new(n.iter()),

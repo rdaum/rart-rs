@@ -2,24 +2,15 @@ use std::mem;
 
 use crate::keys::KeyTrait;
 use crate::partials::array_partial::ArrPartial;
+use crate::partials::Partial;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub struct ArrayKey<const N: usize> {
     data: [u8; N],
     len: usize,
 }
 
 impl<const N: usize> ArrayKey<N> {
-    pub fn new_from_slice(data: &[u8]) -> Self {
-        assert!(data.len() <= N, "data length is greater than array length");
-        let mut arr = [0; N];
-        arr[0..data.len()].copy_from_slice(data);
-        Self {
-            data: arr,
-            len: data.len(),
-        }
-    }
-
     pub fn new_from_str(s: &str) -> Self {
         assert!(s.len() + 1 < N, "data length is greater than array length");
         let mut arr = [0; N];
@@ -43,11 +34,69 @@ impl<const N: usize> ArrayKey<N> {
     pub fn new_from_array<const S: usize>(arr: [u8; S]) -> Self {
         Self::new_from_slice(&arr)
     }
+
+    pub fn as_array(&self) -> &[u8; N] {
+        &self.data
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        &self.data[..self.len]
+    }
+
+    /// (Convenience function. Not all keys can be assumed to be numeric.)
+    pub fn to_be_u64(&self) -> u64 {
+        // Copy from 0..min(len, 8) to a new array left-padding it, then convert to u64.
+        let mut arr = [0; 8];
+        arr[8 - self.len..].copy_from_slice(&self.data[..self.len]);
+        u64::from_be_bytes(arr)
+    }
 }
 
 impl<const N: usize> KeyTrait for ArrayKey<N> {
     type PartialType = ArrPartial<N>;
     const MAXIMUM_SIZE: Option<usize> = Some(N);
+
+    fn new_from_slice(data: &[u8]) -> Self {
+        assert!(data.len() <= N, "data length is greater than array length");
+        let mut arr = [0; N];
+        arr[0..data.len()].copy_from_slice(data);
+        Self {
+            data: arr,
+            len: data.len(),
+        }
+    }
+
+    fn new_from_partial(partial: &Self::PartialType) -> Self {
+        let mut data = [0; N];
+        let len = partial.len();
+        data[..len].copy_from_slice(&partial.to_slice()[..len]);
+        Self { data, len }
+    }
+
+    fn extend_from_partial(&self, partial: &Self::PartialType) -> Self {
+        let cur_len = self.len;
+        let partial_len = partial.len();
+        assert!(
+            cur_len + partial_len <= N,
+            "data length is greater than max key length"
+        );
+        let mut data = [0; N];
+        data[..cur_len].copy_from_slice(&self.data[..cur_len]);
+        let partial_slice = partial.to_slice();
+        data[cur_len..cur_len + partial_len].copy_from_slice(&partial_slice[..partial_len]);
+        Self {
+            data,
+            len: cur_len + partial_len,
+        }
+    }
+
+    fn truncate(&self, at_depth: usize) -> Self {
+        assert!(at_depth <= self.len, "truncating beyond key length");
+        Self {
+            data: self.data,
+            len: at_depth,
+        }
+    }
 
     #[inline(always)]
     fn at(&self, pos: usize) -> u8 {
@@ -137,3 +186,32 @@ impl_from_signed!(i32, u32);
 impl_from_signed!(i64, u64);
 impl_from_signed!(i128, u128);
 impl_from_signed!(isize, usize);
+
+#[cfg(test)]
+mod test {
+    use crate::keys::array_key::ArrayKey;
+    use crate::keys::KeyTrait;
+    use crate::partials::array_partial::ArrPartial;
+
+    #[test]
+    fn make_extend_truncate() {
+        let k = ArrayKey::<8>::new_from_slice(b"hel");
+        let p = ArrPartial::<8>::from_slice(b"lo");
+        let k2 = k.extend_from_partial(&p);
+        assert!(k2.matches_slice(b"hello"));
+        let k3 = k2.truncate(3);
+        assert!(k3.matches_slice(b"hel"));
+    }
+
+    #[test]
+    fn from_to_u64() {
+        let k: ArrayKey<16> = 123u64.into();
+        assert_eq!(k.to_be_u64(), 123u64);
+
+        let k: ArrayKey<16> = 1u64.into();
+        assert_eq!(k.to_be_u64(), 1u64);
+
+        let k: ArrayKey<16> = 123213123123123u64.into();
+        assert_eq!(k.to_be_u64(), 123213123123123u64);
+    }
+}

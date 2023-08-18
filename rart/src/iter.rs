@@ -1,35 +1,37 @@
+use crate::keys::KeyTrait;
 use crate::node::{DefaultNode, Node};
 use crate::partials::Partial;
 
 type IterEntry<'a, P, V> = (u8, &'a DefaultNode<P, V>);
 type NodeIterator<'a, P, V> = dyn Iterator<Item = IterEntry<'a, P, V>> + 'a;
 
-pub struct Iter<'a, P: Partial + 'a, V> {
-    inner: Box<dyn Iterator<Item = (Vec<u8>, &'a V)> + 'a>,
-    _marker: std::marker::PhantomData<P>,
+pub struct Iter<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> {
+    inner: Box<dyn Iterator<Item = (K, &'a V)> + 'a>,
+    _marker: std::marker::PhantomData<(K, P)>,
 }
 
-struct IterInner<'a, P: Partial + 'a, V> {
-    node_iter_stack: Vec<Box<NodeIterator<'a, P, V>>>,
+struct IterInner<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> {
+    node_iter_stack: Vec<(usize, Box<NodeIterator<'a, P, V>>)>,
 
     // Pushed and popped with prefix portions as we descend the tree,
-    cur_key: Vec<u8>,
-    cur_prefix_length: usize,
+    cur_key: K,
 }
 
-impl<'a, P: Partial + 'a, V> IterInner<'a, P, V> {
+impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> IterInner<'a, K, P, V> {
     pub fn new(node: &'a DefaultNode<P, V>) -> Self {
-        let node_iter_stack = vec![node.iter()];
+        let node_iter_stack = vec![(
+            node.prefix.len(), /* initial tree depth*/
+            node.iter(),       /* root node iter*/
+        )];
 
         Self {
             node_iter_stack,
-            cur_key: Vec::new(),
-            cur_prefix_length: 0,
+            cur_key: K::new_from_partial(&node.prefix),
         }
     }
 }
 
-impl<'a, P: Partial + 'a, V> Iter<'a, P, V> {
+impl<'a, K: KeyTrait<PartialType = P> + 'a, P: Partial + 'a, V> Iter<'a, K, P, V> {
     pub(crate) fn new(node: Option<&'a DefaultNode<P, V>>) -> Self {
         if node.is_none() {
             return Self {
@@ -39,44 +41,60 @@ impl<'a, P: Partial + 'a, V> Iter<'a, P, V> {
         }
 
         Self {
-            inner: Box::new(IterInner::new(node.unwrap())),
+            inner: Box::new(IterInner::<K, P, V>::new(node.unwrap())),
             _marker: Default::default(),
         }
     }
 }
 
-impl<'a, P: Partial + 'a, V> Iterator for Iter<'a, P, V> {
-    type Item = (Vec<u8>, &'a V);
+impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> Iterator for Iter<'a, K, P, V> {
+    type Item = (K, &'a V);
 
     fn next(&mut self) -> Option<Self::Item> {
         self.inner.next()
     }
 }
 
-impl<'a, P: Partial + 'a, V> Iterator for IterInner<'a, P, V> {
-    type Item = (Vec<u8>, &'a V);
+impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> Iterator for IterInner<'a, K, P, V> {
+    type Item = (K, &'a V);
 
     fn next(&mut self) -> Option<Self::Item> {
-        // Grab the last iterator from the stack, and see if there's more to iterate off of it.
-        // If not, pop it off, and continue the loop.
-        // If there is, loop through it looking for nodes; if the node is a leaf, return its value.
-        // If it's a node, grab its child iterator, and push it onto the stack and continue the loop.
         loop {
-            let Some(last_iter) = self.node_iter_stack.last_mut() else {
+            // Get working node iterator off the stack. If there is none, we're done.
+            let Some((tree_depth, last_iter)) = self.node_iter_stack.last_mut() else {
                 return None;
             };
+            let tree_depth = *tree_depth;
 
+            // Pull the next node from the node iterator. If there's none, pop that iterator off
+            // the stack, truncate our working key length back to the parent's depth, return to our
+            // parent, and continue there.
             let Some((_k, node)) = last_iter.next() else {
-                self.node_iter_stack.pop();
-                self.cur_key.truncate(self.cur_prefix_length);
+                let _ = self.node_iter_stack.pop().unwrap();
+                // If we're at the root node, we're done.
+                let Some((parent_depth, _)) = self.node_iter_stack.last() else {
+                    return None;
+                };
+                self.cur_key = self.cur_key.truncate(*parent_depth);
                 continue;
             };
 
-            if let Some(v) = node.value() {
-                let mut key = self.cur_key.clone();
-                key.extend_from_slice(node.prefix.to_slice());
-                return Some((key, v));
+            // We're at a non-exhausted inner node, so go further down the tree by pushing node
+            // iterator into the stack. We also extend our working key with this node's prefix.
+            if node.is_inner() {
+                self.node_iter_stack
+                    .push((tree_depth + node.prefix.len(), node.iter()));
+                self.cur_key = self.cur_key.extend_from_partial(&node.prefix);
+                continue;
             }
+
+            // We've got a value, so tack it onto our working key, and return it. If there's nothing
+            // here, that's an issue, leaf nodes should always have values.
+            let v = node
+                .value()
+                .expect("corruption: missing data at leaf node during iteration");
+            let key = self.cur_key.extend_from_partial(&node.prefix);
+            return Some((key, v));
         }
     }
 }
