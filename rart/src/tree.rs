@@ -535,7 +535,7 @@ mod tests {
     #[test]
     fn test_iter_one_regression() {
         let mut tree = AdaptiveRadixTree::<ArrayKey<16>, u64>::new();
-        tree.insert(&123, 456);
+        tree.insert(123, 456);
         let mut iter = tree.iter();
         let result = iter.next().expect("Expected an entry");
         assert_eq!(result.1, &456)
