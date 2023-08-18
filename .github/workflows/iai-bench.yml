@@ -51,6 +51,6 @@ jobs:
           rustup component list --installed
           valgrind --version
       - name: Install callgrind runner
-        run: cargo install --version 0.3.1 iai-callgrind-runner
+        run: cargo install --version 0.4.0 iai-callgrind-runner
       - name: Bench
         run: cargo bench --all-features --bench art_iai_bench --bench node_mapping_iai_microbenches
