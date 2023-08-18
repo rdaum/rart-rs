@@ -55,4 +55,6 @@ where
     fn range<'a, R>(&'a self, range: R) -> Range<KeyType, ValueType>
     where
         R: RangeBounds<KeyType> + 'a;
+
+    fn is_empty(&self) -> bool;
 }

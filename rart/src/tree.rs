@@ -129,6 +129,10 @@ impl<KeyType: KeyTrait, ValueType> TreeTrait<KeyType, ValueType>
 
         Range::empty()
     }
+
+    fn is_empty(&self) -> bool {
+        self.root.is_none()
+    }
 }
 
 impl<KeyType, ValueType> TreeStatsTrait for AdaptiveRadixTree<KeyType, ValueType>
