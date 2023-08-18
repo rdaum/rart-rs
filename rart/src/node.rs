@@ -4,7 +4,7 @@ use crate::mapping::indexed_mapping::IndexedMapping;
 use crate::mapping::sorted_keyed_mapping::SortedKeyedMapping;
 use crate::mapping::NodeMapping;
 use crate::partials::Partial;
-use crate::utils::bitset::{Bitset64};
+use crate::utils::bitset::Bitset64;
 
 pub trait Node<P: Partial, V> {
     fn new_leaf(partial: P, value: V) -> Self;
