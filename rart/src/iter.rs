@@ -33,15 +33,27 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> IterInner<'a, K, P, V
 
 impl<'a, K: KeyTrait<PartialType = P> + 'a, P: Partial + 'a, V> Iter<'a, K, P, V> {
     pub(crate) fn new(node: Option<&'a DefaultNode<P, V>>) -> Self {
-        if node.is_none() {
+        let Some(root_node) = node else {
             return Self {
                 inner: Box::new(std::iter::empty()),
+                _marker: Default::default(),
+            };
+        };
+
+        // If root is a leaf, we can just return it.
+        if root_node.is_leaf() {
+            let root_key = K::new_from_partial(&root_node.prefix);
+            let root_value = root_node
+                .value()
+                .expect("corruption: missing data at leaf node during iteration");
+            return Self {
+                inner: Box::new(std::iter::once((root_key, root_value))),
                 _marker: Default::default(),
             };
         }
 
         Self {
-            inner: Box::new(IterInner::<K, P, V>::new(node.unwrap())),
+            inner: Box::new(IterInner::<K, P, V>::new(root_node)),
             _marker: Default::default(),
         }
     }
@@ -71,11 +83,11 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> Iterator for IterInne
             // parent, and continue there.
             let Some((_k, node)) = last_iter.next() else {
                 let _ = self.node_iter_stack.pop().unwrap();
-                // If we're at the root node, we're done.
-                let Some((parent_depth, _)) = self.node_iter_stack.last() else {
-                    return None;
+                // Get the parent-depth, and truncate our working key to that depth. If there is no
+                // parent, no need to truncate, we'll be done in the next loop
+                if let Some((parent_depth, _)) = self.node_iter_stack.last() {
+                    self.cur_key = self.cur_key.truncate(*parent_depth);
                 };
-                self.cur_key = self.cur_key.truncate(*parent_depth);
                 continue;
             };
 

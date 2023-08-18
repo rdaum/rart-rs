@@ -533,6 +533,15 @@ mod tests {
     }
 
     #[test]
+    fn test_iter_one_regression() {
+        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, u64>::new();
+        tree.insert(&123, 456);
+        let mut iter = tree.iter();
+        let result = iter.next().expect("Expected an entry");
+        assert_eq!(result.1, &456)
+    }
+
+    #[test]
     // The following cases were found by fuzzing, and identified bugs in `remove`
     fn test_delete_regressions() {
         // DO_INSERT,12297829382473034287,72245244022401706

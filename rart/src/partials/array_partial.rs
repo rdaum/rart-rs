@@ -28,7 +28,12 @@ impl<const SIZE: usize> ArrPartial<SIZE> {
     }
 
     pub fn from_slice(src: &[u8]) -> Self {
-        assert!(src.len() < SIZE);
+        assert!(
+            src.len() <= SIZE,
+            "data length {} is greater than maximum partial length {}",
+            src.len(),
+            SIZE
+        );
         let mut data = [0; SIZE];
         data[..src.len()].copy_from_slice(src);
         Self {
