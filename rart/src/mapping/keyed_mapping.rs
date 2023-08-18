@@ -41,6 +41,7 @@ where
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn from_indexed<const IDX_WIDTH: usize, FromBitset: BitsetTrait>(
         im: &mut IndexedMapping<N, IDX_WIDTH, FromBitset>,
     ) -> Self {
@@ -105,6 +106,7 @@ where
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub(crate) fn iter(&self) -> impl Iterator<Item = (u8, &N)> {
         self.keys
             .iter()
