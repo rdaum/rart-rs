@@ -186,11 +186,7 @@ where
 
     #[inline]
     fn index(&self, pos: usize) -> &Self::Output {
-        if self.check(pos) {
-            &true
-        } else {
-            &false
-        }
+        if self.check(pos) { &true } else { &false }
     }
 }
 

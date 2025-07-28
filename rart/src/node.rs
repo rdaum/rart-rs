@@ -1,8 +1,8 @@
 use crate::mapping::direct_mapping::DirectMapping;
 use crate::mapping::indexed_mapping::IndexedMapping;
 
-use crate::mapping::sorted_keyed_mapping::SortedKeyedMapping;
 use crate::mapping::NodeMapping;
+use crate::mapping::sorted_keyed_mapping::SortedKeyedMapping;
 use crate::partials::Partial;
 use crate::utils::bitset::Bitset64;
 
@@ -293,13 +293,13 @@ impl<P: Partial, V> DefaultNode<P, V> {
     }
 
     pub fn iter(&self) -> Box<dyn Iterator<Item = (u8, &Self)> + '_> {
-        return match &self.content {
+        match &self.content {
             Content::Node4(n) => Box::new(n.iter()),
             Content::Node16(n) => Box::new(n.iter()),
             Content::Node48(n) => Box::new(n.iter()),
-            Content::Node256(n) => Box::new(n.iter().map(|(k, v)| (k, v))),
+            Content::Node256(n) => Box::new(n.iter()),
             Content::Leaf(_) => Box::new(std::iter::empty()),
-        };
+        }
     }
 }
 

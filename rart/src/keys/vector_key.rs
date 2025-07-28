@@ -1,10 +1,8 @@
-use std::mem;
-
 use crate::keys::KeyTrait;
 use crate::partials::vector_partial::VectorPartial;
 
 // Owns variable sized key data. Used especially for strings where a null-termination is required.
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub struct VectorKey {
     data: Box<[u8]>,
 }
@@ -131,7 +129,7 @@ impl_from_unsigned!(u8, u16, u32, u64, usize, u128);
 
 impl From<i8> for VectorKey {
     fn from(val: i8) -> Self {
-        let v: u8 = unsafe { mem::transmute(val) };
+        let v: u8 = val.cast_unsigned();
         let i = (v ^ 0x80) & 0x80;
         let j = i | (v & 0x7F);
         let v = vec![j];
@@ -143,7 +141,7 @@ macro_rules! impl_from_signed {
     ( $t:ty, $tu:ty ) => {
         impl From<$t> for VectorKey {
             fn from(val: $t) -> Self {
-                let v: $tu = unsafe { mem::transmute(val) };
+                let v: $tu = val.cast_unsigned();
                 let xor = 1 << (std::mem::size_of::<$tu>() - 1);
                 let i = (v ^ xor) & xor;
                 let j = i | (v & (<$tu>::MAX >> 1));
@@ -167,8 +165,8 @@ impl_from_signed!(isize, usize);
 
 #[cfg(test)]
 mod test {
-    use crate::keys::vector_key::VectorKey;
     use crate::keys::KeyTrait;
+    use crate::keys::vector_key::VectorKey;
     use crate::partials::vector_partial::VectorPartial;
 
     #[test]

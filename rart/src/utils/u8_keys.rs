@@ -8,7 +8,8 @@ mod simd_keys {
     simd_runtime_generate!(
         pub fn simdeez_find_insert_pos(key: u8, keys: &[u8], ff_mask_out: u32) -> Option<usize> {
             let key_cmp_vec = S::Vi8::set1(key as i8);
-            let key_vec = SimdBaseIo::load_from_ptr_unaligned(keys.as_ptr() as *const i8);
+            let key_vec =
+                unsafe { SimdBaseIo::load_from_ptr_unaligned(keys.as_ptr() as *const i8) };
             let results = key_cmp_vec.cmp_lt(key_vec);
             let bitfield = results.get_mask() & (ff_mask_out as u32);
             if bitfield != 0 {
@@ -22,7 +23,8 @@ mod simd_keys {
     simd_runtime_generate!(
         pub fn simdeez_find_key(key: u8, keys: &[u8], ff_mask_out: u32) -> Option<usize> {
             let key_cmp_vec = S::Vi8::set1(key as i8);
-            let key_vec = SimdBaseIo::load_from_ptr_unaligned(keys.as_ptr() as *const i8);
+            let key_vec =
+                unsafe { SimdBaseIo::load_from_ptr_unaligned(keys.as_ptr() as *const i8) };
             let results = key_cmp_vec.cmp_eq(key_vec);
             let bitfield = results.get_mask() & (ff_mask_out as u32);
             if bitfield != 0 {

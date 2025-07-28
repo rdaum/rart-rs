@@ -1,5 +1,5 @@
-use crate::mapping::indexed_mapping::IndexedMapping;
 use crate::mapping::NodeMapping;
+use crate::mapping::indexed_mapping::IndexedMapping;
 use crate::utils::bitarray::BitArray;
 use crate::utils::bitset::{Bitset64, BitsetTrait};
 
@@ -33,7 +33,14 @@ impl<N> DirectMapping<N> {
 
     #[inline]
     pub fn iter(&self) -> impl Iterator<Item = (u8, &N)> {
-        self.children.iter().map(|(key, node)| (key as u8, node))
+        // Collect key-node pairs and sort by key to ensure ordered iteration
+        let mut pairs: Vec<_> = self
+            .children
+            .iter()
+            .map(|(key, node)| (key as u8, node))
+            .collect();
+        pairs.sort_by_key(|(key, _)| *key);
+        pairs.into_iter()
     }
 }
 

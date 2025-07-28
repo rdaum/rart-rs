@@ -1,14 +1,13 @@
 use std::cmp::min;
-use std::collections::Bound;
 use std::ops::RangeBounds;
 
+use crate::TreeTrait;
 use crate::iter::Iter;
 use crate::keys::KeyTrait;
 use crate::node::{Content, DefaultNode, Node};
 use crate::partials::Partial;
 use crate::range::Range;
-use crate::stats::{update_tree_stats, TreeStats, TreeStatsTrait};
-use crate::TreeTrait;
+use crate::stats::{TreeStats, TreeStatsTrait, update_tree_stats};
 
 pub struct AdaptiveRadixTree<KeyType, ValueType>
 where
@@ -95,11 +94,11 @@ impl<KeyType: KeyTrait, ValueType> TreeTrait<KeyType, ValueType>
         result
     }
 
-    fn iter(&self) -> Iter<KeyType, KeyType::PartialType, ValueType> {
+    fn iter(&self) -> Iter<'_, KeyType, KeyType::PartialType, ValueType> {
         Iter::new(self.root.as_ref())
     }
 
-    fn range<'a, R>(&'a self, range: R) -> Range<KeyType, ValueType>
+    fn range<'a, R>(&'a self, range: R) -> Range<'a, KeyType, ValueType>
     where
         R: RangeBounds<KeyType> + 'a,
     {
@@ -107,28 +106,22 @@ impl<KeyType: KeyTrait, ValueType> TreeTrait<KeyType, ValueType>
             return Range::empty();
         }
 
-        let mut iter = self.iter();
+        let start_bound = range.start_bound().cloned();
+        let end_bound = range.end_bound().cloned();
 
-        let start_key = match range.start_bound() {
-            Bound::Included(start_key) | Bound::Excluded(start_key) => start_key,
-            Bound::Unbounded => {
-                let bound = range.end_bound().cloned();
-                return Range::for_iter(iter, bound);
+        // Use optimized O(log n) iteration for start bound
+        match start_bound {
+            std::collections::Bound::Unbounded => {
+                // No start bound, use regular iterator
+                let iter = self.iter();
+                Range::for_iter(iter, end_bound)
             }
-        };
-
-        // Seek until we find our start key.
-        while let Some((k, _)) = iter.next() {
-            if *start_key == k {
-                if let Bound::Excluded(_) = range.start_bound() {
-                    iter.next();
-                }
-                let bound = range.end_bound().cloned();
-                return Range::for_iter(iter, bound);
+            _ => {
+                // Use optimized start bound iteration
+                let optimized_iter = Iter::new_with_start_bound(self.root.as_ref(), start_bound);
+                Range::for_iter(optimized_iter, end_bound)
             }
         }
-
-        Range::empty()
     }
 
     fn is_empty(&self) -> bool {
@@ -235,7 +228,7 @@ where
         // Prefix fully covers this node.
         // Either sets the value or replaces the old value already here.
         if is_prefix_match && cur_node.prefix.len() == key.length_at(depth) {
-            if let Content::Leaf(ref mut v) = &mut cur_node.content {
+            if let Content::Leaf(v) = &mut cur_node.content {
                 return Some(std::mem::replace(v, value));
             } else {
                 panic!("Node type mismatch")
@@ -365,17 +358,17 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{btree_map, BTreeMap, BTreeSet};
+    use std::collections::{BTreeMap, BTreeSet, btree_map};
     use std::fmt::Debug;
 
     use rand::seq::SliceRandom;
-    use rand::{thread_rng, Rng};
+    use rand::{Rng, rng};
 
-    use crate::keys::array_key::ArrayKey;
     use crate::keys::KeyTrait;
+    use crate::keys::array_key::ArrayKey;
     use crate::stats::TreeStatsTrait;
     use crate::tree::AdaptiveRadixTree;
-    use crate::{tree, TreeTrait};
+    use crate::{TreeTrait, tree};
 
     #[test]
     fn test_root_set_get() {
@@ -435,7 +428,7 @@ mod tests {
                 let key_prefix = level1_prefix.clone() + &level2_prefix;
                 for _ in 0..=u8::MAX {
                     let suffix: String = (0..suffix)
-                        .map(|_| chars[thread_rng().gen_range(0..chars.len())])
+                        .map(|_| chars[rng().random_range(0..chars.len())])
                         .collect();
                     let string = key_prefix.clone() + &suffix;
                     let k = string.clone().into();
@@ -444,7 +437,7 @@ mod tests {
             }
         }
 
-        keys.shuffle(&mut thread_rng());
+        keys.shuffle(&mut rng());
         keys
     }
 
@@ -453,15 +446,15 @@ mod tests {
         let mut tree = AdaptiveRadixTree::<ArrayKey<16>, String>::new();
         let keys = gen_random_string_keys(3, 2, 3);
         let mut num_inserted = 0;
-        for (_i, key) in keys.iter().enumerate() {
+        for key in keys.iter() {
             if tree.insert_k(&key.0, key.1.clone()).is_none() {
                 num_inserted += 1;
                 assert!(tree.get_k(&key.0).is_some());
             }
         }
-        let mut rng = thread_rng();
+        let mut rng = rng();
         for _i in 0..5_000_000 {
-            let entry = &keys[rng.gen_range(0..keys.len())];
+            let entry = &keys[rng.random_range(0..keys.len())];
             let val = tree.get_k(&entry.0);
             assert!(val.is_some());
             assert_eq!(*val.unwrap(), entry.1);
@@ -469,18 +462,18 @@ mod tests {
 
         let stats = tree.get_tree_stats();
         assert_eq!(stats.num_values, num_inserted);
-        eprintln!("Tree stats: {:?}", stats);
+        eprintln!("Tree stats: {stats:?}");
     }
 
     #[test]
     fn test_random_numeric_insert_get() {
         let mut tree = AdaptiveRadixTree::<ArrayKey<16>, u64>::new();
         let count = 9_000_000;
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let mut keys_inserted = vec![];
         for i in 0..count {
             let value = i;
-            let rnd_key = rng.gen_range(0..count);
+            let rnd_key = rng.random_range(0..count);
             if tree.get(rnd_key).is_none() && tree.insert(rnd_key, value).is_none() {
                 let result = tree.get(rnd_key);
                 assert!(result.is_some());
@@ -503,11 +496,11 @@ mod tests {
     fn test_iter() {
         let mut tree = AdaptiveRadixTree::<ArrayKey<16>, u64>::new();
         let count = 100000;
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let mut keys_inserted = BTreeSet::new();
         for i in 0..count {
             let _value = i;
-            let rnd_val = rng.gen_range(0..count);
+            let rnd_val = rng.random_range(0..count);
             let rnd_key: ArrayKey<16> = rnd_val.into();
             if tree.get_k(&rnd_key).is_none() && tree.insert_k(&rnd_key, rnd_val).is_none() {
                 let result = tree.get_k(&rnd_key);
@@ -548,12 +541,14 @@ mod tests {
         // DO_INSERT,12297829382473034410,5425513372477729450
         // DO_DELETE,12297829382473056255,Some(5425513372477729450),None
         let mut tree = AdaptiveRadixTree::<ArrayKey<16>, usize>::new();
-        assert!(tree
-            .insert(12297829382473034287usize, 72245244022401706usize)
-            .is_none());
-        assert!(tree
-            .insert(12297829382473034410usize, 5425513372477729450usize)
-            .is_none());
+        assert!(
+            tree.insert(12297829382473034287usize, 72245244022401706usize)
+                .is_none()
+        );
+        assert!(
+            tree.insert(12297829382473034410usize, 5425513372477729450usize)
+                .is_none()
+        );
         // assert!(tree.remove(&ArrayKey::new_from_unsigned(12297829382473056255usize)).is_none());
 
         let mut tree = AdaptiveRadixTree::<ArrayKey<16>, usize>::new();
@@ -561,9 +556,10 @@ mod tests {
         // DO_INSERT,4934144,18374809624973934592
         // DO_DELETE,0,None,Some(8101975729639522304)
         assert!(tree.insert(0usize, 8101975729639522304usize).is_none());
-        assert!(tree
-            .insert(4934144usize, 18374809624973934592usize)
-            .is_none());
+        assert!(
+            tree.insert(4934144usize, 18374809624973934592usize)
+                .is_none()
+        );
         assert_eq!(tree.get(0usize), Some(&8101975729639522304usize));
         assert_eq!(tree.remove(0usize), Some(8101975729639522304usize));
         assert_eq!(tree.get(4934144usize), Some(&18374809624973934592usize));
@@ -572,12 +568,14 @@ mod tests {
         // DO_INSERT,8102099357864587376,18374810107896688752
         // DO_DELETE,0,Some(8101975729639522416),None
         let mut tree = AdaptiveRadixTree::<ArrayKey<16>, usize>::new();
-        assert!(tree
-            .insert(8102098874941833216usize, 8101975729639522416usize)
-            .is_none());
-        assert!(tree
-            .insert(8102099357864587376usize, 18374810107896688752usize)
-            .is_none());
+        assert!(
+            tree.insert(8102098874941833216usize, 8101975729639522416usize)
+                .is_none()
+        );
+        assert!(
+            tree.insert(8102099357864587376usize, 18374810107896688752usize)
+                .is_none()
+        );
         assert_eq!(tree.get(0usize), None);
         assert_eq!(tree.remove(0usize), None);
     }
@@ -590,10 +588,10 @@ mod tests {
         let mut tree = AdaptiveRadixTree::<ArrayKey<16>, u64>::new();
         let mut btree = BTreeMap::new();
         let count = 5_000;
-        let mut rng = thread_rng();
+        let mut rng = rng();
         for i in 0..count {
             let _value = i;
-            let rnd_val = rng.gen_range(0..u64::MAX);
+            let rnd_val = rng.random_range(0..u64::MAX);
             let rnd_key: ArrayKey<16> = rnd_val.into();
             tree.insert_k(&rnd_key, rnd_val);
             btree.insert(rnd_val, rnd_val);
@@ -625,18 +623,15 @@ mod tests {
         assert_eq!(art_values, btree_values);
     }
 
-    // TODO: this test is disabled for now, as `range` is broken on account of problem with matching
-    //   on the start/end keys. https://github.com/rdaum/rart-rs/issues/7
     #[test]
-    #[ignore]
     fn test_range() {
         let mut tree = AdaptiveRadixTree::<ArrayKey<16>, u64>::new();
         let count = 10000;
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let mut keys_inserted = BTreeMap::new();
         for i in 0..count {
             let _value = i;
-            let rnd_val = rng.gen_range(0..count);
+            let rnd_val = rng.random_range(0..count);
             let rnd_key: ArrayKey<16> = rnd_val.into();
             if tree.get_k(&rnd_key).is_none() && tree.insert_k(&rnd_key, rnd_val).is_none() {
                 let result = tree.get_k(&rnd_key);

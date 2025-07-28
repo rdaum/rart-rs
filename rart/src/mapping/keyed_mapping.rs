@@ -1,5 +1,5 @@
-use crate::mapping::indexed_mapping::IndexedMapping;
 use crate::mapping::NodeMapping;
+use crate::mapping::indexed_mapping::IndexedMapping;
 use crate::utils::bitarray::BitArray;
 use crate::utils::bitset::BitsetTrait;
 use crate::utils::u8_keys::u8_keys_find_key_position;
@@ -171,9 +171,9 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> Drop for KeyedMapping<N, WIDTH,
 
 #[cfg(test)]
 mod tests {
-    use crate::mapping::keyed_mapping::KeyedMapping;
     use crate::mapping::NodeMapping;
-    use crate::utils::bitset::{Bitset16, Bitset8};
+    use crate::mapping::keyed_mapping::KeyedMapping;
+    use crate::utils::bitset::{Bitset8, Bitset16};
 
     #[test]
     fn test_fits_in_cache_line() {

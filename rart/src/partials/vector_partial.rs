@@ -1,7 +1,7 @@
 use std::cmp::min;
 
-use crate::keys::vector_key::VectorKey;
 use crate::keys::KeyTrait;
+use crate::keys::vector_key::VectorKey;
 use crate::partials::Partial;
 
 #[derive(Clone, PartialEq, Eq, Debug)]

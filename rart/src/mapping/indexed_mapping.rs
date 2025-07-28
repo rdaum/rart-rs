@@ -1,9 +1,9 @@
 use std::mem::MaybeUninit;
 
+use crate::mapping::NodeMapping;
 use crate::mapping::direct_mapping::DirectMapping;
 use crate::mapping::keyed_mapping::KeyedMapping;
 use crate::mapping::sorted_keyed_mapping::SortedKeyedMapping;
-use crate::mapping::NodeMapping;
 use crate::utils::bitarray::BitArray;
 use crate::utils::bitset::{Bitset64, BitsetTrait};
 
@@ -78,9 +78,14 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> IndexedMapping<N, WIDTH, Bitset
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (u8, &N)> {
-        self.child_ptr_indexes
+        // Collect key-node pairs and sort by key to ensure ordered iteration
+        let mut pairs: Vec<_> = self
+            .child_ptr_indexes
             .iter()
-            .map(move |(key, pos)| (key as u8, &self.children[*pos as usize]))
+            .map(|(key, pos)| (key as u8, &self.children[*pos as usize]))
+            .collect();
+        pairs.sort_by_key(|(key, _)| *key);
+        pairs.into_iter()
     }
 }
 

@@ -1,29 +1,29 @@
 [package]
 name = "rart"
 description = "Ryan's Adaptive Radix Tree"
-authors = ["Ryan Daum <ryan.daum@gmail.com>"]
-license = "Apache-2.0"
-homepage = "https://github.com/rdaum/rart-rs"
-repository = "https://github.com/rdaum/rart-rs"
 keywords = ["datastructure", "tree", "radix", "index"]
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
 
 [dev-dependencies]
-criterion = { version = "0.5.1", features = ["html_reports"] }
-iai-callgrind = "0.4.0"
-paste = "1.0.12"
-rand = "0.8"
-csv="1.2.1"
+criterion.workspace = true
+iai-callgrind.workspace = true
+paste.workspace = true
+rand.workspace = true
+csv.workspace = true
 
 [features]
 default = ["simd_keys"]
 simd_keys = ["dep:simdeez"]
 
 [dependencies]
-num-traits = "0.2.16"
-simdeez = { version = "2.0.0-dev3", optional = true }
-crossbeam-utils = "0.8.16"
+num-traits.workspace = true
+simdeez = { workspace = true, optional = true }
+crossbeam-utils.workspace = true
 
 [[bench]]
 name = "art_bench"
@@ -37,10 +37,10 @@ harness = false
 name = "node_mapping_microbenches"
 harness = false
 
-[[bench]]
-name = "art_iai_bench"
-harness = false
+# [[bench]]
+# name = "art_iai_bench"
+# harness = false
 
-[[bench]]
-name = "node_mapping_iai_microbenches"
-harness = false
+# [[bench]]
+# name = "node_mapping_iai_microbenches"
+# harness = false

@@ -3,14 +3,14 @@
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
-use criterion::{criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 
+use rart::mapping::NodeMapping;
 use rart::mapping::direct_mapping::DirectMapping;
 use rart::mapping::indexed_mapping::IndexedMapping;
 use rart::mapping::keyed_mapping::KeyedMapping;
 use rart::mapping::sorted_keyed_mapping::SortedKeyedMapping;
-use rart::mapping::NodeMapping;
-use rart::utils::bitset::{Bitset16, Bitset32, Bitset64, Bitset8, BitsetTrait};
+use rart::utils::bitset::{Bitset8, Bitset16, Bitset32, Bitset64, BitsetTrait};
 
 type KeyMapping32_32x1 = KeyedMapping<u64, 32, Bitset32<1>>;
 type KeyMapping32_16x2 = KeyedMapping<u64, 32, Bitset16<2>>;
@@ -33,7 +33,7 @@ where
         make_mapping_sets::<FROM_WIDTH, KeyedMapping<u64, FROM_WIDTH, FromBitset>>(iters);
 
     // Fill them up with children
-    for (ref mut mapping, child_set) in &mut mapping_set {
+    for (mapping, child_set) in &mut mapping_set {
         for child in child_set {
             mapping.add_child(*child, 0u64);
         }
@@ -41,7 +41,7 @@ where
 
     // Now go through and grow each node.
     let start = Instant::now();
-    for (ref mut mapping, _child_set) in &mut mapping_set {
+    for (mapping, _child_set) in &mut mapping_set {
         let _new: KeyedMapping<u64, TO_WIDTH, ToBitset> = KeyedMapping::from_resized_grow(mapping);
     }
     start.elapsed()
@@ -64,14 +64,14 @@ where
         make_mapping_sets::<FROM_WIDTH, KeyedMapping<u64, FROM_WIDTH, FromBitset>>(iters);
 
     // Fill them up with children
-    for (ref mut mapping, child_set) in &mut mapping_set {
+    for (mapping, child_set) in &mut mapping_set {
         for child in child_set {
             mapping.add_child(*child, 0u64);
         }
     }
 
     let start = Instant::now();
-    for (ref mut mapping, _child_set) in &mut mapping_set {
+    for (mapping, _child_set) in &mut mapping_set {
         let _new: IndexedMapping<u64, TO_WIDTH, ToBitset> = IndexedMapping::from_keyed(mapping);
     }
     start.elapsed()
@@ -85,14 +85,14 @@ fn bench_grow_indexed_to_direct<const FROM_WIDTH: usize, FromBitset: BitsetTrait
         make_mapping_sets::<FROM_WIDTH, IndexedMapping<u64, FROM_WIDTH, FromBitset>>(iters);
 
     // Fill them up with children
-    for (ref mut mapping, child_set) in &mut mapping_set {
+    for (mapping, child_set) in &mut mapping_set {
         for child in child_set {
             mapping.add_child(*child, 0u64);
         }
     }
 
     let start = Instant::now();
-    for (ref mut mapping, _child_set) in &mut mapping_set {
+    for (mapping, _child_set) in &mut mapping_set {
         let _new: DirectMapping<u64> = DirectMapping::from_indexed(mapping);
     }
     start.elapsed()
@@ -104,7 +104,7 @@ where
 {
     let mut mapping_set = make_mapping_sets::<WIDTH, MappingType>(iters);
     let start = Instant::now();
-    for (ref mut mapping, child_set) in &mut mapping_set {
+    for (mapping, child_set) in &mut mapping_set {
         for child in child_set {
             mapping.add_child(*child, 0u64);
         }
@@ -118,7 +118,7 @@ where
 {
     let mut mapping_set = make_mapping_sets::<WIDTH, MappingType>(iters);
     // Fill all the sets.
-    for (ref mut mapping, child_set) in &mut mapping_set {
+    for (mapping, child_set) in &mut mapping_set {
         for child in child_set {
             mapping.add_child(*child, 0u64);
         }
@@ -126,7 +126,7 @@ where
 
     // Then time the deletion only.
     let start = Instant::now();
-    for (ref mut mapping, child_set) in &mut mapping_set {
+    for (mapping, child_set) in &mut mapping_set {
         for child in child_set {
             mapping.delete_child(*child);
         }
@@ -140,7 +140,7 @@ where
 {
     let mut mapping_set = make_mapping_sets::<WIDTH, MappingType>(iters);
     // Fill all the sets.
-    for (ref mut mapping, child_set) in &mut mapping_set {
+    for (mapping, child_set) in &mut mapping_set {
         for child in child_set {
             mapping.add_child(*child, 0u64);
         }
@@ -148,7 +148,7 @@ where
 
     // Then time the find only.
     let start = Instant::now();
-    for (ref mut mapping, child_set) in &mut mapping_set {
+    for (mapping, child_set) in &mut mapping_set {
         for child in child_set {
             mapping.seek_child(*child);
         }

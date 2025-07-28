@@ -1,10 +1,8 @@
-use std::mem;
-
 use crate::keys::KeyTrait;
-use crate::partials::array_partial::ArrPartial;
 use crate::partials::Partial;
+use crate::partials::array_partial::ArrPartial;
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq, Debug)]
 pub struct ArrayKey<const N: usize> {
     data: [u8; N],
     len: usize,
@@ -49,6 +47,19 @@ impl<const N: usize> ArrayKey<N> {
         let mut arr = [0; 8];
         arr[8 - self.len..].copy_from_slice(&self.data[..self.len]);
         u64::from_be_bytes(arr)
+    }
+}
+
+impl<const N: usize> PartialOrd for ArrayKey<N> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<const N: usize> Ord for ArrayKey<N> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Compare only the used portion of the key data
+        self.as_slice().cmp(other.as_slice())
     }
 }
 
@@ -152,7 +163,7 @@ impl_from_unsigned!(u8, u16, u32, u64, usize, u128);
 
 impl<const N: usize> From<i8> for ArrayKey<N> {
     fn from(val: i8) -> Self {
-        let v: u8 = unsafe { mem::transmute(val) };
+        let v: u8 = val.cast_unsigned();
         let i = (v ^ 0x80) & 0x80;
         let j = i | (v & 0x7F);
         let mut data = [0; N];
@@ -165,7 +176,7 @@ macro_rules! impl_from_signed {
     ( $t:ty, $tu:ty ) => {
         impl<const N: usize> From<$t> for ArrayKey<N> {
             fn from(val: $t) -> Self {
-                let v: $tu = unsafe { mem::transmute(val) };
+                let v: $tu = val.cast_unsigned();
                 let xor = 1 << (std::mem::size_of::<$tu>() - 1);
                 let i = (v ^ xor) & xor;
                 let j = i | (v & (<$tu>::MAX >> 1));
@@ -189,8 +200,8 @@ impl_from_signed!(isize, usize);
 
 #[cfg(test)]
 mod test {
-    use crate::keys::array_key::ArrayKey;
     use crate::keys::KeyTrait;
+    use crate::keys::array_key::ArrayKey;
     use crate::partials::array_partial::ArrPartial;
 
     #[test]

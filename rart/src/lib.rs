@@ -3,7 +3,7 @@ use crate::keys::KeyTrait;
 use crate::range::Range;
 use std::ops::RangeBounds;
 
-pub mod concurrent;
+mod debug_test;
 pub mod iter;
 pub mod keys;
 pub mod mapping;
@@ -50,9 +50,9 @@ where
     }
     fn remove_k(&mut self, key: &KeyType) -> Option<ValueType>;
 
-    fn iter(&self) -> Iter<KeyType, KeyType::PartialType, ValueType>;
+    fn iter(&self) -> Iter<'_, KeyType, KeyType::PartialType, ValueType>;
 
-    fn range<'a, R>(&'a self, range: R) -> Range<KeyType, ValueType>
+    fn range<'a, R>(&'a self, range: R) -> Range<'a, KeyType, ValueType>
     where
         R: RangeBounds<KeyType> + 'a;
 

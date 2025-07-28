@@ -1,7 +1,7 @@
 use std::mem::MaybeUninit;
 
-use crate::mapping::indexed_mapping::IndexedMapping;
 use crate::mapping::NodeMapping;
+use crate::mapping::indexed_mapping::IndexedMapping;
 use crate::utils::bitset::BitsetTrait;
 use crate::utils::u8_keys::{
     u8_keys_find_insert_position_sorted, u8_keys_find_key_position_sorted,
@@ -111,7 +111,7 @@ impl<N, const WIDTH: usize> NodeMapping<N, WIDTH> for SortedKeyedMapping<N, WIDT
     fn seek_child_mut(&mut self, key: u8) -> Option<&mut N> {
         let idx =
             u8_keys_find_key_position_sorted::<WIDTH>(key, &self.keys, self.num_children as usize)?;
-        return Some(unsafe { self.children[idx].assume_init_mut() });
+        Some(unsafe { self.children[idx].assume_init_mut() })
     }
 
     fn delete_child(&mut self, key: u8) -> Option<N> {

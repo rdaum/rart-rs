@@ -4,14 +4,14 @@
 use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use rand::prelude::SliceRandom;
-use rand::{thread_rng, Rng};
+use rand::{Rng, rng};
 
 use rart::keys::array_key::ArrayKey;
 
-use rart::tree::AdaptiveRadixTree;
 use rart::TreeTrait;
+use rart::tree::AdaptiveRadixTree;
 
 const TREE_SIZES: [u64; 4] = [1 << 15, 1 << 20, 1 << 22, 1 << 24];
 
@@ -59,36 +59,36 @@ pub fn rand_insert(c: &mut Criterion) {
 
     group.bench_function("art_cached_keys", |b| {
         let mut tree = AdaptiveRadixTree::<ArrayKey<16>, _>::new();
-        let mut rng = thread_rng();
+        let mut rng = rng();
         b.iter(|| {
-            let key = &cached_keys[rng.gen_range(0..cached_keys.len())];
+            let key = &cached_keys[rng.random_range(0..cached_keys.len())];
             tree.insert_k(&key.0, key.1.clone());
         })
     });
 
     group.bench_function("art", |b| {
         let mut tree = AdaptiveRadixTree::<ArrayKey<16>, _>::new();
-        let mut rng = thread_rng();
+        let mut rng = rng();
         b.iter(|| {
-            let key = &keys[rng.gen_range(0..keys.len())];
+            let key = &keys[rng.random_range(0..keys.len())];
             tree.insert(key, key.clone());
         })
     });
 
     group.bench_function("hash", |b| {
         let mut tree = HashMap::new();
-        let mut rng = thread_rng();
+        let mut rng = rng();
         b.iter(|| {
-            let key = &keys[rng.gen_range(0..keys.len())];
+            let key = &keys[rng.random_range(0..keys.len())];
             tree.insert(key, key.clone());
         })
     });
 
     group.bench_function("btree", |b| {
         let mut tree = BTreeMap::new();
-        let mut rng = thread_rng();
+        let mut rng = rng();
         b.iter(|| {
-            let key = &keys[rng.gen_range(0..keys.len())];
+            let key = &keys[rng.random_range(0..keys.len())];
             tree.insert(key, key.clone());
         })
     });
@@ -151,48 +151,48 @@ pub fn rand_delete(c: &mut Criterion) {
     group.throughput(Throughput::Elements(1));
     group.bench_function("art", |b| {
         let mut tree = AdaptiveRadixTree::<ArrayKey<16>, _>::new();
-        let mut rng = thread_rng();
+        let mut rng = rng();
         for key in &keys {
             tree.insert(key, key);
         }
         b.iter(|| {
-            let key = &keys[rng.gen_range(0..keys.len())];
-            criterion::black_box(tree.remove(key));
+            let key = &keys[rng.random_range(0..keys.len())];
+            std::hint::black_box(tree.remove(key));
         })
     });
 
     group.bench_function("art_cached_keys", |b| {
         let mut tree = AdaptiveRadixTree::<ArrayKey<16>, _>::new();
-        let mut rng = thread_rng();
+        let mut rng = rng();
         for key in &cached_keys {
             tree.insert_k(&key.0, key.1.clone());
         }
         b.iter(|| {
-            let key = &cached_keys[rng.gen_range(0..keys.len())];
-            criterion::black_box(tree.remove_k(&key.0));
+            let key = &cached_keys[rng.random_range(0..keys.len())];
+            std::hint::black_box(tree.remove_k(&key.0));
         })
     });
     group.bench_function("hash", |b| {
         let mut tree = HashMap::new();
-        let mut rng = thread_rng();
+        let mut rng = rng();
         for key in &keys {
             tree.insert(key, key);
         }
         b.iter(|| {
-            let key = &keys[rng.gen_range(0..keys.len())];
-            criterion::black_box(tree.remove(key));
+            let key = &keys[rng.random_range(0..keys.len())];
+            std::hint::black_box(tree.remove(key));
         })
     });
 
     group.bench_function("btree", |b| {
         let mut tree = BTreeMap::new();
-        let mut rng = thread_rng();
+        let mut rng = rng();
         for key in &keys {
             tree.insert(key, key);
         }
         b.iter(|| {
-            let key = &keys[rng.gen_range(0..keys.len())];
-            criterion::black_box(tree.remove(key));
+            let key = &keys[rng.random_range(0..keys.len())];
+            std::hint::black_box(tree.remove(key));
         })
     });
     group.finish();
@@ -209,10 +209,10 @@ pub fn rand_get(c: &mut Criterion) {
                 for i in 0..*size {
                     tree.insert(i, i);
                 }
-                let mut rng = thread_rng();
+                let mut rng = rng();
                 b.iter(|| {
-                    let key = rng.gen_range(0..*size);
-                    criterion::black_box(tree.get(key));
+                    let key = rng.random_range(0..*size);
+                    std::hint::black_box(tree.get(key));
                 })
             });
         }
@@ -225,10 +225,10 @@ pub fn rand_get(c: &mut Criterion) {
                 for i in 0..*size {
                     tree.insert(i, i);
                 }
-                let mut rng = thread_rng();
+                let mut rng = rng();
                 b.iter(|| {
-                    let key = rng.gen_range(0..*size);
-                    criterion::black_box(tree.get(&key));
+                    let key = rng.random_range(0..*size);
+                    std::hint::black_box(tree.get(&key));
                 })
             });
         }
@@ -241,10 +241,10 @@ pub fn rand_get(c: &mut Criterion) {
                 for i in 0..*size {
                     tree.insert(i, i);
                 }
-                let mut rng = thread_rng();
+                let mut rng = rng();
                 b.iter(|| {
-                    let key = rng.gen_range(0..*size);
-                    criterion::black_box(tree.get(&key));
+                    let key = rng.random_range(0..*size);
+                    std::hint::black_box(tree.get(&key));
                 })
             });
         }
@@ -265,10 +265,10 @@ pub fn rand_get_str(c: &mut Criterion) {
                 for (i, key) in keys.iter().enumerate() {
                     tree.insert(key, i);
                 }
-                let mut rng = thread_rng();
+                let mut rng = rng();
                 b.iter(|| {
-                    let key = &keys[rng.gen_range(0..keys.len())];
-                    criterion::black_box(tree.get(key));
+                    let key = &keys[rng.random_range(0..keys.len())];
+                    std::hint::black_box(tree.get(key));
                 })
             });
         }
@@ -285,10 +285,10 @@ pub fn rand_get_str(c: &mut Criterion) {
                     for (i, key) in cached_keys.iter().enumerate() {
                         tree.insert_k(&key.0, i);
                     }
-                    let mut rng = thread_rng();
+                    let mut rng = rng();
                     b.iter(|| {
-                        let key = &cached_keys[rng.gen_range(0..keys.len())];
-                        criterion::black_box(tree.get_k(&key.0));
+                        let key = &cached_keys[rng.random_range(0..keys.len())];
+                        std::hint::black_box(tree.get_k(&key.0));
                     })
                 },
             );
@@ -302,10 +302,10 @@ pub fn rand_get_str(c: &mut Criterion) {
                 for (i, key) in keys.iter().enumerate() {
                     tree.insert(key, i);
                 }
-                let mut rng = thread_rng();
+                let mut rng = rng();
                 b.iter(|| {
-                    let key = &keys[rng.gen_range(0..keys.len())];
-                    criterion::black_box(tree.get(key));
+                    let key = &keys[rng.random_range(0..keys.len())];
+                    std::hint::black_box(tree.get(key));
                 })
             });
         }
@@ -318,10 +318,10 @@ pub fn rand_get_str(c: &mut Criterion) {
                 for (i, key) in keys.iter().enumerate() {
                     tree.insert(key, i);
                 }
-                let mut rng = thread_rng();
+                let mut rng = rng();
                 b.iter(|| {
-                    let key = &keys[rng.gen_range(0..keys.len())];
-                    criterion::black_box(tree.get(key));
+                    let key = &keys[rng.random_range(0..keys.len())];
+                    std::hint::black_box(tree.get(key));
                 })
             });
         }
@@ -343,7 +343,7 @@ pub fn seq_get(c: &mut Criterion) {
                 }
                 let mut key = 0u64;
                 b.iter(|| {
-                    criterion::black_box(tree.get(key));
+                    std::hint::black_box(tree.get(key));
                     key += 1;
                 })
             });
@@ -358,7 +358,7 @@ pub fn seq_get(c: &mut Criterion) {
                 }
                 let mut key = 0u64;
                 b.iter(|| {
-                    criterion::black_box(tree.get(&key));
+                    std::hint::black_box(tree.get(&key));
                     key += 1;
                 })
             });
@@ -374,7 +374,7 @@ pub fn seq_get(c: &mut Criterion) {
                 }
                 let mut key = 0u64;
                 b.iter(|| {
-                    criterion::black_box(tree.get(&key));
+                    std::hint::black_box(tree.get(&key));
                     key += 1;
                 })
             });
@@ -394,7 +394,7 @@ fn gen_keys(l1_prefix: usize, l2_prefix: usize, suffix: usize) -> Vec<String> {
             let key_prefix = level1_prefix.clone() + &level2_prefix;
             for _ in 0..=u8::MAX {
                 let suffix: String = (0..suffix)
-                    .map(|_| chars[thread_rng().gen_range(0..chars.len())])
+                    .map(|_| chars[rng().random_range(0..chars.len())])
                     .collect();
                 let k = key_prefix.clone() + &suffix;
                 keys.push(k);
@@ -402,7 +402,7 @@ fn gen_keys(l1_prefix: usize, l2_prefix: usize, suffix: usize) -> Vec<String> {
         }
     }
 
-    keys.shuffle(&mut thread_rng());
+    keys.shuffle(&mut rng());
     keys
 }
 
@@ -420,7 +420,7 @@ fn gen_cached_keys(
             let key_prefix = level1_prefix.clone() + &level2_prefix;
             for _ in 0..=u8::MAX {
                 let suffix: String = (0..suffix)
-                    .map(|_| chars[thread_rng().gen_range(0..chars.len())])
+                    .map(|_| chars[rng().random_range(0..chars.len())])
                     .collect();
                 let string = key_prefix.clone() + &suffix;
                 let k = string.clone().into();
@@ -429,7 +429,7 @@ fn gen_cached_keys(
         }
     }
 
-    keys.shuffle(&mut thread_rng());
+    keys.shuffle(&mut rng());
     keys
 }
 
