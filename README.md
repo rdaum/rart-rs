@@ -4,7 +4,7 @@ A high-performance, memory-efficient implementation of Adaptive Radix Trees (ART
 
 [![Crates.io](https://img.shields.io/crates/v/rart.svg)](https://crates.io/crates/rart)
 [![Documentation](https://docs.rs/rart/badge.svg)](https://docs.rs/rart)
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/rdaum/rart-rs/blob/main/LICENSE)
 
 ## Overview
 
@@ -89,14 +89,14 @@ rart delivers exceptional performance, particularly excelling in sequential acce
 - HashMap: 10ns
 - BTree: 22ns
 
-![Sequential Get Performance](benchmarks/graphs/seq_get_violin.svg)
+![Sequential Get Performance](https://github.com/rdaum/rart-rs/blob/main/benchmarks/graphs/seq_get_violin.svg)
 
 **Random Get Performance** (32k elements):  
 - **ART: 14ns** ⭐ (tied for fastest)
 - HashMap: 14ns  
 - BTree: 55ns
 
-![Random Get Performance](benchmarks/graphs/random_get_violin.svg)
+![Random Get Performance](https://github.com/rdaum/rart-rs/blob/main/benchmarks/graphs/random_get_violin.svg)
 
 **Key Performance Characteristics:**
 - **Sequential operations**: Exceptional performance due to prefix compression and cache locality
@@ -138,7 +138,7 @@ For detailed API documentation and examples, visit [docs.rs/rart](https://docs.r
 
 ## License
 
-Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
+Licensed under the Apache License, Version 2.0. See [LICENSE](https://github.com/rdaum/rart-rs/blob/main/LICENSE) for details.
 
 ## Contributing
 
