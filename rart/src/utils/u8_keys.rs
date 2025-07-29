@@ -76,6 +76,14 @@ pub fn u8_keys_find_insert_position_sorted<const WIDTH: usize>(
     keys: &[u8],
     num_children: usize,
 ) -> Option<usize> {
+    // Width 4 and under, just use linear search.
+    if WIDTH <= 4 {
+        return (0..num_children)
+            .rev()
+            .find(|&i| key < keys[i])
+            .or(Some(num_children));
+    }
+
     #[cfg(feature = "simd_keys")]
     {
         simd_keys::simdeez_find_insert_pos(key, keys, (1 << num_children) - 1)
