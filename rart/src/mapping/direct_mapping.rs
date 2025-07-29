@@ -33,9 +33,7 @@ impl<N> DirectMapping<N> {
 
     #[inline]
     pub fn iter(&self) -> impl Iterator<Item = (u8, &N)> {
-        self.children
-            .iter()
-            .map(|(key, node)| (key as u8, node))
+        self.children.iter().map(|(key, node)| (key as u8, node))
     }
 }
 
