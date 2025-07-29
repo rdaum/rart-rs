@@ -11,6 +11,21 @@ pub struct ArrPartial<const SIZE: usize> {
     len: usize,
 }
 
+impl<const SIZE: usize> AsRef<[u8]> for ArrPartial<SIZE> {
+    fn as_ref(&self) -> &[u8] {
+        &self.data[..self.len]
+    }
+}
+
+impl<'a, const SIZE: usize> IntoIterator for &'a ArrPartial<SIZE> {
+    type Item = &'a u8;
+    type IntoIter = std::slice::Iter<'a, u8>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.data[..self.len].iter()
+    }
+}
+
 impl<const SIZE: usize> PartialEq for ArrPartial<SIZE> {
     fn eq(&self, other: &Self) -> bool {
         self.data[..self.len] == other.data[..other.len]

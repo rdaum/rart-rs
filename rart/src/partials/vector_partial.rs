@@ -9,6 +9,12 @@ pub struct VectorPartial {
     data: Box<[u8]>,
 }
 
+impl AsRef<[u8]> for VectorPartial {
+    fn as_ref(&self) -> &[u8] {
+        &self.data
+    }
+}
+
 impl VectorPartial {
     pub fn key(src: &[u8]) -> Self {
         let mut data = Vec::with_capacity(src.len() + 1);

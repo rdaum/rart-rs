@@ -3,7 +3,7 @@ use crate::keys::KeyTrait;
 pub mod array_partial;
 pub mod vector_partial;
 
-pub trait Partial {
+pub trait Partial: AsRef<[u8]> {
     /// Returns a partial up to `length` bytes.
     fn partial_before(&self, length: usize) -> Self;
     /// Returns a partial from `src_offset` onwards with `length` bytes.
@@ -31,4 +31,19 @@ pub trait Partial {
     /// Return a slice form of the partial. Warning: could take copy, depending on the implementation.
     /// Really just for debugging purposes.
     fn to_slice(&self) -> &[u8];
+
+    /// Returns an iterator over the bytes in the partial.
+    fn iter(&self) -> std::slice::Iter<'_, u8> {
+        self.as_ref().iter()
+    }
+
+    /// Returns true if the partial starts with the given prefix.
+    fn starts_with(&self, prefix: &[u8]) -> bool {
+        self.as_ref().starts_with(prefix)
+    }
+
+    /// Returns true if the partial ends with the given suffix.
+    fn ends_with(&self, suffix: &[u8]) -> bool {
+        self.as_ref().ends_with(suffix)
+    }
 }

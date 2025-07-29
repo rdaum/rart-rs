@@ -7,6 +7,12 @@ pub struct VectorKey {
     data: Box<[u8]>,
 }
 
+impl AsRef<[u8]> for VectorKey {
+    fn as_ref(&self) -> &[u8] {
+        &self.data
+    }
+}
+
 impl VectorKey {
     pub fn new_from_string(s: &String) -> Self {
         let mut data = Vec::with_capacity(s.len() + 1);

@@ -8,6 +8,12 @@ pub struct ArrayKey<const N: usize> {
     len: usize,
 }
 
+impl<const N: usize> AsRef<[u8]> for ArrayKey<N> {
+    fn as_ref(&self) -> &[u8] {
+        &self.data[..self.len]
+    }
+}
+
 impl<const N: usize> ArrayKey<N> {
     pub fn new_from_str(s: &str) -> Self {
         assert!(s.len() + 1 < N, "data length is greater than array length");

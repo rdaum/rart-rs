@@ -3,7 +3,7 @@ use crate::partials::Partial;
 pub mod array_key;
 pub mod vector_key;
 
-pub trait KeyTrait: Clone + PartialEq + Eq + PartialOrd + Ord {
+pub trait KeyTrait: Clone + PartialEq + Eq + PartialOrd + Ord + AsRef<[u8]> {
     type PartialType: Partial + From<Self> + Clone + PartialEq;
 
     const MAXIMUM_SIZE: Option<usize>;
