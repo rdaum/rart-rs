@@ -1,0 +1,36 @@
+[package]
+name = "rart"
+description = "High-performance Adaptive Radix Tree implementation with SIMD optimizations"
+keywords = ["datastructure", "tree", "radix", "index"]
+categories = ["data-structures"]
+readme = "../README.md"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+rand.workspace = true
+
+[features]
+default = ["simd_keys"]
+simd_keys = ["dep:simdeez"]
+
+[dependencies]
+num-traits.workspace = true
+simdeez = { workspace = true, optional = true }
+
+[[bench]]
+name = "art_bench"
+harness = false
+
+[[bench]]
+name = "art_compare_bench"
+harness = false
+
+[[bench]]
+name = "node_mapping_microbenches"
+harness = false

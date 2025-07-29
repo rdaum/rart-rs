@@ -1,0 +1,48 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="RART - Ryan’s Adaptive Radix Tree"><title>rart - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-aa0817cf.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="rart" data-themes="" data-resource-suffix="" data-rustdoc-version="1.90.0-nightly (f8e355c23 2025-07-27)" data-channel="nightly" data-search-js="search-fa3e91e5.js" data-settings-js="settings-5514c975.js" ><script src="../static.files/storage-68b7e25d.js"></script><script defer src="../crates.js"></script><script defer src="../static.files/main-eebb9057.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-32bb7600.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc mod crate"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="mobile-topbar"><button class="sidebar-menu-toggle" title="show sidebar"></button></nav><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../rart/index.html">rart</a><span class="version">0.1.0</span></h2></div><div class="sidebar-elems"><ul class="block"><li><a id="all-types" href="all.html">All Items</a></li></ul><section id="rustdoc-toc"><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#rart---ryans-adaptive-radix-tree" title="RART - Ryan’s Adaptive Radix Tree">RART - Ryan’s Adaptive Radix Tree</a><ul><li><a href="#overview" title="Overview">Overview</a></li><li><a href="#quick-start" title="Quick Start">Quick Start</a></li><li><a href="#key-types" title="Key Types">Key Types</a></li></ul></li></ul><h3><a href="#reexports">Crate Items</a></h3><ul class="block"><li><a href="#reexports" title="Re-exports">Re-exports</a></li><li><a href="#modules" title="Modules">Modules</a></li><li><a href="#traits" title="Traits">Traits</a></li></ul></section><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1>Crate <span>rart</span><button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/rart/lib.rs.html#1-188">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><h2 id="rart---ryans-adaptive-radix-tree"><a class="doc-anchor" href="#rart---ryans-adaptive-radix-tree">§</a>RART - Ryan’s Adaptive Radix Tree</h2>
+<p>A high-performance, memory-efficient implementation of Adaptive Radix Trees (ART) in Rust.</p>
+<h3 id="overview"><a class="doc-anchor" href="#overview">§</a>Overview</h3>
+<p>Adaptive Radix Trees are a type of trie data structure that automatically adjusts
+its internal representation based on the number of children at each node, providing
+excellent performance characteristics:</p>
+<ul>
+<li><strong>Space efficient</strong>: Compact representation that adapts to data density</li>
+<li><strong>Cache friendly</strong>: Optimized memory layout for modern CPU architectures</li>
+<li><strong>Fast operations</strong>: O(k) complexity where k is the key length</li>
+<li><strong>Range queries</strong>: Efficient iteration over key ranges</li>
+</ul>
+<h3 id="quick-start"><a class="doc-anchor" href="#quick-start">§</a>Quick Start</h3>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>rart::{AdaptiveRadixTree, ArrayKey, TreeTrait};
+
+<span class="comment">// Create a new tree with fixed-size keys
+</span><span class="kw">let </span><span class="kw-2">mut </span>tree = AdaptiveRadixTree::&lt;ArrayKey&lt;<span class="number">16</span>&gt;, String&gt;::new();
+
+<span class="comment">// Insert some data
+</span>tree.insert(<span class="string">"hello"</span>, <span class="string">"world"</span>.to_string());
+tree.insert(<span class="string">"foo"</span>, <span class="string">"bar"</span>.to_string());
+
+<span class="comment">// Query the tree
+</span><span class="macro">assert_eq!</span>(tree.get(<span class="string">"hello"</span>), <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span><span class="string">"world"</span>.to_string()));
+<span class="macro">assert_eq!</span>(tree.get(<span class="string">"missing"</span>), <span class="prelude-val">None</span>);
+
+<span class="comment">// Iterate over entries
+</span><span class="kw">for </span>(key, value) <span class="kw">in </span>tree.iter() {
+    <span class="macro">println!</span>(<span class="string">"{:?} -&gt; {}"</span>, key.as_ref(), value);
+}</code></pre></div>
+<h3 id="key-types"><a class="doc-anchor" href="#key-types">§</a>Key Types</h3>
+<p>RART supports two main key types:</p>
+<ul>
+<li><a href="keys/array_key/struct.ArrayKey.html" title="struct rart::keys::array_key::ArrayKey"><code>ArrayKey&lt;N&gt;</code></a>: Fixed-size keys up to N bytes, stack-allocated</li>
+<li><a href="keys/vector_key/struct.VectorKey.html" title="struct rart::keys::vector_key::VectorKey"><code>VectorKey</code></a>: Variable-size keys, heap-allocated</li>
+</ul>
+<p>Both key types support automatic conversion from common Rust types:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>rart::{ArrayKey, VectorKey};
+
+<span class="comment">// From string literals
+</span><span class="kw">let </span>key1: ArrayKey&lt;<span class="number">16</span>&gt; = <span class="string">"hello"</span>.into();
+<span class="kw">let </span>key2: VectorKey = <span class="string">"world"</span>.into();
+
+<span class="comment">// From numeric types
+</span><span class="kw">let </span>key3: ArrayKey&lt;<span class="number">8</span>&gt; = <span class="number">42u64</span>.into();
+<span class="kw">let </span>key4: VectorKey = <span class="number">1337u32</span>.into();</code></pre></div>
+</div></details><h2 id="reexports" class="section-header">Re-exports<a href="#reexports" class="anchor">§</a></h2><dl class="item-table reexports"><dt id="reexport.KeyTrait"><code>pub use keys::<a class="trait" href="keys/trait.KeyTrait.html" title="trait rart::keys::KeyTrait">KeyTrait</a>;</code></dt><dt id="reexport.ArrayKey"><code>pub use keys::array_key::<a class="struct" href="keys/array_key/struct.ArrayKey.html" title="struct rart::keys::array_key::ArrayKey">ArrayKey</a>;</code></dt><dt id="reexport.VectorKey"><code>pub use keys::vector_key::<a class="struct" href="keys/vector_key/struct.VectorKey.html" title="struct rart::keys::vector_key::VectorKey">VectorKey</a>;</code></dt><dt id="reexport.Partial"><code>pub use partials::<a class="trait" href="partials/trait.Partial.html" title="trait rart::partials::Partial">Partial</a>;</code></dt><dt id="reexport.AdaptiveRadixTree"><code>pub use tree::<a class="struct" href="tree/struct.AdaptiveRadixTree.html" title="struct rart::tree::AdaptiveRadixTree">AdaptiveRadixTree</a>;</code></dt></dl><h2 id="modules" class="section-header">Modules<a href="#modules" class="anchor">§</a></h2><dl class="item-table"><dt><a class="mod" href="iter/index.html" title="mod rart::iter">iter</a></dt><dd>Iterator implementation for RART.</dd><dt><a class="mod" href="keys/index.html" title="mod rart::keys">keys</a></dt><dd>Key types and traits for RART.</dd><dt><a class="mod" href="partials/index.html" title="mod rart::partials">partials</a></dt><dd>Partial key types and traits for RART.</dd><dt><a class="mod" href="range/index.html" title="mod rart::range">range</a></dt><dd>Range query implementation for RART.</dd><dt><a class="mod" href="stats/index.html" title="mod rart::stats">stats</a></dt><dd>Statistics and introspection for RART.</dd><dt><a class="mod" href="tree/index.html" title="mod rart::tree">tree</a></dt><dd>Adaptive Radix Tree implementation.</dd></dl><h2 id="traits" class="section-header">Traits<a href="#traits" class="anchor">§</a></h2><dl class="item-table"><dt><a class="trait" href="trait.TreeTrait.html" title="trait rart::TreeTrait">Tree<wbr>Trait</a></dt><dd>Core trait defining the interface for tree operations.</dd></dl></section></div></main></body></html>

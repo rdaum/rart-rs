@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["array_key","vector_key"],"trait":["KeyTrait"]};

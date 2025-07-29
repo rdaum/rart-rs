@@ -1,0 +1,1 @@
+cargo:rustc-env=IC_BUILD_TRIPLE=aarch64-apple-darwin
