@@ -1,4 +1,4 @@
-name: Run Callgrind Microbenchmark
+name: Run Criterion Benchmarks
 
 on:
   push:
@@ -12,7 +12,7 @@ env:
 
 jobs:
   base:
-    name: Build and run microbenchmarks
+    name: Build and run benchmarks
     strategy:
       fail-fast: false
       matrix:
@@ -27,7 +27,7 @@ jobs:
 
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.toolchain }}
@@ -36,11 +36,9 @@ jobs:
         if: matrix.toolchain != 'stable'
         run: |
           rustup toolchain install stable --no-self-update --component clippy
-      - uses: Swatinem/rust-cache@v2.2.0
+      - uses: Swatinem/rust-cache@v2
         with:
-          key: ubuntu-latest_${{ matrix.toolchain }}"
-      - name: Install valgrind
-        run: sudo apt-get -y update && sudo apt-get -y install valgrind
+          key: ubuntu-latest_${{ matrix.toolchain }}
       - name: Info
         run: |
           set -x
@@ -49,8 +47,5 @@ jobs:
           rustup --version
           rustup show
           rustup component list --installed
-          valgrind --version
-      - name: Install callgrind runner
-        run: cargo install --version 0.4.0 iai-callgrind-runner
       - name: Bench
-        run: cargo bench --all-features --bench art_iai_bench --bench node_mapping_iai_microbenches
+        run: cargo bench --all-features --bench art_bench --bench art_compare_bench --bench node_mapping_microbenches

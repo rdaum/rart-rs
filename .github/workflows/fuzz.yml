@@ -23,14 +23,14 @@ jobs:
             components: rustfmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.toolchain }}
           components: ${{ matrix.components }}
-      - uses: Swatinem/rust-cache@v2.2.0
+      - uses: Swatinem/rust-cache@v2
         with:
-          key: ubuntu-latest_${{ matrix.toolchain }}"
+          key: ubuntu-latest_${{ matrix.toolchain }}
       - name: Build
         run: cargo build --all-features
       - name: Install cargo-fuzz
