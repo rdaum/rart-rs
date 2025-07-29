@@ -34,7 +34,7 @@ impl<N, const WIDTH: usize> SortedKeyedMapping<N, WIDTH> {
     pub fn new() -> Self {
         Self {
             keys: [255; WIDTH],
-            children: Box::new(unsafe { MaybeUninit::uninit().assume_init() }),
+            children: Box::new([const { MaybeUninit::uninit() }; WIDTH]),
             num_children: 0,
         }
     }
