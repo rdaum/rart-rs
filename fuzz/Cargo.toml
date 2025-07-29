@@ -26,3 +26,15 @@ name = "rart_iter_range"
 path = "src/rart_iter_range.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "versioned_tree_check"
+path = "src/versioned_tree_check.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "versioned_tree_multithread"
+path = "src/versioned_tree_multithread.rs"
+test = false
+doc = false

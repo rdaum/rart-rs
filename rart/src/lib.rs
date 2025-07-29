@@ -72,8 +72,10 @@ pub mod partials;
 pub mod range;
 pub mod stats;
 pub mod tree;
+pub mod versioned_tree;
 
 // Re-export main types for convenience
 pub use keys::{KeyTrait, array_key::ArrayKey, vector_key::VectorKey};
 pub use partials::Partial;
 pub use tree::AdaptiveRadixTree;
+pub use versioned_tree::VersionedAdaptiveRadixTree;

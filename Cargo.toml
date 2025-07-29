@@ -22,6 +22,7 @@ simdeez = "2.0.0-dev5"
 # Dev dependencies
 criterion = { version = "0.7", features = ["html_reports"] }
 rand = "0.9"
+im = "15.1"
 
 # Fuzz dependencies
 libfuzzer-sys = "0.4"

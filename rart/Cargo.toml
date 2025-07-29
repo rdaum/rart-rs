@@ -14,6 +14,7 @@ repository.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 rand.workspace = true
+im.workspace = true
 
 [features]
 default = ["simd_keys"]
@@ -33,4 +34,8 @@ harness = false
 
 [[bench]]
 name = "node_mapping_microbenches"
+harness = false
+
+[[bench]]
+name = "versioned_tree_bench"
 harness = false
