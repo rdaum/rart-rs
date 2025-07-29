@@ -98,25 +98,24 @@ pub fn u8_keys_find_key_position<const WIDTH: usize, Bitset: BitsetTrait>(
     // SIMD optimized
     #[cfg(feature = "simd_keys")]
     {
-        // Special 0xff key is special
-        let mut mask = (1 << WIDTH) - 1;
-        if key == 255 {
-            mask &= children_bitmask.as_bitmask() as u32;
+        if WIDTH >= 16 {
+            // Special 0xff key is special
+            let mut mask = (1 << WIDTH) - 1;
+            if key == 255 {
+                mask &= children_bitmask.as_bitmask() as u32;
+            }
+            return simd_keys::simdeez_find_key(key, keys, mask);
         }
-        simd_keys::simdeez_find_key(key, keys, mask)
     }
 
-    #[cfg(not(feature = "simd_keys"))]
-    {
-        // Fallback to linear search for non-SIMD.
-        for (i, k) in keys.iter().enumerate() {
-            if key == 255 && !children_bitmask.check(i) {
-                continue;
-            }
-            if *k == key {
-                return Some(i);
-            }
+    // Fallback to linear search for non-SIMD or small WIDTH.
+    for (i, k) in keys.iter().enumerate() {
+        if key == 255 && !children_bitmask.check(i) {
+            continue;
         }
-        None
+        if *k == key {
+            return Some(i);
+        }
     }
+    None
 }
