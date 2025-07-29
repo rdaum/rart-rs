@@ -33,11 +33,3 @@ harness = false
 [[bench]]
 name = "node_mapping_microbenches"
 harness = false
-
-# [[bench]]
-# name = "art_iai_bench"
-# harness = false
-
-# [[bench]]
-# name = "node_mapping_iai_microbenches"
-# harness = false

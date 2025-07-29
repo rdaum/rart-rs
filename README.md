@@ -1,4 +1,4 @@
-# `rart` - Adaptive Radix Tree
+# `rart` - Ryan's Adaptive Radix Tree
 
 A high-performance, memory-efficient implementation of Adaptive Radix Trees (ART) in Rust.
 
