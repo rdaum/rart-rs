@@ -21,7 +21,7 @@ where
     pub fn new() -> Self {
         Self {
             bitset: Default::default(),
-            storage: Box::new(unsafe { MaybeUninit::uninit().assume_init() }),
+            storage: Box::new([const { MaybeUninit::uninit() }; RANGE_WIDTH]),
         }
     }
 
