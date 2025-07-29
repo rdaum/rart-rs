@@ -28,7 +28,7 @@ where
     #[allow(dead_code)]
     pub fn push(&mut self, x: X) -> Option<usize> {
         let pos = self.bitset.first_empty()?;
-        assert!(pos < RANGE_WIDTH);
+        debug_assert!(pos < RANGE_WIDTH);
         self.bitset.set(pos);
         unsafe {
             self.storage[pos].as_mut_ptr().write(x);
@@ -83,7 +83,7 @@ where
 
     #[inline]
     pub fn get(&self, pos: usize) -> Option<&X> {
-        assert!(pos < RANGE_WIDTH);
+        debug_assert!(pos < RANGE_WIDTH);
         if self.bitset.check(pos) {
             Some(unsafe { self.storage[pos].assume_init_ref() })
         } else {
@@ -93,7 +93,7 @@ where
 
     #[inline]
     pub fn get_mut(&mut self, pos: usize) -> Option<&mut X> {
-        assert!(pos < RANGE_WIDTH);
+        debug_assert!(pos < RANGE_WIDTH);
         if self.bitset.check(pos) {
             Some(unsafe { self.storage[pos].assume_init_mut() })
         } else {
@@ -103,7 +103,7 @@ where
 
     #[inline]
     pub fn set(&mut self, pos: usize, x: X) {
-        assert!(pos < RANGE_WIDTH);
+        debug_assert!(pos < RANGE_WIDTH);
         unsafe {
             self.storage[pos].as_mut_ptr().write(x);
         };
@@ -131,7 +131,7 @@ where
     // Erase without updating index, used by update and erase
     #[inline]
     fn take_internal(&mut self, pos: usize) -> Option<X> {
-        assert!(pos < RANGE_WIDTH);
+        debug_assert!(pos < RANGE_WIDTH);
         if self.bitset.check(pos) {
             let old = std::mem::replace(&mut self.storage[pos], MaybeUninit::uninit());
             Some(unsafe { old.assume_init() })

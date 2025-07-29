@@ -26,8 +26,8 @@
 //! tree.insert("foo", "bar".to_string());
 //!
 //! // Query the tree
-//! assert_eq!(tree.get("hello"), Some(&"world".to_string()));
-//! assert_eq!(tree.get("missing"), None);
+//! debug_assert_eq!(tree.get("hello"), Some(&"world".to_string()));
+//! debug_assert_eq!(tree.get("missing"), None);
 //!
 //! // Iterate over entries
 //! for (key, value) in tree.iter() {

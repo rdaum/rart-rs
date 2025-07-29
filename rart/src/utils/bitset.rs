@@ -103,7 +103,7 @@ where
 
     #[inline]
     fn set(&mut self, pos: usize) {
-        assert!(pos < Self::BITSET_WIDTH);
+        debug_assert!(pos < Self::BITSET_WIDTH);
         let v = self.bitset[pos >> Self::BIT_SHIFT];
         let shift: StorageType = StorageType::one() << (pos % Self::STORAGE_BIT_WIDTH);
         let v = v.bitor(shift);
@@ -112,7 +112,7 @@ where
 
     #[inline]
     fn unset(&mut self, pos: usize) {
-        assert!(pos < Self::BITSET_WIDTH);
+        debug_assert!(pos < Self::BITSET_WIDTH);
         let v = self.bitset[pos >> Self::BIT_SHIFT];
         let shift = StorageType::one() << (pos % Self::STORAGE_BIT_WIDTH);
         let v = v & shift.not();
@@ -121,7 +121,7 @@ where
 
     #[inline]
     fn check(&self, pos: usize) -> bool {
-        assert!(pos < Self::BITSET_WIDTH);
+        debug_assert!(pos < Self::BITSET_WIDTH);
         let shift: StorageType = StorageType::one() << (pos % Self::STORAGE_BIT_WIDTH);
         !(self.bitset[pos >> Self::BIT_SHIFT] & shift).is_zero()
     }
@@ -164,7 +164,7 @@ where
     }
 
     fn as_bitmask(&self) -> u128 {
-        assert!(Self::STORAGE_BIT_WIDTH <= 128);
+        debug_assert!(Self::STORAGE_BIT_WIDTH <= 128);
         let mut mask = 0u128;
         // copy bit-level representation, unsafe ptr copy
         unsafe {
@@ -222,7 +222,7 @@ mod tests {
         for i in 0..bs.capacity() {
             bs.set(i);
         }
-        assert_eq!(bs.first_empty(), None);
+        debug_assert_eq!(bs.first_empty(), None);
     }
 
     #[test]
@@ -238,7 +238,7 @@ mod tests {
         for i in 0..bs.capacity() {
             bs.set(i);
         }
-        assert_eq!(bs.first_empty(), None);
+        debug_assert_eq!(bs.first_empty(), None);
     }
 
     #[test]
@@ -253,7 +253,7 @@ mod tests {
         for i in 0..bs.capacity() {
             bs.set(i);
         }
-        assert_eq!(bs.first_empty(), None);
+        debug_assert_eq!(bs.first_empty(), None);
     }
 
     #[test]

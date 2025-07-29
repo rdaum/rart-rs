@@ -63,7 +63,7 @@ trait RangeInnerTrait<'a, K: KeyTrait + 'a, V> {
 /// let end: ArrayKey<16> = "d".into();
 /// let range_items: Vec<_> = tree.range(start..end).collect();
 /// // Contains: banana, cherry
-/// assert_eq!(range_items.len(), 2);
+/// debug_assert_eq!(range_items.len(), 2);
 /// ```
 pub struct Range<'a, K: KeyTrait + 'a, V> {
     inner: Box<dyn RangeInnerTrait<'a, K, V> + 'a>,

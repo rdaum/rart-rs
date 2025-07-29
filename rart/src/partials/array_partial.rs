@@ -33,7 +33,7 @@ impl<const SIZE: usize> PartialEq for ArrPartial<SIZE> {
 }
 impl<const SIZE: usize> ArrPartial<SIZE> {
     pub fn key(src: &[u8]) -> Self {
-        assert!(src.len() < SIZE);
+        debug_assert!(src.len() < SIZE);
         let mut data = [0; SIZE];
         data[..src.len()].copy_from_slice(src);
         Self {
@@ -43,7 +43,7 @@ impl<const SIZE: usize> ArrPartial<SIZE> {
     }
 
     pub fn from_slice(src: &[u8]) -> Self {
-        assert!(
+        debug_assert!(
             src.len() <= SIZE,
             "data length {} is greater than maximum partial length {}",
             src.len(),
@@ -71,22 +71,22 @@ impl<const SIZE: usize> Index<usize> for ArrPartial<SIZE> {
 }
 impl<const SIZE: usize> Partial for ArrPartial<SIZE> {
     fn partial_before(&self, length: usize) -> Self {
-        assert!(length <= self.len);
+        debug_assert!(length <= self.len);
         ArrPartial::from_slice(&self.data[..length])
     }
 
     fn partial_from(&self, src_offset: usize, length: usize) -> Self {
-        assert!(src_offset + length <= self.len);
+        debug_assert!(src_offset + length <= self.len);
         ArrPartial::from_slice(&self.data[src_offset..src_offset + length])
     }
 
     fn partial_after(&self, start: usize) -> Self {
-        assert!(start <= self.len);
+        debug_assert!(start <= self.len);
         ArrPartial::from_slice(&self.data[start..self.len])
     }
 
     fn partial_extended_with(&self, other: &Self) -> Self {
-        assert!(self.len + other.len < SIZE);
+        debug_assert!(self.len + other.len < SIZE);
         let mut data = [0; SIZE];
         data[..self.len].copy_from_slice(&self.data[..self.len]);
         data[self.len..self.len + other.len].copy_from_slice(&other.data[..other.len]);
@@ -98,7 +98,7 @@ impl<const SIZE: usize> Partial for ArrPartial<SIZE> {
 
     #[inline(always)]
     fn at(&self, pos: usize) -> u8 {
-        assert!(pos < self.len);
+        debug_assert!(pos < self.len);
         self.data[pos]
     }
 

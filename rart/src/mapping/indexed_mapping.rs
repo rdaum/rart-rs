@@ -159,13 +159,13 @@ mod test {
             assert_eq!(*mapping.seek_child(i).unwrap(), i);
         }
         for i in 0..48 {
-            assert_eq!(*mapping.seek_child(i).unwrap(), i);
+            debug_assert_eq!(*mapping.seek_child(i).unwrap(), i);
         }
         for i in 0..48 {
-            assert_eq!(mapping.delete_child(i).unwrap(), i);
+            debug_assert_eq!(mapping.delete_child(i).unwrap(), i);
         }
         for i in 0..48 {
-            assert!(mapping.seek_child(i as u8).is_none());
+            debug_assert!(mapping.seek_child(i as u8).is_none());
         }
     }
 }

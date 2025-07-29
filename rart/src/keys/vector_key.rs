@@ -79,7 +79,7 @@ impl VectorKey {
 
     pub fn to_be_u64(&self) -> u64 {
         // Value must be at least 8 bytes long.
-        assert!(self.data.len() >= 8, "data length is less than 8 bytes");
+        debug_assert!(self.data.len() >= 8, "data length is less than 8 bytes");
         // Copy from 0..min(len, 8) to a new array left-padding it, then convert to u64.
         let mut arr = [0; 8];
         arr[8 - self.data.len()..].copy_from_slice(&self.data[..self.data.len()]);

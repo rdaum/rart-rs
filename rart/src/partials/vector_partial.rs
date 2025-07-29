@@ -44,17 +44,17 @@ impl From<&[u8]> for VectorPartial {
 
 impl Partial for VectorPartial {
     fn partial_before(&self, length: usize) -> Self {
-        assert!(length <= self.data.len());
+        debug_assert!(length <= self.data.len());
         VectorPartial::from_slice(&self.data[..length])
     }
 
     fn partial_from(&self, src_offset: usize, length: usize) -> Self {
-        assert!(src_offset + length <= self.data.len());
+        debug_assert!(src_offset + length <= self.data.len());
         VectorPartial::from_slice(&self.data[src_offset..src_offset + length])
     }
 
     fn partial_after(&self, start: usize) -> Self {
-        assert!(start <= self.data.len());
+        debug_assert!(start <= self.data.len());
         VectorPartial::from_slice(&self.data[start..self.data.len()])
     }
 
@@ -69,7 +69,7 @@ impl Partial for VectorPartial {
 
     #[inline(always)]
     fn at(&self, pos: usize) -> u8 {
-        assert!(pos < self.data.len());
+        debug_assert!(pos < self.data.len());
         self.data[pos]
     }
 

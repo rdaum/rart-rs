@@ -26,7 +26,7 @@ use crate::partials::array_partial::ArrPartial;
 ///
 /// // Create from string (adds null terminator)
 /// let key1: ArrayKey<16> = "hello".into();
-/// assert_eq!(key1.as_ref(), b"hello\0");
+/// debug_assert_eq!(key1.as_ref(), b"hello\0");
 ///
 /// // Create from numeric types
 /// let key2: ArrayKey<8> = 42u32.into();
@@ -56,7 +56,7 @@ impl<const N: usize> AsRef<[u8]> for ArrayKey<N> {
 
 impl<const N: usize> ArrayKey<N> {
     pub fn new_from_str(s: &str) -> Self {
-        assert!(s.len() + 1 < N, "data length is greater than array length");
+        debug_assert!(s.len() + 1 < N, "data length is greater than array length");
         let mut arr = [0; N];
         arr[..s.len()].copy_from_slice(s.as_bytes());
         Self {
@@ -66,7 +66,7 @@ impl<const N: usize> ArrayKey<N> {
     }
 
     pub fn new_from_string(s: &String) -> Self {
-        assert!(s.len() + 1 < N, "data length is greater than array length");
+        debug_assert!(s.len() + 1 < N, "data length is greater than array length");
         let mut arr = [0; N];
         arr[..s.len()].copy_from_slice(s.as_bytes());
         Self {
@@ -114,7 +114,7 @@ impl<const N: usize> KeyTrait for ArrayKey<N> {
     const MAXIMUM_SIZE: Option<usize> = Some(N);
 
     fn new_from_slice(data: &[u8]) -> Self {
-        assert!(data.len() <= N, "data length is greater than array length");
+        debug_assert!(data.len() <= N, "data length is greater than array length");
         let mut arr = [0; N];
         arr[0..data.len()].copy_from_slice(data);
         Self {
@@ -133,7 +133,7 @@ impl<const N: usize> KeyTrait for ArrayKey<N> {
     fn extend_from_partial(&self, partial: &Self::PartialType) -> Self {
         let cur_len = self.len;
         let partial_len = partial.len();
-        assert!(
+        debug_assert!(
             cur_len + partial_len <= N,
             "data length is greater than max key length"
         );
@@ -148,7 +148,7 @@ impl<const N: usize> KeyTrait for ArrayKey<N> {
     }
 
     fn truncate(&self, at_depth: usize) -> Self {
-        assert!(at_depth <= self.len, "truncating beyond key length");
+        debug_assert!(at_depth <= self.len, "truncating beyond key length");
         Self {
             data: self.data,
             len: at_depth,

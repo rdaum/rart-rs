@@ -46,8 +46,8 @@ use crate::stats::{TreeStats, TreeStatsTrait, update_tree_stats};
 /// tree.insert("application", "software".to_string());
 ///
 /// // Query the tree
-/// assert_eq!(tree.get("apple"), Some(&"fruit".to_string()));
-/// assert_eq!(tree.get("orange"), None);
+/// debug_assert_eq!(tree.get("apple"), Some(&"fruit".to_string()));
+/// debug_assert_eq!(tree.get("orange"), None);
 ///
 /// // Iterate over all entries
 /// for (key, value) in tree.iter() {
@@ -69,7 +69,7 @@ use crate::stats::{TreeStats, TreeStatsTrait, update_tree_stats};
 /// let start: ArrayKey<16> = "a".into();
 /// let end: ArrayKey<16> = "b".into();
 /// let a_keys: Vec<_> = tree.range(start..end).collect();
-/// assert_eq!(a_keys.len(), 1); // Just "apple"
+/// debug_assert_eq!(a_keys.len(), 1); // Just "apple"
 /// ```
 pub struct AdaptiveRadixTree<KeyType, ValueType>
 where
@@ -379,7 +379,7 @@ where
 
         let Some(child) = cur_node.seek_child_mut(k) else {
             // We should not be a leaf at this point. If so, something bad has happened.
-            assert!(cur_node.is_inner());
+            debug_assert!(cur_node.is_inner());
             let new_leaf =
                 DefaultNode::new_leaf(key.to_partial(depth + longest_common_prefix), value);
             cur_node.add_child(k, new_leaf);
@@ -427,7 +427,7 @@ where
         if result.is_some() && child_node.is_inner() && child_node.num_children() == 0 {
             let prefix = child_node.prefix.clone();
             let deleted = parent_node.delete_child(c).unwrap();
-            assert_eq!(prefix.to_slice(), deleted.prefix.to_slice());
+            debug_assert_eq!(prefix.to_slice(), deleted.prefix.to_slice());
         }
 
         result
@@ -562,12 +562,12 @@ mod tests {
         for _i in 0..5_000_000 {
             let entry = &keys[rng.random_range(0..keys.len())];
             let val = tree.get_k(&entry.0);
-            assert!(val.is_some());
-            assert_eq!(*val.unwrap(), entry.1);
+            debug_assert!(val.is_some());
+            debug_assert_eq!(*val.unwrap(), entry.1);
         }
 
         let stats = tree.get_tree_stats();
-        assert_eq!(stats.num_values, num_inserted);
+        debug_assert_eq!(stats.num_values, num_inserted);
         eprintln!("Tree stats: {stats:?}");
     }
 
@@ -589,12 +589,12 @@ mod tests {
         }
 
         let stats = tree.get_tree_stats();
-        assert_eq!(stats.num_values, keys_inserted.len());
+        debug_assert_eq!(stats.num_values, keys_inserted.len());
 
         for (key, value) in &keys_inserted {
             let result = tree.get(key);
-            assert!(result.is_some(),);
-            assert_eq!(*result.unwrap(), *value,);
+            debug_assert!(result.is_some(),);
+            debug_assert_eq!(*result.unwrap(), *value,);
         }
     }
 
@@ -623,11 +623,11 @@ mod tests {
         let keys_inserted_iter = keys_inserted.iter();
         for btree_entry in keys_inserted_iter {
             let art_entry = tree_iter.next();
-            assert!(art_entry.is_some());
+            debug_assert!(art_entry.is_some());
             let art_entry = art_entry.unwrap();
-            assert_eq!(*art_entry.1, btree_entry.1);
+            debug_assert_eq!(*art_entry.1, btree_entry.1);
             let art_key = art_entry.0.to_be_u64();
-            assert_eq!(art_key, btree_entry.0);
+            debug_assert_eq!(art_key, btree_entry.0);
         }
     }
 
@@ -706,14 +706,14 @@ mod tests {
         for (key, value) in btree.iter() {
             let key: ArrayKey<16> = (*key).into();
             let get_result = tree.get_k(&key);
-            assert_eq!(
+            debug_assert_eq!(
                 get_result.cloned(),
                 Some(*value),
                 "Key with prefix {:?} not found in tree; it should be",
                 key.to_partial(0).to_slice()
             );
             let result = tree.remove_k(&key);
-            assert_eq!(result, Some(*value));
+            debug_assert_eq!(result, Some(*value));
         }
     }
     // Compare the results of a range query on an AdaptiveRadixTree and a BTreeMap, because we can
@@ -725,8 +725,8 @@ mod tests {
         // collect both into vectors then compare
         let art_values = art_range.map(|(_, v)| v).collect::<Vec<_>>();
         let btree_values = btree_range.map(|(_, v)| v).collect::<Vec<_>>();
-        assert_eq!(art_values.len(), btree_values.len());
-        assert_eq!(art_values, btree_values);
+        debug_assert_eq!(art_values.len(), btree_values.len());
+        debug_assert_eq!(art_values, btree_values);
     }
 
     #[test]

@@ -40,7 +40,7 @@ impl<N, const WIDTH: usize> SortedKeyedMapping<N, WIDTH> {
     }
     // Return the key and value of the only child, and remove it from the mapping.
     pub fn take_value_for_leaf(&mut self) -> (u8, N) {
-        assert!(self.num_children == 1);
+        debug_assert!(self.num_children == 1);
         let value = std::mem::replace(&mut self.children[0], MaybeUninit::uninit());
         let key = self.keys[0];
         self.num_children = 0;

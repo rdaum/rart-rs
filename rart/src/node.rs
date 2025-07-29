@@ -351,36 +351,36 @@ mod tests {
         }
 
         for i in 0..16 {
-            assert_eq!(*n16.seek_child(i).unwrap().value().unwrap(), i);
+            debug_assert_eq!(*n16.seek_child(i).unwrap().value().unwrap(), i);
         }
 
         // Delete from end doesn't affect position of others.
         n16.delete_child(15);
         n16.delete_child(14);
-        assert!(n16.seek_child(15).is_none());
-        assert!(n16.seek_child(14).is_none());
+        debug_assert!(n16.seek_child(15).is_none());
+        debug_assert!(n16.seek_child(14).is_none());
         for i in 0..14 {
-            assert_eq!(*n16.seek_child(i).unwrap().value().unwrap(), i);
+            debug_assert_eq!(*n16.seek_child(i).unwrap().value().unwrap(), i);
         }
 
         n16.delete_child(0);
         n16.delete_child(1);
-        assert!(n16.seek_child(0).is_none());
-        assert!(n16.seek_child(1).is_none());
+        debug_assert!(n16.seek_child(0).is_none());
+        debug_assert!(n16.seek_child(1).is_none());
         for i in 2..14 {
-            assert_eq!(*n16.seek_child(i).unwrap().value().unwrap(), i);
+            debug_assert_eq!(*n16.seek_child(i).unwrap().value().unwrap(), i);
         }
 
         // Delete from the middle
         n16.delete_child(5);
         n16.delete_child(6);
-        assert!(n16.seek_child(5).is_none());
-        assert!(n16.seek_child(6).is_none());
+        debug_assert!(n16.seek_child(5).is_none());
+        debug_assert!(n16.seek_child(6).is_none());
         for i in 2..5 {
-            assert_eq!(*n16.seek_child(i).unwrap().value().unwrap(), i);
+            debug_assert_eq!(*n16.seek_child(i).unwrap().value().unwrap(), i);
         }
         for i in 7..14 {
-            assert_eq!(*n16.seek_child(i).unwrap().value().unwrap(), i);
+            debug_assert_eq!(*n16.seek_child(i).unwrap().value().unwrap(), i);
         }
     }
 
@@ -396,15 +396,15 @@ mod tests {
         }
 
         for i in 0..48 {
-            assert_eq!(*n48.seek_child(i).unwrap().value().unwrap(), i);
+            debug_assert_eq!(*n48.seek_child(i).unwrap().value().unwrap(), i);
         }
 
         n48.delete_child(47);
         n48.delete_child(46);
-        assert!(n48.seek_child(47).is_none());
-        assert!(n48.seek_child(46).is_none());
+        debug_assert!(n48.seek_child(47).is_none());
+        debug_assert!(n48.seek_child(46).is_none());
         for i in 0..46 {
-            assert_eq!(*n48.seek_child(i).unwrap().value().unwrap(), i);
+            debug_assert_eq!(*n48.seek_child(i).unwrap().value().unwrap(), i);
         }
     }
 
@@ -418,18 +418,18 @@ mod tests {
             n256.add_child(i, DefaultNode::new_leaf(test_key.clone(), i));
         }
         for i in 0..=255 {
-            assert_eq!(*n256.seek_child(i).unwrap().value().unwrap(), i);
+            debug_assert_eq!(*n256.seek_child(i).unwrap().value().unwrap(), i);
         }
 
         n256.delete_child(47);
         n256.delete_child(46);
-        assert!(n256.seek_child(47).is_none());
-        assert!(n256.seek_child(46).is_none());
+        debug_assert!(n256.seek_child(47).is_none());
+        debug_assert!(n256.seek_child(46).is_none());
         for i in 0..46 {
-            assert_eq!(*n256.seek_child(i).unwrap().value().unwrap(), i);
+            debug_assert_eq!(*n256.seek_child(i).unwrap().value().unwrap(), i);
         }
         for i in 48..=255 {
-            assert_eq!(*n256.seek_child(i).unwrap().value().unwrap(), i);
+            debug_assert_eq!(*n256.seek_child(i).unwrap().value().unwrap(), i);
         }
     }
 }

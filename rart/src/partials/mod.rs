@@ -18,8 +18,8 @@
 //! use rart::partials::{Partial, array_partial::ArrPartial};
 //!
 //! let partial: ArrPartial<16> = "hello".as_bytes().into();
-//! assert_eq!(partial.len(), 5);
-//! assert!(partial.starts_with(b"hel"));
+//! debug_assert_eq!(partial.len(), 5);
+//! debug_assert!(partial.starts_with(b"hel"));
 //! ```
 
 use crate::keys::KeyTrait;

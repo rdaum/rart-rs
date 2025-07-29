@@ -56,7 +56,7 @@ where
     pub fn from_resized_grow<const OLD_WIDTH: usize, OldBitset: BitsetTrait>(
         km: &mut KeyedMapping<N, OLD_WIDTH, OldBitset>,
     ) -> Self {
-        assert!(WIDTH > OLD_WIDTH);
+        debug_assert!(WIDTH > OLD_WIDTH);
         let mut new = KeyedMapping::new();
 
         // Since we're larger than before, we can just copy over and expand everything, occupied
@@ -91,7 +91,7 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> NodeMapping<N, WIDTH>
     fn add_child(&mut self, key: u8, node: N) {
         // Find an empty position by looking into the bitset.
         let idx = self.children.first_empty().unwrap();
-        assert!(idx < WIDTH);
+        debug_assert!(idx < WIDTH);
         self.keys[idx] = key;
         self.children.set(idx, node);
         self.num_children += 1;
