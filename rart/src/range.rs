@@ -1,3 +1,12 @@
+//! Range query implementation for RART.
+//!
+//! This module provides efficient range iteration over Adaptive Radix Trees,
+//! allowing traversal of key-value pairs within specified bounds.
+//!
+//! Range queries leverage the tree's trie structure to efficiently skip
+//! subtrees that fall outside the requested range, providing O(log n)
+//! navigation to the start of the range.
+
 use std::collections::Bound;
 
 use crate::iter::Iter;
@@ -31,6 +40,31 @@ trait RangeInnerTrait<'a, K: KeyTrait + 'a, V> {
     fn next(&mut self) -> InnerResult<'a, K, V>;
 }
 
+/// Iterator over key-value pairs within a specified range in an Adaptive Radix Tree.
+///
+/// This iterator efficiently navigates to the start of the range and then iterates
+/// through all key-value pairs that fall within the specified bounds. The iteration
+/// leverages the tree's trie structure to skip entire subtrees that fall outside
+/// the range, providing O(log n) navigation to the start.
+///
+/// ## Examples
+///
+/// ```rust
+/// use rart::{AdaptiveRadixTree, ArrayKey};
+///
+/// let mut tree = AdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+/// tree.insert("apple", 1);
+/// tree.insert("banana", 2);
+/// tree.insert("cherry", 3);
+/// tree.insert("date", 4);
+///
+/// // Get all keys from "b" to "d" (exclusive)
+/// let start: ArrayKey<16> = "b".into();
+/// let end: ArrayKey<16> = "d".into();
+/// let range_items: Vec<_> = tree.range(start..end).collect();
+/// // Contains: banana, cherry
+/// assert_eq!(range_items.len(), 2);
+/// ```
 pub struct Range<'a, K: KeyTrait + 'a, V> {
     inner: Box<dyn RangeInnerTrait<'a, K, V> + 'a>,
 }

@@ -11,10 +11,7 @@ repository.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
-iai-callgrind.workspace = true
-paste.workspace = true
 rand.workspace = true
-csv.workspace = true
 
 [features]
 default = ["simd_keys"]
@@ -23,7 +20,6 @@ simd_keys = ["dep:simdeez"]
 [dependencies]
 num-traits.workspace = true
 simdeez = { workspace = true, optional = true }
-crossbeam-utils.workspace = true
 
 [[bench]]
 name = "art_bench"

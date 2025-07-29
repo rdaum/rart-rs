@@ -5,7 +5,6 @@ use std::collections::BTreeMap;
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 
-use rart::TreeTrait;
 use rart::keys::array_key::ArrayKey;
 use rart::tree::AdaptiveRadixTree;
 

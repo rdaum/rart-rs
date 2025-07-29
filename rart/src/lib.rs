@@ -16,7 +16,7 @@
 //! ## Quick Start
 //!
 //! ```rust
-//! use rart::{AdaptiveRadixTree, ArrayKey, TreeTrait};
+//! use rart::{AdaptiveRadixTree, ArrayKey};
 //!
 //! // Create a new tree with fixed-size keys
 //! let mut tree = AdaptiveRadixTree::<ArrayKey<16>, String>::new();
@@ -56,10 +56,6 @@
 //! let key4: VectorKey = 1337u32.into();
 //! ```
 
-use crate::iter::Iter;
-use crate::range::Range;
-use std::ops::RangeBounds;
-
 // Private implementation modules
 mod node;
 
@@ -81,48 +77,3 @@ pub mod tree;
 pub use keys::{KeyTrait, array_key::ArrayKey, vector_key::VectorKey};
 pub use partials::Partial;
 pub use tree::AdaptiveRadixTree;
-
-pub trait TreeTrait<KeyType, ValueType>
-where
-    KeyType: keys::KeyTrait,
-{
-    type NodeType;
-
-    fn get<Key>(&self, key: Key) -> Option<&ValueType>
-    where
-        Key: Into<KeyType>,
-    {
-        self.get_k(&key.into())
-    }
-    fn get_k(&self, key: &KeyType) -> Option<&ValueType>;
-    fn get_mut<Key>(&mut self, key: Key) -> Option<&mut ValueType>
-    where
-        Key: Into<KeyType>,
-    {
-        self.get_mut_k(&key.into())
-    }
-    fn get_mut_k(&mut self, key: &KeyType) -> Option<&mut ValueType>;
-    fn insert<KV>(&mut self, key: KV, value: ValueType) -> Option<ValueType>
-    where
-        KV: Into<KeyType>,
-    {
-        self.insert_k(&key.into(), value)
-    }
-    fn insert_k(&mut self, key: &KeyType, value: ValueType) -> Option<ValueType>;
-
-    fn remove<KV>(&mut self, key: KV) -> Option<ValueType>
-    where
-        KV: Into<KeyType>,
-    {
-        self.remove_k(&key.into())
-    }
-    fn remove_k(&mut self, key: &KeyType) -> Option<ValueType>;
-
-    fn iter(&self) -> Iter<'_, KeyType, KeyType::PartialType, ValueType>;
-
-    fn range<'a, R>(&'a self, range: R) -> Range<'a, KeyType, ValueType>
-    where
-        R: RangeBounds<KeyType> + 'a;
-
-    fn is_empty(&self) -> bool;
-}

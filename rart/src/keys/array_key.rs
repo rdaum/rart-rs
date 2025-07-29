@@ -2,6 +2,46 @@ use crate::keys::KeyTrait;
 use crate::partials::Partial;
 use crate::partials::array_partial::ArrPartial;
 
+/// A fixed-size key type that stores up to N bytes on the stack.
+///
+/// `ArrayKey` is a stack-allocated key type that can store keys up to a compile-time
+/// specified maximum size. This makes it very efficient for keys that have a known
+/// maximum length, as it avoids heap allocations entirely.
+///
+/// ## Features
+///
+/// - **Stack allocated**: No heap allocations, very fast
+/// - **Copy semantics**: Can be copied cheaply
+/// - **Null termination**: Automatically adds null termination for string keys
+/// - **Type safety**: Size is checked at compile time
+///
+/// ## Type Parameter
+///
+/// - `N`: Maximum number of bytes this key can store (including null terminator for strings)
+///
+/// ## Examples
+///
+/// ```rust
+/// use rart::keys::array_key::ArrayKey;
+///
+/// // Create from string (adds null terminator)
+/// let key1: ArrayKey<16> = "hello".into();
+/// assert_eq!(key1.as_ref(), b"hello\0");
+///
+/// // Create from numeric types
+/// let key2: ArrayKey<8> = 42u32.into();
+///
+/// // Create from byte slices  
+/// use rart::keys::KeyTrait;
+/// let key3 = ArrayKey::<10>::new_from_slice(b"test");
+/// ```
+///
+/// ## Size Considerations
+///
+/// Choose N based on your expected key sizes:
+/// - For short strings (≤15 chars): `ArrayKey<16>`
+/// - For medium strings (≤31 chars): `ArrayKey<32>`
+/// - For numeric keys: `ArrayKey<8>` or `ArrayKey<16>`
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
 pub struct ArrayKey<const N: usize> {
     data: [u8; N],

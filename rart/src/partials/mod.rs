@@ -1,3 +1,27 @@
+//! Partial key types and traits for RART.
+//!
+//! This module provides partial key types that represent fragments of keys used internally
+//! by the Adaptive Radix Tree for efficient trie operations. Partials are used for prefix
+//! compression and node navigation.
+//!
+//! ## Available Partial Types
+//!
+//! - [`ArrPartial<N>`](array_partial::ArrPartial): Fixed-size partial keys up to N bytes
+//! - [`VectorPartial`](vector_partial::VectorPartial): Variable-size partial keys
+//!
+//! ## Usage
+//!
+//! Partials are typically created automatically by the tree implementation, but you can
+//! work with them directly:
+//!
+//! ```rust
+//! use rart::partials::{Partial, array_partial::ArrPartial};
+//!
+//! let partial: ArrPartial<16> = "hello".as_bytes().into();
+//! assert_eq!(partial.len(), 5);
+//! assert!(partial.starts_with(b"hel"));
+//! ```
+
 use crate::keys::KeyTrait;
 
 pub mod array_partial;

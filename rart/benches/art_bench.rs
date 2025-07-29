@@ -8,7 +8,6 @@ use rand::{Rng, rng};
 
 use rart::keys::array_key::ArrayKey;
 
-use rart::TreeTrait;
 use rart::tree::AdaptiveRadixTree;
 
 // Variations on the number of keys to insert into the tree for benchmarks that measure retrievals

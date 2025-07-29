@@ -7,7 +7,6 @@ use libfuzzer_sys::fuzz_target;
 
 use rart::keys::array_key::ArrayKey;
 
-use rart::TreeTrait;
 use rart::tree::AdaptiveRadixTree;
 
 #[derive(Arbitrary, Debug)]

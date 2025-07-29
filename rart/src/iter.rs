@@ -1,3 +1,11 @@
+//! Iterator implementation for RART.
+//!
+//! This module provides iteration capabilities for Adaptive Radix Trees, allowing
+//! traversal of all key-value pairs in lexicographic order.
+//!
+//! The iterator is designed to be memory-efficient and performs lazy evaluation,
+//! only visiting nodes as needed during iteration.
+
 use std::collections::Bound;
 
 use crate::keys::KeyTrait;
@@ -7,6 +15,26 @@ use crate::partials::Partial;
 type IterEntry<'a, P, V> = (u8, &'a DefaultNode<P, V>);
 type NodeIterator<'a, P, V> = dyn Iterator<Item = IterEntry<'a, P, V>> + 'a;
 
+/// Iterator over all key-value pairs in an Adaptive Radix Tree.
+///
+/// This iterator traverses the tree in lexicographic order of the keys,
+/// yielding `(Key, &Value)` pairs. The iteration is performed lazily,
+/// visiting nodes only as needed.
+///
+/// ## Examples
+///
+/// ```rust
+/// use rart::{AdaptiveRadixTree, ArrayKey};
+///
+/// let mut tree = AdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+/// tree.insert("apple", 1);
+/// tree.insert("banana", 2);
+/// tree.insert("cherry", 3);
+///
+/// // Iterate in lexicographic order
+/// let items: Vec<_> = tree.iter().collect();
+/// // Items will be ordered: apple, banana, cherry
+/// ```
 pub struct Iter<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> {
     inner: Box<dyn Iterator<Item = (K, &'a V)> + 'a>,
     _marker: std::marker::PhantomData<(K, P)>,

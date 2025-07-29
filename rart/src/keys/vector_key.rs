@@ -1,7 +1,46 @@
 use crate::keys::KeyTrait;
 use crate::partials::vector_partial::VectorPartial;
 
-// Owns variable sized key data. Used especially for strings where a null-termination is required.
+/// A variable-size key type that stores data on the heap.
+///
+/// `VectorKey` is a heap-allocated key type that can store keys of any size.
+/// It's ideal for scenarios where key sizes are not known at compile time
+/// or when keys can be very large.
+///
+/// ## Features
+///
+/// - **Variable size**: Can store keys of any length
+/// - **Heap allocated**: Uses heap memory for storage
+/// - **Null termination**: Automatically adds null termination for string keys
+/// - **Efficient**: Uses `Box<[u8]>` for minimal memory overhead
+///
+/// ## Examples
+///
+/// ```rust
+/// use rart::keys::vector_key::VectorKey;
+///
+/// // Create from string (adds null terminator)
+/// let key1: VectorKey = "hello world".into();
+///
+/// // Create from numeric types
+/// let key2: VectorKey = 42u64.into();
+///
+/// // Create from long strings
+/// let long_string = "a".repeat(1000);
+/// let key3: VectorKey = long_string.into();
+/// ```
+///
+/// ## When to Use
+///
+/// Use `VectorKey` when:
+/// - Key sizes are unknown at compile time
+/// - Keys can be very large (> 32 bytes)
+/// - You need maximum flexibility
+///
+/// Use [`ArrayKey`](super::array_key::ArrayKey) when:
+/// - Key sizes are bounded and known
+/// - You want optimal performance
+/// - Keys are relatively small (< 32 bytes)
 #[derive(Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub struct VectorKey {
     data: Box<[u8]>,

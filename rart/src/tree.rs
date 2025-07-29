@@ -1,7 +1,11 @@
+//! Adaptive Radix Tree implementation.
+//!
+//! This module contains the main [`AdaptiveRadixTree`] implementation and related
+//! functionality for the RART crate.
+
 use std::cmp::min;
 use std::ops::RangeBounds;
 
-use crate::TreeTrait;
 use crate::iter::Iter;
 use crate::keys::KeyTrait;
 use crate::node::{Content, DefaultNode, Node};
@@ -9,11 +13,69 @@ use crate::partials::Partial;
 use crate::range::Range;
 use crate::stats::{TreeStats, TreeStatsTrait, update_tree_stats};
 
+/// An Adaptive Radix Tree (ART) - a high-performance, memory-efficient trie data structure.
+///
+/// The Adaptive Radix Tree automatically adjusts its internal representation based on the
+/// number of children at each node, providing excellent performance characteristics for
+/// a wide range of workloads.
+///
+/// ## Features
+///
+/// - **Adaptive nodes**: Uses different node types (4, 16, 48, 256 children) based on density
+/// - **Space efficient**: Compact representation that minimizes memory usage
+/// - **Cache friendly**: Optimized memory layout for modern CPU architectures
+/// - **Fast operations**: O(k) complexity for basic operations where k is the key length
+/// - **Range queries**: Efficient iteration over key ranges with proper ordering
+///
+/// ## Type Parameters
+///
+/// - `KeyType`: The type of keys stored in the tree, must implement [`KeyTrait`]
+/// - `ValueType`: The type of values associated with keys
+///
+/// ## Examples
+///
+/// Basic usage with string keys:
+///
+/// ```rust
+/// use rart::{AdaptiveRadixTree, ArrayKey};
+///
+/// let mut tree = AdaptiveRadixTree::<ArrayKey<32>, String>::new();
+///
+/// // Insert some data
+/// tree.insert("apple", "fruit".to_string());
+/// tree.insert("application", "software".to_string());
+///
+/// // Query the tree
+/// assert_eq!(tree.get("apple"), Some(&"fruit".to_string()));
+/// assert_eq!(tree.get("orange"), None);
+///
+/// // Iterate over all entries
+/// for (key, value) in tree.iter() {
+///     println!("{:?} -> {}", key.as_ref(), value);
+/// }
+/// ```
+///
+/// Range queries:
+///
+/// ```rust
+/// use rart::{AdaptiveRadixTree, ArrayKey};
+///
+/// let mut tree = AdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+/// tree.insert("apple", 1);
+/// tree.insert("banana", 2);
+/// tree.insert("cherry", 3);
+///
+/// // Get all keys starting with "a"
+/// let start: ArrayKey<16> = "a".into();
+/// let end: ArrayKey<16> = "b".into();
+/// let a_keys: Vec<_> = tree.range(start..end).collect();
+/// assert_eq!(a_keys.len(), 1); // Just "apple"
+/// ```
 pub struct AdaptiveRadixTree<KeyType, ValueType>
 where
     KeyType: KeyTrait,
 {
-    root: Option<<Self as TreeTrait<KeyType, ValueType>>::NodeType>,
+    root: Option<DefaultNode<KeyType::PartialType, ValueType>>,
     _phantom: std::marker::PhantomData<KeyType>,
 }
 
@@ -27,32 +89,64 @@ impl<KeyType, ValueType> AdaptiveRadixTree<KeyType, ValueType>
 where
     KeyType: KeyTrait,
 {
+    /// Create a new empty Adaptive Radix Tree.
     pub fn new() -> Self {
         Self {
             root: None,
             _phantom: Default::default(),
         }
     }
-}
 
-// Implementation of the public API for the tree.
-impl<KeyType: KeyTrait, ValueType> TreeTrait<KeyType, ValueType>
-    for AdaptiveRadixTree<KeyType, ValueType>
-{
-    type NodeType = DefaultNode<KeyType::PartialType, ValueType>;
-
+    /// Get a value by key (generic version).
+    ///
+    /// This method accepts any type that can be converted into the tree's key type.
     #[inline]
-    fn get_k(&self, key: &KeyType) -> Option<&ValueType> {
+    pub fn get<Key>(&self, key: Key) -> Option<&ValueType>
+    where
+        Key: Into<KeyType>,
+    {
+        self.get_k(&key.into())
+    }
+
+    /// Get a value by key reference (direct version).
+    ///
+    /// This method works directly with key references for optimal performance.
+    #[inline]
+    pub fn get_k(&self, key: &KeyType) -> Option<&ValueType> {
         AdaptiveRadixTree::get_iterate(self.root.as_ref()?, key)
     }
 
+    /// Get a mutable reference to a value by key (generic version).
     #[inline]
-    fn get_mut_k(&mut self, key: &KeyType) -> Option<&mut ValueType> {
+    pub fn get_mut<Key>(&mut self, key: Key) -> Option<&mut ValueType>
+    where
+        Key: Into<KeyType>,
+    {
+        self.get_mut_k(&key.into())
+    }
+
+    /// Get a mutable reference to a value by key reference (direct version).
+    #[inline]
+    pub fn get_mut_k(&mut self, key: &KeyType) -> Option<&mut ValueType> {
         AdaptiveRadixTree::get_iterate_mut(self.root.as_mut()?, key)
     }
 
+    /// Insert a key-value pair (generic version).
+    ///
+    /// Returns the previous value if the key already existed.
     #[inline]
-    fn insert_k(&mut self, key: &KeyType, value: ValueType) -> Option<ValueType> {
+    pub fn insert<KV>(&mut self, key: KV, value: ValueType) -> Option<ValueType>
+    where
+        KV: Into<KeyType>,
+    {
+        self.insert_k(&key.into(), value)
+    }
+
+    /// Insert a key-value pair using key reference (direct version).
+    ///
+    /// Returns the previous value if the key already existed.
+    #[inline]
+    pub fn insert_k(&mut self, key: &KeyType, value: ValueType) -> Option<ValueType> {
         let Some(root) = &mut self.root else {
             self.root = Some(DefaultNode::new_leaf(key.to_partial(0), value));
             return None;
@@ -61,7 +155,20 @@ impl<KeyType: KeyTrait, ValueType> TreeTrait<KeyType, ValueType>
         AdaptiveRadixTree::insert_recurse(root, key, value, 0)
     }
 
-    fn remove_k(&mut self, key: &KeyType) -> Option<ValueType> {
+    /// Remove a key-value pair (generic version).
+    ///
+    /// Returns the removed value if the key existed.
+    pub fn remove<KV>(&mut self, key: KV) -> Option<ValueType>
+    where
+        KV: Into<KeyType>,
+    {
+        self.remove_k(&key.into())
+    }
+
+    /// Remove a key-value pair using key reference (direct version).
+    ///
+    /// Returns the removed value if the key existed.
+    pub fn remove_k(&mut self, key: &KeyType) -> Option<ValueType> {
         let root = self.root.as_mut()?;
 
         // Don't bother doing anything if there's no prefix match on the root at all.
@@ -92,11 +199,17 @@ impl<KeyType: KeyTrait, ValueType> TreeTrait<KeyType, ValueType>
         result
     }
 
-    fn iter(&self) -> Iter<'_, KeyType, KeyType::PartialType, ValueType> {
+    /// Create an iterator over all key-value pairs in the tree.
+    ///
+    /// The iterator yields items in lexicographic order of the keys.
+    pub fn iter(&self) -> Iter<'_, KeyType, KeyType::PartialType, ValueType> {
         Iter::new(self.root.as_ref())
     }
 
-    fn range<'a, R>(&'a self, range: R) -> Range<'a, KeyType, ValueType>
+    /// Create an iterator over key-value pairs within a specified range.
+    ///
+    /// The range can be any type that implements `RangeBounds<KeyType>`.
+    pub fn range<'a, R>(&'a self, range: R) -> Range<'a, KeyType, ValueType>
     where
         R: RangeBounds<KeyType> + 'a,
     {
@@ -122,7 +235,8 @@ impl<KeyType: KeyTrait, ValueType> TreeTrait<KeyType, ValueType>
         }
     }
 
-    fn is_empty(&self) -> bool {
+    /// Check if the tree is empty.
+    pub fn is_empty(&self) -> bool {
         self.root.is_none()
     }
 }
@@ -170,7 +284,7 @@ where
     KeyType: KeyTrait,
 {
     fn get_iterate<'a>(
-        cur_node: &'a <Self as TreeTrait<KeyType, ValueType>>::NodeType,
+        cur_node: &'a DefaultNode<KeyType::PartialType, ValueType>,
         key: &KeyType,
     ) -> Option<&'a ValueType> {
         let mut cur_node = cur_node;
@@ -191,7 +305,7 @@ where
     }
 
     fn get_iterate_mut<'a>(
-        cur_node: &'a mut <Self as TreeTrait<KeyType, ValueType>>::NodeType,
+        cur_node: &'a mut DefaultNode<KeyType::PartialType, ValueType>,
         key: &KeyType,
     ) -> Option<&'a mut ValueType> {
         let mut cur_node = cur_node;
@@ -213,7 +327,7 @@ where
     }
 
     fn insert_recurse(
-        cur_node: &mut <Self as TreeTrait<KeyType, ValueType>>::NodeType,
+        cur_node: &mut DefaultNode<KeyType::PartialType, ValueType>,
         key: &KeyType,
         value: ValueType,
         depth: usize,
@@ -276,7 +390,7 @@ where
     }
 
     fn remove_recurse(
-        parent_node: &mut <Self as TreeTrait<KeyType, ValueType>>::NodeType,
+        parent_node: &mut DefaultNode<KeyType::PartialType, ValueType>,
         key: &KeyType,
         depth: usize,
     ) -> Option<ValueType> {
@@ -320,7 +434,7 @@ where
     }
 
     fn get_tree_stats_recurse(
-        node: &<Self as TreeTrait<KeyType, ValueType>>::NodeType,
+        node: &DefaultNode<KeyType::PartialType, ValueType>,
         tree_stats: &mut TreeStats,
         height: usize,
     ) {
@@ -359,8 +473,8 @@ mod tests {
     use crate::keys::KeyTrait;
     use crate::keys::array_key::ArrayKey;
     use crate::stats::TreeStatsTrait;
+    use crate::tree;
     use crate::tree::AdaptiveRadixTree;
-    use crate::{TreeTrait, tree};
 
     #[test]
     fn test_root_set_get() {

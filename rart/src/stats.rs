@@ -1,3 +1,14 @@
+//! Statistics and introspection for RART.
+//!
+//! This module provides functionality to gather statistics about the internal
+//! structure and performance characteristics of Adaptive Radix Trees.
+//!
+//! Statistics can be useful for:
+//! - Performance analysis and optimization
+//! - Understanding memory usage patterns  
+//! - Debugging tree structure issues
+//! - Academic research and benchmarking
+
 use crate::node::Node;
 use crate::partials::Partial;
 use std::collections::HashMap;
