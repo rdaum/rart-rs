@@ -13,19 +13,27 @@ pub trait BitsetTrait: Default {
     // Bit width of each storage unit.
     const STORAGE_BIT_WIDTH: usize;
     // Total size of storage in its internal storage width (e.g. u16, u32, etc.)
+    #[allow(dead_code)]
     const STORAGE_WIDTH: usize;
 
     fn first_empty(&self) -> Option<usize>;
+    #[allow(dead_code)]
     fn first_set(&self) -> Option<usize>;
     fn set(&mut self, pos: usize);
     fn unset(&mut self, pos: usize);
     fn check(&self, pos: usize) -> bool;
     fn clear(&mut self);
+    #[allow(dead_code)]
     fn last(&self) -> Option<usize>;
+    #[allow(dead_code)]
     fn is_empty(&self) -> bool;
+    #[allow(dead_code)]
     fn size(&self) -> usize;
+    #[allow(dead_code)]
     fn bit_width(&self) -> usize;
+    #[allow(dead_code)]
     fn capacity(&self) -> usize;
+    #[allow(dead_code)]
     fn storage_width(&self) -> usize;
     fn as_bitmask(&self) -> u128;
 }
@@ -47,6 +55,7 @@ where
         }
     }
 
+    #[allow(dead_code)]
     pub fn iter(&self) -> impl Iterator<Item = usize> + '_ {
         self.bitset.iter().enumerate().flat_map(|(i, b)| {
             (0..Self::STORAGE_BIT_WIDTH).filter_map(move |j| {
@@ -191,6 +200,7 @@ where
 }
 
 pub type Bitset64<const STORAGE_WIDTH_U64: usize> = Bitset<u64, STORAGE_WIDTH_U64>;
+
 pub type Bitset32<const STORAGE_WIDTH_U32: usize> = Bitset<u32, STORAGE_WIDTH_U32>;
 pub type Bitset16<const STORAGE_WIDTH_U16: usize> = Bitset<u16, STORAGE_WIDTH_U16>;
 pub type Bitset8<const STORAGE_WIDTH_U8: usize> = Bitset<u8, STORAGE_WIDTH_U8>;

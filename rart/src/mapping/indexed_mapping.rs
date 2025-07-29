@@ -52,6 +52,8 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> IndexedMapping<N, WIDTH, Bitset
         im
     }
 
+    #[doc(hidden)]
+    #[allow(dead_code)]
     pub fn from_keyed<const KM_WIDTH: usize, FromBitset: BitsetTrait>(
         km: &mut KeyedMapping<N, KM_WIDTH, FromBitset>,
     ) -> Self {
@@ -97,12 +99,6 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> NodeMapping<N, WIDTH>
         self.child_ptr_indexes.set(key as usize, pos as u8);
         self.children.set(pos, node);
         self.num_children += 1;
-    }
-
-    fn update_child(&mut self, key: u8, node: N) {
-        if let Some(pos) = self.child_ptr_indexes.get(key as usize) {
-            self.children.set(*pos as usize, node);
-        }
     }
 
     fn seek_child(&self, key: u8) -> Option<&N> {

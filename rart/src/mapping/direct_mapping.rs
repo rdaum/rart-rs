@@ -51,12 +51,6 @@ impl<N> NodeMapping<N, 256> for DirectMapping<N> {
         self.num_children += 1;
     }
 
-    fn update_child(&mut self, key: u8, node: N) {
-        if let Some(n) = self.children.get_mut(key as usize) {
-            *n = node;
-        }
-    }
-
     #[inline]
     fn seek_child(&self, key: u8) -> Option<&N> {
         self.children.get(key as usize)

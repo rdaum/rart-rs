@@ -98,10 +98,6 @@ impl<N, const WIDTH: usize> NodeMapping<N, WIDTH> for SortedKeyedMapping<N, WIDT
         self.num_children += 1;
     }
 
-    fn update_child(&mut self, key: u8, node: N) {
-        *self.seek_child_mut(key).unwrap() = node;
-    }
-
     fn seek_child(&self, key: u8) -> Option<&N> {
         let idx =
             u8_keys_find_key_position_sorted::<WIDTH>(key, &self.keys, self.num_children as usize)?;

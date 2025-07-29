@@ -25,6 +25,7 @@ where
         }
     }
 
+    #[allow(dead_code)]
     pub fn push(&mut self, x: X) -> Option<usize> {
         let pos = self.bitset.first_empty()?;
         assert!(pos < RANGE_WIDTH);
@@ -35,6 +36,7 @@ where
         Some(pos)
     }
 
+    #[allow(dead_code)]
     pub fn pop(&mut self) -> Option<X> {
         let pos = self.bitset.last()?;
         self.bitset.unset(pos);
@@ -42,6 +44,7 @@ where
         Some(unsafe { old.assume_init() })
     }
 
+    #[allow(dead_code)]
     pub fn last(&self) -> Option<&X> {
         self.bitset
             .last()
@@ -49,11 +52,13 @@ where
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub fn last_used_pos(&self) -> Option<usize> {
         self.bitset.last()
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub fn first_used(&self) -> Option<usize> {
         self.bitset.first_set()
     }
@@ -106,6 +111,7 @@ where
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub fn update(&mut self, pos: usize, x: X) -> Option<X> {
         let old = self.take_internal(pos);
         unsafe {
@@ -143,10 +149,12 @@ where
         self.bitset.clear();
     }
 
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.bitset.is_empty()
     }
 
+    #[allow(dead_code)]
     pub fn size(&mut self) -> usize {
         self.bitset.size()
     }
@@ -171,6 +179,7 @@ where
         })
     }
 
+    #[allow(dead_code)]
     pub fn iter_mut(&mut self) -> impl DoubleEndedIterator<Item = (usize, &mut X)> {
         self.storage.iter_mut().enumerate().filter_map(|x| {
             if !self.bitset.check(x.0) {

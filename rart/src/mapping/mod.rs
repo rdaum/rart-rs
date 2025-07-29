@@ -7,7 +7,6 @@ pub trait NodeMapping<N, const NUM_CHILDREN: usize> {
     const NUM_CHILDREN: usize = NUM_CHILDREN;
 
     fn add_child(&mut self, key: u8, node: N);
-    fn update_child(&mut self, key: u8, node: N);
     fn seek_child(&self, key: u8) -> Option<&N>;
     fn seek_child_mut(&mut self, key: u8) -> Option<&mut N>;
     fn delete_child(&mut self, key: u8) -> Option<N>;

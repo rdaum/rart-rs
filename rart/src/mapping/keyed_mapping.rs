@@ -51,6 +51,8 @@ where
         new_mapping
     }
 
+    #[doc(hidden)]
+    #[allow(dead_code)]
     pub fn from_resized_grow<const OLD_WIDTH: usize, OldBitset: BitsetTrait>(
         km: &mut KeyedMapping<N, OLD_WIDTH, OldBitset>,
     ) -> Self {
@@ -68,40 +70,6 @@ where
         }
         km.children.clear();
         new.num_children = km.num_children;
-        new
-    }
-
-    // Return the key and value of the only child, and remove it from the mapping.
-    pub fn take_value_for_leaf(&mut self) -> (u8, N) {
-        assert!(self.num_children == 1);
-        let first_child_pos = self.children.first_used().unwrap();
-        let key = self.keys[first_child_pos];
-        let value = self.children.erase(first_child_pos).unwrap();
-        self.num_children -= 1;
-        (key, value)
-    }
-
-    pub fn from_resized_shrink<const OLD_WIDTH: usize, OldBitset: BitsetTrait>(
-        km: &mut KeyedMapping<N, OLD_WIDTH, OldBitset>,
-    ) -> Self {
-        assert!(WIDTH < OLD_WIDTH);
-        let mut new = KeyedMapping::new();
-        let mut cnt = 0;
-
-        // Since we're smaller, we compact empty spots out.
-        for i in 0..OLD_WIDTH {
-            if km.children.check(i) {
-                new.keys[cnt] = km.keys[i];
-                let stolen = km.children.erase(i);
-                if let Some(n) = stolen {
-                    new.children.set(cnt, n);
-                }
-                cnt += 1;
-            }
-        }
-        km.children.clear();
-        new.num_children = km.num_children;
-        km.num_children = 0;
         new
     }
 
@@ -127,10 +95,6 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> NodeMapping<N, WIDTH>
         self.keys[idx] = key;
         self.children.set(idx, node);
         self.num_children += 1;
-    }
-
-    fn update_child(&mut self, key: u8, node: N) {
-        *self.seek_child_mut(key).unwrap() = node;
     }
 
     fn seek_child(&self, key: u8) -> Option<&N> {
