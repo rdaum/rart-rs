@@ -80,14 +80,9 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> IndexedMapping<N, WIDTH, Bitset
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (u8, &N)> {
-        // Collect key-node pairs and sort by key to ensure ordered iteration
-        let mut pairs: Vec<_> = self
-            .child_ptr_indexes
+        self.child_ptr_indexes
             .iter()
             .map(|(key, pos)| (key as u8, &self.children[*pos as usize]))
-            .collect();
-        pairs.sort_by_key(|(key, _)| *key);
-        pairs.into_iter()
     }
 }
 

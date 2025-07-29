@@ -33,14 +33,9 @@ impl<N> DirectMapping<N> {
 
     #[inline]
     pub fn iter(&self) -> impl Iterator<Item = (u8, &N)> {
-        // Collect key-node pairs and sort by key to ensure ordered iteration
-        let mut pairs: Vec<_> = self
-            .children
+        self.children
             .iter()
             .map(|(key, node)| (key as u8, node))
-            .collect();
-        pairs.sort_by_key(|(key, _)| *key);
-        pairs.into_iter()
     }
 }
 
