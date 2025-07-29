@@ -53,12 +53,10 @@ impl<KeyType: KeyTrait, ValueType> TreeTrait<KeyType, ValueType>
 
     #[inline]
     fn insert_k(&mut self, key: &KeyType, value: ValueType) -> Option<ValueType> {
-        if self.root.is_none() {
+        let Some(root) = &mut self.root else {
             self.root = Some(DefaultNode::new_leaf(key.to_partial(0), value));
             return None;
         };
-
-        let root = self.root.as_mut().unwrap();
 
         AdaptiveRadixTree::insert_recurse(root, key, value, 0)
     }
@@ -102,9 +100,9 @@ impl<KeyType: KeyTrait, ValueType> TreeTrait<KeyType, ValueType>
     where
         R: RangeBounds<KeyType> + 'a,
     {
-        if self.root.is_none() {
+        let Some(_) = &self.root else {
             return Range::empty();
-        }
+        };
 
         let start_bound = range.start_bound().cloned();
         let end_bound = range.end_bound().cloned();
@@ -227,12 +225,11 @@ where
 
         // Prefix fully covers this node.
         // Either sets the value or replaces the old value already here.
-        if is_prefix_match && cur_node.prefix.len() == key.length_at(depth) {
-            if let Content::Leaf(v) = &mut cur_node.content {
-                return Some(std::mem::replace(v, value));
-            } else {
-                panic!("Node type mismatch")
-            }
+        if is_prefix_match
+            && cur_node.prefix.len() == key.length_at(depth)
+            && let Content::Leaf(v) = &mut cur_node.content
+        {
+            return Some(std::mem::replace(v, value));
         }
 
         // Prefix is part of the current node, but doesn't fully cover it.
@@ -266,21 +263,16 @@ where
         // we'll hunt and see.
         let k = key.at(depth + longest_common_prefix);
 
-        let child_for_key = cur_node.seek_child_mut(k);
-        if let Some(child) = child_for_key {
-            return AdaptiveRadixTree::insert_recurse(
-                child,
-                key,
-                value,
-                depth + longest_common_prefix,
-            );
+        let Some(child) = cur_node.seek_child_mut(k) else {
+            // We should not be a leaf at this point. If so, something bad has happened.
+            assert!(cur_node.is_inner());
+            let new_leaf =
+                DefaultNode::new_leaf(key.to_partial(depth + longest_common_prefix), value);
+            cur_node.add_child(k, new_leaf);
+            return None;
         };
 
-        // We should not be a leaf at this point. If so, something bad has happened.
-        assert!(cur_node.is_inner());
-        let new_leaf = DefaultNode::new_leaf(key.to_partial(depth + longest_common_prefix), value);
-        cur_node.add_child(k, new_leaf);
-        None
+        AdaptiveRadixTree::insert_recurse(child, key, value, depth + longest_common_prefix)
     }
 
     fn remove_recurse(
@@ -373,7 +365,7 @@ mod tests {
     #[test]
     fn test_root_set_get() {
         let mut q = AdaptiveRadixTree::<ArrayKey<16>, i32>::new();
-        let key = ArrayKey::new_from_str("abc");
+        let key: ArrayKey<16> = "abc".into();
         assert!(q.insert("abc", 1).is_none());
         assert_eq!(q.get_k(&key), Some(&1));
     }

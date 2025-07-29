@@ -179,7 +179,7 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> Iterator for IterInne
             // the stack, truncate our working key length back to the parent's depth, return to our
             // parent, and continue there.
             let Some((_k, node)) = last_iter.next() else {
-                let _ = self.node_iter_stack.pop().unwrap();
+                self.node_iter_stack.pop();
                 // Get the parent-depth, and truncate our working key to that depth. If there is no
                 // parent, no need to truncate, we'll be done in the next loop
                 if let Some((parent_depth, _)) = self.node_iter_stack.last() {
@@ -205,16 +205,14 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> Iterator for IterInne
             let key = self.cur_key.extend_from_partial(&node.prefix);
 
             // Handle start bound filtering
-            if let Some(ref start_bound) = self.start_bound {
-                let satisfies_start = match start_bound {
+            if let Some(ref start_bound) = self.start_bound
+                && !match start_bound {
                     Bound::Included(start_key) => key.cmp(start_key) >= std::cmp::Ordering::Equal,
                     Bound::Excluded(start_key) => key.cmp(start_key) > std::cmp::Ordering::Equal,
                     Bound::Unbounded => true,
-                };
-
-                if !satisfies_start {
-                    continue; // Skip this key, it doesn't satisfy start bound
                 }
+            {
+                continue; // Skip this key, it doesn't satisfy start bound
             }
 
             return Some((key, v));
