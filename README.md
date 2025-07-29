@@ -63,7 +63,7 @@ let apps: Vec<_ > = tree.range(start..end).collect();
 
 RART provides two main key types optimized for different use cases:
 
-- **`ArrayKey<N>`**: Fixed-size keys up to N bytes, stack-allocated for optimal performance
+- **`ArrayKey<N>`**: Fixed-size keys up to N bytes, stack-allocated for better performance
 - **`VectorKey`**: Variable-size keys, heap-allocated for flexibility
 
 ```rust
@@ -80,32 +80,32 @@ let key4: VectorKey = 1337u32.into();
 
 ## Performance
 
-rart delivers exceptional performance, particularly excelling in sequential access patterns where it achieves **10x faster** lookups compared to random access.
+rart shows strong performance characteristics, particularly in sequential access patterns where it achieves significantly faster lookups compared to random access.
 
 ### Benchmark Results
 
 **Sequential Get Performance** (32k elements):
-- **ART: 2.2ns** ⭐ (10x faster than random!)
+- **ART: 2.2ns** (10x faster than random)
 - HashMap: 10ns
 - BTree: 22ns
 
 ![Sequential Get Performance](https://github.com/rdaum/rart-rs/blob/main/benchmarks/graphs/seq_get_violin.svg)
 
 **Random Get Performance** (32k elements):  
-- **ART: 14ns** ⭐ (tied for fastest)
+- **ART: 14ns** (comparable to HashMap)
 - HashMap: 14ns  
 - BTree: 55ns
 
 ![Random Get Performance](https://github.com/rdaum/rart-rs/blob/main/benchmarks/graphs/random_get_violin.svg)
 
 **Key Performance Characteristics:**
-- **Sequential operations**: Exceptional performance due to prefix compression and cache locality
-- **Random operations**: Competitive with HashMap, significantly faster than BTree
+- **Sequential operations**: Strong performance due to prefix compression and cache locality
+- **Random operations**: Competitive with HashMap, faster than BTree
 - **Range queries**: Native support with efficient ordered iteration
 - **Memory usage**: Adaptive structure scales efficiently with data density
 - **Predictable scaling**: Consistent performance across dataset sizes
 
-📊 **[View Complete Performance Analysis](https://github.com/rdaum/rart-rs/blob/main/benchmarks/PERFORMANCE_ANALYSIS.md)** - Detailed benchmarks vs HashMap and BTree across all operations.
+**[View Complete Performance Analysis](https://github.com/rdaum/rart-rs/blob/main/benchmarks/PERFORMANCE_ANALYSIS.md)** - Detailed benchmarks vs HashMap and BTree across all operations.
 
 *Benchmarks run on AMD Ryzen 9 7940HS using Criterion.rs*
 

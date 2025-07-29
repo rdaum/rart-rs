@@ -5,12 +5,10 @@
 **System Specifications:**
 - **Processor**: AMD Ryzen 9 7940HS w/ Radeon 780M Graphics
 - **CPU Family**: 25 (Zen 4 architecture)
-- **Cores/Threads**: 8 cores, 16 threads  
 - **Cache**: 1024 KB L2 cache per core
 - **Memory**: DDR5 with advanced cache hierarchy
-- **Microcode**: 0xa704107
 
-**Test Framework**: Criterion.rs statistical benchmarking
+**Bench Framework**: Criterion.rs statistical benchmarking
 
 ## Executive Summary
 
@@ -21,11 +19,11 @@ This analysis compares three data structures across different access patterns:
 
 ## Key Performance Findings
 
-### 🚀 Random Insert Performance
+### Random Insert Performance
 ![Random Insert Comparison](graphs/rand_insert_violin.svg)
 
 **Results (nanoseconds per operation):**
-- **HashMap: 194ns** ⭐ (fastest)
+- **HashMap: 194ns** (fastest)
 - **ART: 277ns** (43% slower than HashMap)
 - **BTree: 384ns** (98% slower than HashMap)
 
@@ -33,16 +31,16 @@ This analysis compares three data structures across different access patterns:
 
 ---
 
-### 🔍 Random Get Performance  
+### Random Get Performance  
 ![Random Get Comparison](graphs/random_get_violin.svg)
 
 **Results for 32k elements:**
-- **ART: 14ns** ⭐ (tied for fastest)
-- **HashMap: 14ns** ⭐ (tied for fastest)  
+- **ART: 14ns** (tied for fastest)
+- **HashMap: 14ns** (tied for fastest)  
 - **BTree: 55ns** (4x slower)
 
 **Results for 1M elements:**
-- **ART: 73ns** ⭐ (fastest, scales better)
+- **ART: 73ns** (fastest, scales better)
 - **HashMap: 51ns** (good, but more variance)
 - **BTree: 189ns** (slowest, 3.7x slower than ART)
 
@@ -50,23 +48,23 @@ This analysis compares three data structures across different access patterns:
 
 ---
 
-### ⚡ Sequential Get Performance
+### Sequential Get Performance
 ![Sequential Get Comparison](graphs/seq_get_violin.svg)
 
 **Results for 32k elements:**
-- **ART: 2.2ns** ⭐ (**10x faster** than random access!)
+- **ART: 2.2ns** (10x faster than random access)
 - **HashMap: 10ns** (solid performance)
 - **BTree: 22ns** (2.5x better than random)
 
-**Analysis**: **ART absolutely dominates sequential access** due to prefix compression and cache-friendly traversal. The 84% performance improvement over random access demonstrates excellent spatial locality.
+**Analysis**: ART shows strong sequential access performance due to prefix compression and cache-friendly traversal. The significant performance improvement over random access demonstrates good spatial locality.
 
 ---
 
-### 🗑️ Sequential Delete Performance
+### Sequential Delete Performance
 ![Sequential Delete Comparison](graphs/seq_delete_violin.svg)
 
 **Results:**
-- **BTree: 20ns** ⭐ (fastest for deletion)
+- **BTree: 20ns** (fastest for deletion)
 - **HashMap: 26ns** (middle ground)
 - **ART: 30ns** (slowest, but reasonable)
 
@@ -74,7 +72,7 @@ This analysis compares three data structures across different access patterns:
 
 ---
 
-### 🗑️ Random Delete Performance  
+### Random Delete Performance  
 ![Random Delete Comparison](graphs/rand_delete_violin.svg)
 
 **Analysis**: Similar patterns to sequential delete, with BTree maintaining its deletion advantage across access patterns.
@@ -91,20 +89,20 @@ This analysis compares three data structures across different access patterns:
 
 ## Recommendations by Workload
 
-### 🎯 **Choose ART when:**
+### **Choose ART when:**
 - Sequential access patterns dominate
 - Large datasets with prefix similarity
 - Mixed read/write workloads
 - Predictable performance is critical
 - Memory efficiency matters
 
-### 🎯 **Choose HashMap when:**
+### **Choose HashMap when:**
 - Random insert-heavy workloads
 - Small to medium datasets
 - Hash-friendly key distribution
 - Maximum raw insert speed needed
 
-### 🎯 **Choose BTree when:**
+### **Choose BTree when:**
 - Delete-heavy workloads
 - Range queries required
 - Ordered iteration needed
@@ -113,10 +111,10 @@ This analysis compares three data structures across different access patterns:
 ## Technical Insights
 
 ### ART's Sequential Advantage
-The **10x performance improvement** in sequential gets (2.2ns vs 14ns random) demonstrates ART's core strength: prefix compression creates cache-friendly access patterns when keys share common prefixes.
+The 10x performance improvement in sequential gets (2.2ns vs 14ns random) demonstrates ART's core strength: prefix compression creates cache-friendly access patterns when keys share common prefixes.
 
 ### HashMap's Insert Dominance  
-HashMap's **30-40% insert advantage** comes from O(1) hash-based addressing, avoiding tree traversal costs entirely.
+HashMap's 30-40% insert advantage comes from O(1) hash-based addressing, avoiding tree traversal costs entirely.
 
 ### BTree's Deletion Efficiency
 BTree's balanced structure provides predictable deletion performance through established rebalancing algorithms.
@@ -128,8 +126,8 @@ BTree's balanced structure provides predictable deletion performance through est
 
 ## Conclusion
 
-**ART emerges as the best general-purpose choice**, offering:
-- Exceptional sequential performance (10x improvement)
+**ART provides a well-balanced general-purpose choice**, offering:
+- Strong sequential performance (10x improvement)
 - Competitive random access
 - Predictable scaling characteristics
 - Reasonable insertion performance
