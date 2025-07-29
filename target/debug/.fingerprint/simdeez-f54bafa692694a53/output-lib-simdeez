@@ -1,3 +1,0 @@
-==13727==ERROR: Interceptors are not working. This may be because AddressSanitizer is loaded too late (e.g. via dlopen). Please launch the executable with:
-DYLD_INSERT_LIBRARIES=/Users/ryan/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/lib/librustc-nightly_rt.asan.dylib
-"interceptors not installed" && 0

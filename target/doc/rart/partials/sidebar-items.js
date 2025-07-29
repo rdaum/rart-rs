@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"mod":["array_partial","vector_partial"],"trait":["Partial"]};

@@ -1,0 +1,17 @@
+# IDE files
+.idea/
+.vscode/
+
+# Build artifacts
+/target/
+/Cargo.lock
+
+# Fuzz artifacts
+/fuzz/artifacts/
+/fuzz/corpus/
+
+# Logs
+logs_*/
+
+# OS files
+.DS_Store
