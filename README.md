@@ -105,7 +105,7 @@ rart delivers exceptional performance, particularly excelling in sequential acce
 - **Memory usage**: Adaptive structure scales efficiently with data density
 - **Predictable scaling**: Consistent performance across dataset sizes
 
-📊 **[View Complete Performance Analysis](benchmarks/PERFORMANCE_ANALYSIS.md)** - Detailed benchmarks vs HashMap and BTree across all operations.
+📊 **[View Complete Performance Analysis](https://github.com/rdaum/rart-rs/blob/main/benchmarks/PERFORMANCE_ANALYSIS.md)** - Detailed benchmarks vs HashMap and BTree across all operations.
 
 *Benchmarks run on AMD Ryzen 9 7940HS using Criterion.rs*
 
