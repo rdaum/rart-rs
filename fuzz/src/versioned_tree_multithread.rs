@@ -15,7 +15,7 @@ enum MainOp {
     Insert { key: usize, val: usize },
     Remove { key: usize },
     Get { key: usize },
-    CreateSnapshot { thread_id: u8, ops: Vec<ThreadOp> },
+    CreateSnapshot { _thread_id: u8, _ops: Vec<ThreadOp> },
 }
 
 #[derive(Arbitrary, Debug, Clone)]

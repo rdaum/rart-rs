@@ -14,6 +14,9 @@ use crate::mapping::{
 use crate::partials::Partial;
 use crate::utils::bitset::Bitset64;
 
+/// Type alias for remove operation result to reduce type complexity
+type RemoveResult<P, V> = (Option<Arc<VersionedNode<P, V>>>, V);
+
 /// A versioned Adaptive Radix Tree that supports snapshot-based copy-on-write mutations.
 ///
 /// Unlike the standard [`AdaptiveRadixTree`], this version allows taking O(1) snapshots
@@ -626,10 +629,7 @@ where
         key: &KeyType,
         depth: usize,
         version: u64,
-    ) -> Option<(
-        Option<Arc<VersionedNode<KeyType::PartialType, ValueType>>>,
-        ValueType,
-    )> {
+    ) -> Option<RemoveResult<KeyType::PartialType, ValueType>> {
         // Check prefix match
         let prefix_common_match = cur_node.prefix.prefix_length_key(key, depth);
         if prefix_common_match != cur_node.prefix.len() {
