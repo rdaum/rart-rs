@@ -11,7 +11,7 @@ use rart::keys::array_key::ArrayKey;
 use rart::tree::AdaptiveRadixTree;
 
 // Variations on the number of keys to insert into the tree for benchmarks that measure retrievals
-const TREE_SIZES: [u64; 4] = [1 << 15, 1 << 20, 1 << 22, 1 << 24];
+const TREE_SIZES: [u64; 4] = [1 << 10, 1 << 12, 1 << 15, 1 << 17];
 
 pub fn rand_insert(c: &mut Criterion) {
     let mut group = c.benchmark_group("rand_insert");

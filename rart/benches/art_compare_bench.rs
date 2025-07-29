@@ -12,7 +12,7 @@ use rart::keys::array_key::ArrayKey;
 
 use rart::tree::AdaptiveRadixTree;
 
-const TREE_SIZES: [u64; 4] = [1 << 15, 1 << 20, 1 << 22, 1 << 24];
+const TREE_SIZES: [u64; 4] = [1 << 10, 1 << 12, 1 << 15, 1 << 17];
 
 pub fn seq_insert(c: &mut Criterion) {
     let mut group = c.benchmark_group("seq_insert");
