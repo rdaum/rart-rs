@@ -751,13 +751,13 @@ mod tests {
 
         // Insert enough keys to trigger Node4 → Node16 growth
         for i in 0..10 {
-            let key = format!("key{:02}", i);
+            let key = format!("key{i:02}");
             tree.insert(key, i);
         }
 
         // Verify all keys are still accessible after growth
         for i in 0..10 {
-            let key = format!("key{:02}", i);
+            let key = format!("key{i:02}");
             assert_eq!(tree.get(&key), Some(&i));
         }
 
@@ -766,20 +766,20 @@ mod tests {
 
         // Add more keys to original tree to trigger further growth
         for i in 10..20 {
-            let key = format!("key{:02}", i);
+            let key = format!("key{i:02}");
             tree.insert(key, i);
         }
 
         // Snapshot should not have new keys
         for i in 10..20 {
-            let key = format!("key{:02}", i);
+            let key = format!("key{i:02}");
             assert_eq!(snapshot.get(&key), None);
             assert_eq!(tree.get(&key), Some(&i));
         }
 
         // But snapshot should still have original keys
         for i in 0..10 {
-            let key = format!("key{:02}", i);
+            let key = format!("key{i:02}");
             assert_eq!(snapshot.get(&key), Some(&i));
         }
     }

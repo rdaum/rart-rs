@@ -60,8 +60,7 @@ fuzz_target!(|input: MultithreadedFuzzInput| {
                 let ref_result = reference_map.get(&key).copied();
                 assert_eq!(
                     tree_result, ref_result,
-                    "Setup Get mismatch for key {}",
-                    key
+                    "Setup Get mismatch for key {key}"
                 );
             }
             MainOp::CreateSnapshot { .. } => {
@@ -111,8 +110,7 @@ fuzz_target!(|input: MultithreadedFuzzInput| {
         assert_eq!(
             actual_val,
             Some(*expected_val),
-            "Final consistency check failed for key {}",
-            key
+            "Final consistency check failed for key {key}"
         );
     }
 });
@@ -150,8 +148,7 @@ fn thread_worker(
                 let reference_result = reference_map.get(&key).copied();
                 assert_eq!(
                     snapshot_result, reference_result,
-                    "Thread {} Get mismatch for key {}: snapshot={:?}, reference={:?}",
-                    thread_id, key, snapshot_result, reference_result
+                    "Thread {thread_id} Get mismatch for key {key}: snapshot={snapshot_result:?}, reference={reference_result:?}"
                 );
 
                 // Check nested snapshots too
@@ -159,8 +156,7 @@ fn thread_worker(
                     let nested_result = nested.get(key).copied();
                     assert_eq!(
                         nested_result, reference_result,
-                        "Thread {} Nested snapshot {} Get mismatch for key {}",
-                        thread_id, i, key
+                        "Thread {thread_id} Nested snapshot {i} Get mismatch for key {key}"
                     );
                 }
             }
@@ -186,8 +182,7 @@ fn thread_worker(
                             let ref_result = nested_reference.get(&key).copied();
                             assert_eq!(
                                 nested_result, ref_result,
-                                "Thread {} Nested Get mismatch for key {}",
-                                thread_id, key
+                                "Thread {thread_id} Nested Get mismatch for key {key}"
                             );
                         }
                         ThreadOp::CreateNestedSnapshot { .. } => {
@@ -202,9 +197,7 @@ fn thread_worker(
                     assert_eq!(
                         actual_val,
                         Some(*expected_val),
-                        "Thread {} Nested snapshot inconsistent for key {}",
-                        thread_id,
-                        key
+                        "Thread {thread_id} Nested snapshot inconsistent for key {key}"
                     );
                 }
 
@@ -223,9 +216,7 @@ fn thread_worker(
         assert_eq!(
             actual_val,
             Some(*expected_val),
-            "Thread {} final consistency check failed for key {}",
-            thread_id,
-            key
+            "Thread {thread_id} final consistency check failed for key {key}"
         );
     }
 }

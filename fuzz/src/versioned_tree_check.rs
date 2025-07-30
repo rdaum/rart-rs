@@ -30,8 +30,7 @@ fuzz_target!(|ops: Vec<TreeOp>| {
                 let reference_result = reference_map.get(&key).copied();
                 assert_eq!(
                     versioned_result, reference_result,
-                    "Get mismatch for key {}: versioned={:?}, reference={:?}",
-                    key, versioned_result, reference_result
+                    "Get mismatch for key {key}: versioned={versioned_result:?}, reference={reference_result:?}"
                 );
             }
             TreeOp::Insert { key, val } => {
@@ -43,8 +42,7 @@ fuzz_target!(|ops: Vec<TreeOp>| {
                     // For new insertions, both should agree
                     assert_eq!(
                         versioned_old, reference_old,
-                        "Insert mismatch for new key {}: versioned={:?}, reference={:?}",
-                        key, versioned_old, reference_old
+                        "Insert mismatch for new key {key}: versioned={versioned_old:?}, reference={reference_old:?}"
                     );
                 }
 
@@ -53,8 +51,7 @@ fuzz_target!(|ops: Vec<TreeOp>| {
                 let reference_check = reference_map.get(&key).copied();
                 assert_eq!(
                     versioned_check, reference_check,
-                    "Post-insert check failed for key {}: versioned={:?}, reference={:?}",
-                    key, versioned_check, reference_check
+                    "Post-insert check failed for key {key}: versioned={versioned_check:?}, reference={reference_check:?}"
                 );
             }
             TreeOp::Remove { key } => {
@@ -76,8 +73,7 @@ fuzz_target!(|ops: Vec<TreeOp>| {
                 let reference_check = reference_map.get(&key);
                 assert_eq!(
                     versioned_check, reference_check,
-                    "Post-remove check failed for key {}: versioned={:?}, reference={:?}",
-                    key, versioned_check, reference_check
+                    "Post-remove check failed for key {key}: versioned={versioned_check:?}, reference={reference_check:?}"
                 );
             }
             TreeOp::Snapshot => {
@@ -115,8 +111,7 @@ fuzz_target!(|ops: Vec<TreeOp>| {
                     let new_map_val = snapshot_maps[snapshot_idx].get(&key).copied();
                     assert_eq!(
                         new_snapshot_val, new_map_val,
-                        "Snapshot mutation mismatch for key {}: got {:?}, expected {:?}",
-                        key, new_snapshot_val, new_map_val
+                        "Snapshot mutation mismatch for key {key}: got {new_snapshot_val:?}, expected {new_map_val:?}"
                     );
 
                     // Verify other snapshots are unaffected
@@ -128,8 +123,7 @@ fuzz_target!(|ops: Vec<TreeOp>| {
                             let other_expected = other_map.get(&key).copied();
                             assert_eq!(
                                 other_val, other_expected,
-                                "Snapshot isolation violated: snapshot {} affected by mutation to snapshot {}",
-                                i, snapshot_idx
+                                "Snapshot isolation violated: snapshot {i} affected by mutation to snapshot {snapshot_idx}"
                             );
                         }
                     }
