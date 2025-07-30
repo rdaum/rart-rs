@@ -29,6 +29,73 @@ impl<N, const WIDTH: usize> Default for SortedKeyedMapping<N, WIDTH> {
     }
 }
 
+impl<N, const WIDTH: usize> IntoIterator for SortedKeyedMapping<N, WIDTH> {
+    type Item = (u8, N);
+    type IntoIter = SortedKeyedMappingIntoIter<N, WIDTH>;
+
+    fn into_iter(mut self) -> Self::IntoIter {
+        let keys = self.keys;
+        let num_children = self.num_children;
+        let children = std::mem::replace(
+            &mut self.children,
+            Box::new([const { MaybeUninit::uninit() }; WIDTH]),
+        );
+
+        // Prevent Drop from running on self since we've moved out the children
+        self.num_children = 0;
+        std::mem::forget(self);
+
+        SortedKeyedMappingIntoIter {
+            keys,
+            children,
+            num_children,
+            current: 0,
+        }
+    }
+}
+
+pub struct SortedKeyedMappingIntoIter<N, const WIDTH: usize> {
+    keys: [u8; WIDTH],
+    children: Box<[MaybeUninit<N>; WIDTH]>,
+    num_children: u8,
+    current: usize,
+}
+
+impl<N, const WIDTH: usize> Iterator for SortedKeyedMappingIntoIter<N, WIDTH> {
+    type Item = (u8, N);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current >= self.num_children as usize {
+            return None;
+        }
+
+        let key = self.keys[self.current];
+        let child = std::mem::replace(&mut self.children[self.current], MaybeUninit::uninit());
+        self.current += 1;
+
+        Some((key, unsafe { child.assume_init() }))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.num_children as usize - self.current;
+        (remaining, Some(remaining))
+    }
+}
+
+impl<N, const WIDTH: usize> ExactSizeIterator for SortedKeyedMappingIntoIter<N, WIDTH> {}
+
+impl<N, const WIDTH: usize> Drop for SortedKeyedMappingIntoIter<N, WIDTH> {
+    fn drop(&mut self) {
+        // Drop any remaining unextracted elements
+        while self.current < self.num_children as usize {
+            let mut child =
+                std::mem::replace(&mut self.children[self.current], MaybeUninit::uninit());
+            unsafe { child.assume_init_drop() };
+            self.current += 1;
+        }
+    }
+}
+
 impl<N, const WIDTH: usize> SortedKeyedMapping<N, WIDTH> {
     #[inline]
     pub fn new() -> Self {

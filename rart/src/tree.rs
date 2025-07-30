@@ -97,6 +97,15 @@ where
         }
     }
 
+    /// Create a new Adaptive Radix Tree with the given root node.
+    /// This is primarily used for internal conversions.
+    pub(crate) fn from_root(root: DefaultNode<KeyType::PartialType, ValueType>) -> Self {
+        Self {
+            root: Some(root),
+            _phantom: Default::default(),
+        }
+    }
+
     /// Get a value by key (generic version).
     ///
     /// This method accepts any type that can be converted into the tree's key type.

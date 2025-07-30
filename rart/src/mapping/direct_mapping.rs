@@ -14,6 +14,46 @@ impl<N> Default for DirectMapping<N> {
     }
 }
 
+impl<N> IntoIterator for DirectMapping<N> {
+    type Item = (u8, N);
+    type IntoIter = DirectMappingIntoIter<N>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        DirectMappingIntoIter {
+            mapping: self,
+            current_key: 0,
+        }
+    }
+}
+
+pub struct DirectMappingIntoIter<N> {
+    mapping: DirectMapping<N>,
+    current_key: usize,
+}
+
+impl<N> Iterator for DirectMappingIntoIter<N> {
+    type Item = (u8, N);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.current_key < 256 {
+            let key = self.current_key as u8;
+            self.current_key += 1;
+
+            if let Some(child) = self.mapping.delete_child(key) {
+                return Some((key, child));
+            }
+        }
+        None
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.mapping.num_children;
+        (remaining, Some(remaining))
+    }
+}
+
+impl<N> ExactSizeIterator for DirectMappingIntoIter<N> {}
+
 impl<N> DirectMapping<N> {
     pub fn new() -> Self {
         Self {

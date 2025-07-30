@@ -7,7 +7,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.2.0"
 authors = ["Ryan Daum <ryan.daum@gmail.com>"]
 edition = "2024"
 homepage = "https://github.com/rdaum/rart-rs"

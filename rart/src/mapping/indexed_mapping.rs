@@ -20,6 +20,51 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> Default for IndexedMapping<N, W
     }
 }
 
+impl<N, const WIDTH: usize, Bitset: BitsetTrait> IntoIterator for IndexedMapping<N, WIDTH, Bitset> {
+    type Item = (u8, N);
+    type IntoIter = IndexedMappingIntoIter<N, WIDTH, Bitset>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        IndexedMappingIntoIter {
+            mapping: self,
+            current_key: 0,
+        }
+    }
+}
+
+pub struct IndexedMappingIntoIter<N, const WIDTH: usize, Bitset: BitsetTrait> {
+    mapping: IndexedMapping<N, WIDTH, Bitset>,
+    current_key: usize,
+}
+
+impl<N, const WIDTH: usize, Bitset: BitsetTrait> Iterator
+    for IndexedMappingIntoIter<N, WIDTH, Bitset>
+{
+    type Item = (u8, N);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.current_key < 256 {
+            let key = self.current_key as u8;
+            self.current_key += 1;
+
+            if let Some(child) = self.mapping.delete_child(key) {
+                return Some((key, child));
+            }
+        }
+        None
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.mapping.num_children as usize;
+        (remaining, Some(remaining))
+    }
+}
+
+impl<N, const WIDTH: usize, Bitset: BitsetTrait> ExactSizeIterator
+    for IndexedMappingIntoIter<N, WIDTH, Bitset>
+{
+}
+
 impl<N, const WIDTH: usize, Bitset: BitsetTrait> IndexedMapping<N, WIDTH, Bitset> {
     pub fn new() -> Self {
         Self {

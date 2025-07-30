@@ -247,6 +247,148 @@ where
     pub fn version(&self) -> u64 {
         self.version
     }
+
+    /// Convert this versioned tree into a regular AdaptiveRadixTree.
+    ///
+    /// This method attempts to avoid cloning when possible:
+    /// - If the tree has unique ownership of all nodes, it converts in-place (fast path)
+    /// - If nodes are shared with other snapshots, it clones the data (slow path)
+    ///
+    /// # Returns
+    ///
+    /// A regular `AdaptiveRadixTree` containing the same key-value pairs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use rart::{VersionedAdaptiveRadixTree, ArrayKey};
+    ///
+    /// let mut vtree = VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+    /// vtree.insert("key1", 42);
+    /// vtree.insert("key2", 84);
+    ///
+    /// // Convert to regular tree
+    /// let tree = vtree.into_unversioned();
+    /// assert_eq!(tree.get("key1"), Some(&42));
+    /// assert_eq!(tree.get("key2"), Some(&84));
+    /// ```
+    pub fn into_unversioned(self) -> crate::tree::AdaptiveRadixTree<KeyType, ValueType> {
+        use crate::tree::AdaptiveRadixTree;
+
+        let Some(root) = self.root else {
+            return AdaptiveRadixTree::new();
+        };
+
+        // Try fast path: convert Arc<VersionedNode> to owned DefaultNode
+        let converted_root = Self::convert_to_unversioned_node(root);
+
+        AdaptiveRadixTree::from_root(converted_root)
+    }
+
+    /// Convert a versioned node to an unversioned node.
+    /// Uses fast path when possible (unique ownership), slow path when shared.
+    fn convert_to_unversioned_node(
+        node: Arc<VersionedNode<KeyType::PartialType, ValueType>>,
+    ) -> crate::node::DefaultNode<KeyType::PartialType, ValueType> {
+        use crate::mapping::{
+            direct_mapping::DirectMapping, indexed_mapping::IndexedMapping,
+            sorted_keyed_mapping::SortedKeyedMapping,
+        };
+        use crate::node::{Content, DefaultNode};
+
+        match Arc::try_unwrap(node) {
+            Ok(owned_node) => {
+                // Fast path: we have unique ownership, convert in-place
+                let unversioned_content = match owned_node.content {
+                    VersionedContent::Leaf(value) => Content::Leaf(value),
+                    VersionedContent::Node4(km) => {
+                        let mut new_km = SortedKeyedMapping::new();
+                        for (key, child) in km.into_iter() {
+                            let converted_child = Self::convert_to_unversioned_node(child);
+                            new_km.add_child(key, converted_child);
+                        }
+                        Content::Node4(new_km)
+                    }
+                    VersionedContent::Node16(km) => {
+                        let mut new_km = SortedKeyedMapping::new();
+                        for (key, child) in km.into_iter() {
+                            let converted_child = Self::convert_to_unversioned_node(child);
+                            new_km.add_child(key, converted_child);
+                        }
+                        Content::Node16(new_km)
+                    }
+                    VersionedContent::Node48(km) => {
+                        let mut new_km = IndexedMapping::new();
+                        for (key, child) in km.into_iter() {
+                            let converted_child = Self::convert_to_unversioned_node(child);
+                            new_km.add_child(key, converted_child);
+                        }
+                        Content::Node48(new_km)
+                    }
+                    VersionedContent::Node256(km) => {
+                        let mut new_km = DirectMapping::new();
+                        for (key, child) in km.into_iter() {
+                            let converted_child = Self::convert_to_unversioned_node(child);
+                            new_km.add_child(key, converted_child);
+                        }
+                        Content::Node256(new_km)
+                    }
+                };
+
+                DefaultNode {
+                    prefix: owned_node.prefix,
+                    content: unversioned_content,
+                }
+            }
+            Err(shared_node) => {
+                // Slow path: node is shared, must clone
+                let unversioned_content = match &shared_node.content {
+                    VersionedContent::Leaf(value) => Content::Leaf(value.clone()),
+                    VersionedContent::Node4(km) => {
+                        let mut new_km = SortedKeyedMapping::new();
+                        for (key, child) in km.iter() {
+                            let converted_child =
+                                Self::convert_to_unversioned_node(Arc::clone(child));
+                            new_km.add_child(key, converted_child);
+                        }
+                        Content::Node4(new_km)
+                    }
+                    VersionedContent::Node16(km) => {
+                        let mut new_km = SortedKeyedMapping::new();
+                        for (key, child) in km.iter() {
+                            let converted_child =
+                                Self::convert_to_unversioned_node(Arc::clone(child));
+                            new_km.add_child(key, converted_child);
+                        }
+                        Content::Node16(new_km)
+                    }
+                    VersionedContent::Node48(km) => {
+                        let mut new_km = IndexedMapping::new();
+                        for (key, child) in km.iter() {
+                            let converted_child =
+                                Self::convert_to_unversioned_node(Arc::clone(child));
+                            new_km.add_child(key, converted_child);
+                        }
+                        Content::Node48(new_km)
+                    }
+                    VersionedContent::Node256(km) => {
+                        let mut new_km = DirectMapping::new();
+                        for (key, child) in km.iter() {
+                            let converted_child =
+                                Self::convert_to_unversioned_node(Arc::clone(child));
+                            new_km.add_child(key, converted_child);
+                        }
+                        Content::Node256(new_km)
+                    }
+                };
+
+                DefaultNode {
+                    prefix: shared_node.prefix.clone(),
+                    content: unversioned_content,
+                }
+            }
+        }
+    }
 }
 
 impl<P: Partial + Clone, V> VersionedNode<P, V> {
@@ -1057,6 +1199,185 @@ mod tests {
                 assert_eq!(snapshot.get(&key), Some(&expected_in_snapshot));
             }
         }
+    }
+
+    #[test]
+    fn test_into_unversioned_fast_path() {
+        // Test fast path: no snapshots, should have unique ownership
+        let mut vtree = VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+
+        // Insert test data
+        vtree.insert("key1", 10);
+        vtree.insert("key2", 20);
+        vtree.insert("key3", 30);
+        vtree.insert("apple", 100);
+        vtree.insert("application", 200);
+
+        // Convert to unversioned tree (fast path - unique ownership)
+        let tree = vtree.into_unversioned();
+
+        // Verify all data is preserved
+        assert_eq!(tree.get("key1"), Some(&10));
+        assert_eq!(tree.get("key2"), Some(&20));
+        assert_eq!(tree.get("key3"), Some(&30));
+        assert_eq!(tree.get("apple"), Some(&100));
+        assert_eq!(tree.get("application"), Some(&200));
+        assert_eq!(tree.get("nonexistent"), None);
+    }
+
+    #[test]
+    fn test_into_unversioned_slow_path() {
+        // Test slow path: with snapshots, nodes are shared
+        let mut vtree = VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+
+        // Insert test data
+        vtree.insert("key1", 10);
+        vtree.insert("key2", 20);
+        vtree.insert("key3", 30);
+
+        // Take a snapshot to create shared ownership
+        let snapshot = vtree.snapshot();
+
+        // Insert more data after snapshot
+        vtree.insert("key4", 40);
+        vtree.insert("key5", 50);
+
+        // Convert to unversioned tree (slow path - shared ownership)
+        let tree = vtree.into_unversioned();
+
+        // Verify all data is preserved in converted tree
+        assert_eq!(tree.get("key1"), Some(&10));
+        assert_eq!(tree.get("key2"), Some(&20));
+        assert_eq!(tree.get("key3"), Some(&30));
+        assert_eq!(tree.get("key4"), Some(&40));
+        assert_eq!(tree.get("key5"), Some(&50));
+
+        // Verify snapshot still works independently
+        assert_eq!(snapshot.get("key1"), Some(&10));
+        assert_eq!(snapshot.get("key2"), Some(&20));
+        assert_eq!(snapshot.get("key3"), Some(&30));
+        assert_eq!(snapshot.get("key4"), None); // Not in snapshot
+        assert_eq!(snapshot.get("key5"), None); // Not in snapshot
+    }
+
+    #[test]
+    fn test_into_unversioned_empty_tree() {
+        // Test empty tree conversion
+        let vtree = VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+        let tree = vtree.into_unversioned();
+
+        assert!(tree.is_empty());
+        assert_eq!(tree.get("anything"), None);
+    }
+
+    #[test]
+    fn test_into_unversioned_single_element() {
+        // Test single element tree
+        let mut vtree = VersionedAdaptiveRadixTree::<ArrayKey<16>, String>::new();
+        vtree.insert("only_key", "only_value".to_string());
+
+        let tree = vtree.into_unversioned();
+        assert_eq!(tree.get("only_key"), Some(&"only_value".to_string()));
+        assert_eq!(tree.get("other"), None);
+    }
+
+    #[test]
+    fn test_into_unversioned_with_node_growth() {
+        // Test conversion with various node types (should trigger Node4 -> Node16 -> Node48 growth)
+        let mut vtree = VersionedAdaptiveRadixTree::<ArrayKey<16>, usize>::new();
+
+        // Insert enough keys to trigger multiple node type growths
+        for i in 0..60 {
+            let key = format!("key_{i:03}");
+            vtree.insert(key, i);
+        }
+
+        // Take a snapshot to create sharing
+        let snapshot = vtree.snapshot();
+
+        // Add more keys
+        for i in 60..80 {
+            let key = format!("key_{i:03}");
+            vtree.insert(key, i);
+        }
+
+        // Convert to unversioned (slow path due to snapshot)
+        let tree = vtree.into_unversioned();
+
+        // Verify all keys are present
+        for i in 0..80 {
+            let key = format!("key_{i:03}");
+            assert_eq!(tree.get(&key), Some(&i), "Missing key {key}");
+        }
+
+        // Verify snapshot has only the first 60 keys
+        for i in 0..60 {
+            let key = format!("key_{i:03}");
+            assert_eq!(snapshot.get(&key), Some(&i));
+        }
+        for i in 60..80 {
+            let key = format!("key_{i:03}");
+            assert_eq!(snapshot.get(&key), None);
+        }
+    }
+
+    #[test]
+    fn test_into_unversioned_preserves_tree_structure() {
+        // Test that the converted tree behaves identically to a regular tree built the same way
+        let mut vtree = VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+        let mut regular_tree = crate::tree::AdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+
+        let test_data = vec![
+            ("apple", 1),
+            ("application", 2),
+            ("app", 3),
+            ("banana", 4),
+            ("band", 5),
+            ("bandana", 6),
+            ("can", 7),
+            ("cannot", 8),
+        ];
+
+        // Insert same data into both trees
+        for (key, value) in &test_data {
+            vtree.insert(*key, *value);
+            regular_tree.insert(*key, *value);
+        }
+
+        // Convert versioned tree
+        let converted_tree = vtree.into_unversioned();
+
+        // Both trees should have identical behavior
+        for (key, expected_value) in &test_data {
+            assert_eq!(converted_tree.get(*key), Some(expected_value));
+            assert_eq!(regular_tree.get(*key), Some(expected_value));
+            assert_eq!(converted_tree.get(*key), regular_tree.get(*key));
+        }
+
+        // Test non-existent keys
+        let non_existent = ["xyz", "apple_pie", "ban", "candidate"];
+        for key in &non_existent {
+            assert_eq!(converted_tree.get(*key), None);
+            assert_eq!(regular_tree.get(*key), None);
+            assert_eq!(converted_tree.get(*key), regular_tree.get(*key));
+        }
+    }
+
+    #[test]
+    fn test_into_unversioned_memory_efficiency() {
+        // Test that conversion doesn't create extra copies when not needed
+        let mut vtree = VersionedAdaptiveRadixTree::<ArrayKey<16>, Box<i32>>::new();
+
+        // Use Box<i32> to make ownership clear
+        vtree.insert("key1", Box::new(42));
+        vtree.insert("key2", Box::new(84));
+
+        // Convert (fast path - no snapshots)
+        let tree = vtree.into_unversioned();
+
+        // Verify the boxed values are preserved
+        assert_eq!(**tree.get("key1").unwrap(), 42);
+        assert_eq!(**tree.get("key2").unwrap(), 84);
     }
 }
 
