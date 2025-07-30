@@ -800,4 +800,262 @@ mod tests {
         assert_eq!(regular_remove_result, Some(12345));
         // TODO: Make versioned tree work the same way
     }
+
+    #[test]
+    fn test_structural_sharing() {
+        let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+
+        // Build a substantial tree structure
+        for i in 0..20 {
+            let key = format!("shared_key_{:02}", i);
+            tree.insert(key, i);
+        }
+
+        // Take multiple snapshots - they should share the same root
+        let snapshot1 = tree.snapshot();
+        let snapshot2 = tree.snapshot();
+        let snapshot3 = tree.snapshot();
+
+        // Verify that shared nodes have high reference counts
+        // The root should be referenced by: tree + snapshot1 + snapshot2 + snapshot3 = 4 references
+        if let Some(root) = &tree.root {
+            let strong_count = Arc::strong_count(root);
+            assert_eq!(
+                strong_count, 4,
+                "Root should be shared between original and 3 snapshots"
+            );
+        }
+
+        // Now modify only the original tree - this should trigger CoW
+        tree.insert("new_key", 999);
+
+        // After modification, snapshots should still share the old root
+        if let (Some(s1_root), Some(s2_root), Some(s3_root)) =
+            (&snapshot1.root, &snapshot2.root, &snapshot3.root)
+        {
+            // All three snapshots should point to the same root node
+            assert!(
+                Arc::ptr_eq(s1_root, s2_root),
+                "Snapshot1 and Snapshot2 should share root"
+            );
+            assert!(
+                Arc::ptr_eq(s2_root, s3_root),
+                "Snapshot2 and Snapshot3 should share root"
+            );
+
+            // The shared root should have exactly 3 references (from the 3 snapshots)
+            let shared_count = Arc::strong_count(s1_root);
+            assert_eq!(
+                shared_count, 3,
+                "Shared root should have 3 references after original tree CoW"
+            );
+        }
+
+        // Verify that the original tree has its own root now
+        if let Some(orig_root) = &tree.root {
+            let orig_count = Arc::strong_count(orig_root);
+            assert_eq!(
+                orig_count, 1,
+                "Original tree should have exclusive ownership of new root"
+            );
+        }
+
+        // All snapshots should NOT see the new key
+        assert_eq!(snapshot1.get("new_key"), None);
+        assert_eq!(snapshot2.get("new_key"), None);
+        assert_eq!(snapshot3.get("new_key"), None);
+
+        // But original tree should see it
+        assert_eq!(tree.get("new_key"), Some(&999));
+
+        // All trees should still see the shared data
+        for i in 0..20 {
+            let key = format!("shared_key_{:02}", i);
+            assert_eq!(tree.get(&key), Some(&i));
+            assert_eq!(snapshot1.get(&key), Some(&i));
+            assert_eq!(snapshot2.get(&key), Some(&i));
+            assert_eq!(snapshot3.get(&key), Some(&i));
+        }
+    }
+
+    #[test]
+    fn test_snapshot_cleanup() {
+        let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+
+        // Create a tree with some data
+        for i in 0..10i32 {
+            tree.insert(i, i * 10);
+        }
+
+        let initial_root_refs = if let Some(root) = &tree.root {
+            Arc::strong_count(root)
+        } else {
+            panic!("Tree should have a root");
+        };
+
+        // Take several snapshots
+        let snapshot1 = tree.snapshot();
+        let snapshot2 = tree.snapshot();
+        {
+            let _snapshot3 = tree.snapshot(); // This one will be dropped immediately
+        } // _snapshot3 is dropped here
+
+        // Root should now have more references
+        let with_snapshots_refs = if let Some(root) = &tree.root {
+            Arc::strong_count(root)
+        } else {
+            panic!("Tree should have a root");
+        };
+
+        assert!(
+            with_snapshots_refs > initial_root_refs,
+            "Root should have more references with snapshots"
+        );
+
+        // Drop snapshot2 explicitly
+        drop(snapshot2);
+
+        // Root should have fewer references now
+        let after_drops_refs = if let Some(root) = &tree.root {
+            Arc::strong_count(root)
+        } else {
+            panic!("Tree should have a root");
+        };
+
+        assert!(
+            after_drops_refs < with_snapshots_refs,
+            "Root should have fewer references after dropping snapshots"
+        );
+
+        // Should be exactly: original tree + snapshot1 = 2 references
+        assert_eq!(
+            after_drops_refs, 2,
+            "Should have exactly 2 references: tree + snapshot1"
+        );
+
+        // Verify remaining snapshot still works - check that some keys exist
+        assert!(snapshot1.get(0).is_some());
+        assert!(snapshot1.get(5).is_some());
+        assert!(snapshot1.get(9).is_some());
+
+        // Drop the last snapshot
+        drop(snapshot1);
+
+        // Now tree should have exclusive ownership
+        let final_refs = if let Some(root) = &tree.root {
+            Arc::strong_count(root)
+        } else {
+            panic!("Tree should have a root");
+        };
+
+        assert_eq!(
+            final_refs, 1,
+            "Tree should have exclusive ownership after all snapshots dropped"
+        );
+
+        // Tree should still work normally
+        for i in 0..10i32 {
+            assert_eq!(tree.get(i), Some(&(i * 10)));
+        }
+    }
+
+    #[test]
+    fn test_signed_integer_keys() {
+        // Test that signed integer keys work correctly (regression test)
+        let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+
+        // Insert some positive and negative integers
+        tree.insert(-5i32, -50);
+        tree.insert(0i32, 0);
+        tree.insert(1i32, 10);
+        tree.insert(8i32, 80);
+        tree.insert(-1i32, -10);
+
+        // Take a snapshot
+        let snapshot = tree.snapshot();
+
+        // Verify all keys work correctly in both tree and snapshot
+        assert_eq!(tree.get(-5i32), Some(&-50));
+        assert_eq!(tree.get(-1i32), Some(&-10));
+        assert_eq!(tree.get(0i32), Some(&0));
+        assert_eq!(tree.get(1i32), Some(&10));
+        assert_eq!(tree.get(8i32), Some(&80));
+
+        assert_eq!(snapshot.get(-5i32), Some(&-50));
+        assert_eq!(snapshot.get(-1i32), Some(&-10));
+        assert_eq!(snapshot.get(0i32), Some(&0));
+        assert_eq!(snapshot.get(1i32), Some(&10));
+        assert_eq!(snapshot.get(8i32), Some(&80));
+
+        // Test that non-existent keys return None
+        assert_eq!(tree.get(99i32), None);
+        assert_eq!(snapshot.get(99i32), None);
+    }
+
+    #[test]
+    fn test_deep_structural_sharing() {
+        let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<32>, i32>::new();
+
+        // Create a deeper tree structure with common prefixes
+        let prefixes = [
+            "user",
+            "user_profile",
+            "user_settings",
+            "system",
+            "system_config",
+        ];
+        for (i, prefix) in prefixes.iter().enumerate() {
+            for j in 0..5 {
+                let key = format!("{}_{:02}", prefix, j);
+                tree.insert(key, (i * 100 + j) as i32);
+            }
+        }
+
+        // Take a snapshot
+        let snapshot = tree.snapshot();
+
+        // Modify only one branch - should trigger minimal CoW
+        tree.insert("user_00", 999); // This should replace existing value
+
+        // The modification should only affect nodes along the path to "user_00"
+        // Most of the tree structure should still be shared
+
+        // Verify the change
+        assert_eq!(tree.get("user_00"), Some(&999));
+        assert_eq!(snapshot.get("user_00"), Some(&0)); // Original value
+
+        // All other keys should be the same in both
+        for (i, prefix) in prefixes.iter().enumerate() {
+            for j in 0..5 {
+                let key = format!("{}_{:02}", prefix, j);
+                if key != "user_00" {
+                    let expected_value = (i * 100 + j) as i32;
+                    assert_eq!(tree.get(&key), Some(&expected_value));
+                    assert_eq!(snapshot.get(&key), Some(&expected_value));
+                }
+            }
+        }
+
+        // Add a completely new branch - should create new nodes but still share unchanged parts
+        tree.insert("new_branch_00", 777);
+
+        assert_eq!(tree.get("new_branch_00"), Some(&777));
+        assert_eq!(snapshot.get("new_branch_00"), None);
+
+        // All original keys should still work in both trees
+        for (i, prefix) in prefixes.iter().enumerate() {
+            for j in 0..5 {
+                let key = format!("{}_{:02}", prefix, j);
+                let expected_in_tree = if key == "user_00" {
+                    999
+                } else {
+                    (i * 100 + j) as i32
+                };
+                let expected_in_snapshot = (i * 100 + j) as i32;
+
+                assert_eq!(tree.get(&key), Some(&expected_in_tree));
+                assert_eq!(snapshot.get(&key), Some(&expected_in_snapshot));
+            }
+        }
+    }
 }

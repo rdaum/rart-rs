@@ -174,9 +174,9 @@ impl_from_unsigned!(u8, u16, u32, u64, usize, u128);
 
 impl From<i8> for VectorKey {
     fn from(val: i8) -> Self {
-        let v: u8 = val.cast_unsigned();
-        let i = (v ^ 0x80) & 0x80;
-        let j = i | (v & 0x7F);
+        // Convert signed to unsigned preserving sort order
+        let v: u8 = val as u8;
+        let j = v ^ 0x80; // Flip sign bit
         let v = vec![j];
         VectorKey::new_from_vec(v)
     }
@@ -186,10 +186,10 @@ macro_rules! impl_from_signed {
     ( $t:ty, $tu:ty ) => {
         impl From<$t> for VectorKey {
             fn from(val: $t) -> Self {
-                let v: $tu = val.cast_unsigned();
-                let xor = 1 << (std::mem::size_of::<$tu>() - 1);
-                let i = (v ^ xor) & xor;
-                let j = i | (v & (<$tu>::MAX >> 1));
+                // Convert signed to unsigned preserving sort order
+                let v: $tu = val as $tu;
+                let sign_bit = 1 << (std::mem::size_of::<$tu>() * 8 - 1);
+                let j = v ^ sign_bit;
                 VectorKey::new_from_slice(&j.to_be_bytes())
             }
         }

@@ -58,10 +58,7 @@ fuzz_target!(|input: MultithreadedFuzzInput| {
             MainOp::Get { key } => {
                 let tree_result = main_tree.get(key).copied();
                 let ref_result = reference_map.get(&key).copied();
-                assert_eq!(
-                    tree_result, ref_result,
-                    "Setup Get mismatch for key {key}"
-                );
+                assert_eq!(tree_result, ref_result, "Setup Get mismatch for key {key}");
             }
             MainOp::CreateSnapshot { .. } => {
                 // Skip snapshots in setup phase
