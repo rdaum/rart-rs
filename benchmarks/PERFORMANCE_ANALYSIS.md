@@ -99,7 +99,7 @@ across access patterns.
 ## Performance Characteristics by Use Case
 
 | Operation              | Winner                  | Runner-up      | Performance Gap |
-| ---------------------- | ----------------------- | -------------- | --------------- |
+|------------------------|-------------------------|----------------|-----------------|
 | **Random Insert**      | HashMap (194ns)         | ART (277ns)    | 43% faster      |
 | **Random Get (Small)** | Tie: ART/HashMap (14ns) | BTree (55ns)   | 4x faster       |
 | **Random Get (Large)** | ART (73ns)              | HashMap (51ns) | Better scaling  |
@@ -171,7 +171,13 @@ balance across diverse workloads while excelling in sequential scenarios.
 
 The **VersionedAdaptiveRadixTree** provides concurrent versioned capabilities with copy-on-write
 semantics. Below is a comprehensive analysis comparing it against persistent data structures from
-the `im` crate.
+the `im` crate:
+
+- **im::HashMap** - Hash Array Mapped Trie (HAMT) with structural sharing
+- **im::OrdMap** - B-tree implementation with structural sharing
+
+Both `im` types are mature, highly-optimized persistent data structures that also provide structural
+sharing, making this a comparison between different approaches to persistent data.
 
 ### Versioned Tree Lookup Performance
 
@@ -180,7 +186,7 @@ the `im` crate.
 **Results across different dataset sizes:**
 
 | Dataset Size | VersionedART | im::HashMap | im::OrdMap | Winner       | Performance Gap |
-| ------------ | ------------ | ----------- | ---------- | ------------ | --------------- |
+|--------------|--------------|-------------|------------|--------------|-----------------|
 | 256          | 8.7ns        | 15.2ns      | 13.6ns     | VersionedART | 1.6-1.7x faster |
 | 1,024        | 16.2ns       | 17.4ns      | 14.3ns     | im::OrdMap   | 1.1x slower     |
 | 4,096        | 26.1ns       | 15.9ns      | 21.6ns     | im::HashMap  | 1.6x slower     |
@@ -199,7 +205,7 @@ advantageous as dataset size increases.
 **Results for sequential access patterns:**
 
 | Dataset Size | VersionedART | im::HashMap | im::OrdMap | Performance Advantage |
-| ------------ | ------------ | ----------- | ---------- | --------------------- |
+|--------------|--------------|-------------|------------|-----------------------|
 | 256          | 1.2µs        | 2.2µs       | 2.2µs      | 1.8x faster           |
 | 1,024        | 7.2µs        | 9.9µs       | 10.7µs     | 1.4-1.5x faster       |
 | 4,096        | 80.5µs       | 44.0µs      | 60.5µs     | 1.8x slower           |
@@ -218,7 +224,7 @@ small and large datasets.
 **O(1) Snapshot Creation (nanoseconds):**
 
 | Dataset Size | VersionedART Snapshot | im::HashMap Clone | im::OrdMap Clone | Advantage                |
-| ------------ | --------------------- | ----------------- | ---------------- | ------------------------ |
+|--------------|-----------------------|-------------------|------------------|--------------------------|
 | 256          | 2.68ns                | 6.19ns            | 2.79ns           | 2.3x faster than HashMap |
 | 1,024        | 2.78ns                | 6.22ns            | 2.80ns           | 2.2x faster than HashMap |
 | 4,096        | 2.78ns                | 6.20ns            | 2.82ns           | 2.2x faster than HashMap |
@@ -236,15 +242,16 @@ tree size. This is an advantage for versioned workloads requiring frequent snaps
 **Multiple mutations per snapshot (microseconds):**
 
 | Mutations | VersionedART | im::HashMap | im::OrdMap | Trade-off Analysis       |
-| --------- | ------------ | ----------- | ---------- | ------------------------ |
+|-----------|--------------|-------------|------------|--------------------------|
 | 10        | 10.2µs       | 4.0µs       | 2.9µs      | im types 2.5-3.5x faster |
 | 50        | 35.7µs       | 21.0µs      | 15.2µs     | im types 1.7-2.3x faster |
 | 100       | 67.9µs       | 40.9µs      | 30.2µs     | im types 1.7-2.2x faster |
 | 200       | 149.0µs      | 83.2µs      | 60.1µs     | im types 1.8-2.5x faster |
 
-**Analysis**: im types perform better for mutation-heavy workloads due to their optimized persistent
-structure design. VersionedART's copy-on-write mechanism creates overhead for write-heavy scenarios,
-making it better suited for read-heavy versioned patterns.
+**Analysis**: The im types perform better for mutation-heavy workloads due to their mature, highly-
+optimized persistent implementations (HAMT and B-tree). VersionedART's CoW radix tree approach has
+more overhead for write-heavy scenarios, making it better suited for read-heavy patterns where its
+radix structure provides advantages.
 
 ---
 
@@ -255,14 +262,15 @@ making it better suited for read-heavy versioned patterns.
 **Multiple snapshots with small mutations (microseconds):**
 
 | Snapshots | VersionedART | im::HashMap | im::OrdMap | Memory Efficiency                   |
-| --------- | ------------ | ----------- | ---------- | ----------------------------------- |
+|-----------|--------------|-------------|------------|-------------------------------------|
 | 5         | 31.3µs       | 12.5µs      | 11.1µs     | Lower latency vs shared structure   |
 | 10        | 59.8µs       | 25.3µs      | 25.0µs     | 2.4x latency for structural sharing |
 | 20        | 80.4µs       | 50.5µs      | 48.2µs     | 1.6x latency for structural sharing |
 
-**Analysis**: While im types show lower latency for this scenario, VersionedART provides memory
-advantages through structural sharing. The trade-off depends on whether memory efficiency or
-operation latency is more critical.
+**Analysis**: The im types show lower latency due to their mature, highly-optimized persistent
+implementations. Both VersionedART and im types provide structural sharing through different
+mechanisms (CoW radix nodes vs HAMT/B-tree sharing). The trade-off is between VersionedART's radix
+tree advantages (sequential access, prefix operations) and im types' mutation efficiency.
 
 ---
 
@@ -291,7 +299,6 @@ operation latency is more critical.
 
 - **Read-heavy versioned workloads** dominate
 - **Frequent snapshot creation** is required
-- **Memory efficiency** through structural sharing is critical
 - **Sequential access patterns** are common
 - **Large datasets** with prefix similarity
 - **Database-like** point-in-time consistency requirements
@@ -301,7 +308,7 @@ operation latency is more critical.
 - **Write-heavy** transactional workloads
 - **Simple key-value** operations without ordering
 - **Hash-friendly** key distribution
-- **Lower mutation latency** is prioritized over memory sharing
+- **Lower mutation latency** is prioritized over radix tree read advantages
 
 ### **Choose im::OrdMap when:**
 

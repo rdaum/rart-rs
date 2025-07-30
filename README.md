@@ -34,7 +34,7 @@ associative data structures.
 ```rust
 use rart::{AdaptiveRadixTree, ArrayKey};
 
-let mut tree = AdaptiveRadixTree::<ArrayKey<16>, String>::new();
+let mut tree = AdaptiveRadixTree::<ArrayKey<16 >, String>::new();
 tree.insert("apple", "fruit".to_string());
 tree.insert("application", "software".to_string());
 
@@ -42,7 +42,7 @@ assert_eq!(tree.get("apple"), Some(&"fruit".to_string()));
 
 // Range queries and iteration
 for (key, value) in tree.iter() {
-    println!("{:?} -> {}", key.as_ref(), value);
+println ! ("{:?} -> {}", key.as_ref(), value);
 }
 ```
 
@@ -61,7 +61,7 @@ for (key, value) in tree.iter() {
 ```rust
 use rart::{VersionedAdaptiveRadixTree, ArrayKey};
 
-let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, String>::new();
+let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<16 >, String>::new();
 tree.insert("key1", "value1".to_string());
 
 // O(1) snapshot creation
@@ -87,8 +87,8 @@ Both trees support flexible key types optimized for different use cases:
 use rart::{ArrayKey, VectorKey};
 
 // Fixed-size keys (recommended for performance)
-let key1: ArrayKey<16> = "hello".into();
-let key2: ArrayKey<8> = 42u64.into();
+let key1: ArrayKey<16 > = "hello".into();
+let key2: ArrayKey<8 > = 42u64.into();
 
 // Variable-size keys (for dynamic content)
 let key3: VectorKey = "hello world".into();
@@ -117,7 +117,10 @@ Performance characteristics for sequential and random access patterns:
 
 Optimized for transactional workloads with copy-on-write semantics:
 
-**Lookup Performance** (vs [im crate](https://crates.io/crates/im) persistent collections):
+**Lookup Performance** (vs persistent collections from the [im crate](https://crates.io/crates/im)):
+
+_Comparison against im::HashMap (HAMT) and im::OrdMap (B-tree), both persistent data structures with
+structural sharing:_
 
 - Small datasets (256-1024 elements): VersionedART 8.7ns vs im::HashMap 15.2ns and im::OrdMap 13.6ns
 - Medium datasets (16k elements): VersionedART 17.1ns vs im::HashMap 21.5ns and im::OrdMap 27.5ns
@@ -125,7 +128,7 @@ Optimized for transactional workloads with copy-on-write semantics:
 
 **Sequential Scanning**:
 
-- Good cache locality for most dataset sizes
+- Better cache locality due to radix tree structure vs hash-based (HAMT) and tree-based access
 - 256 elements: VersionedART 1.2µs vs im types 2.2µs (1.8x faster)
 - 1024 elements: VersionedART 7.2µs vs im::HashMap 9.9µs/im::OrdMap 10.7µs (1.4-1.5x faster)
 - 16k elements: VersionedART 149µs vs im::HashMap 260µs/im::OrdMap 289µs (1.7-1.9x faster)
@@ -134,18 +137,21 @@ Optimized for transactional workloads with copy-on-write semantics:
 
 - O(1) snapshots: ~2.8ns consistently regardless of tree size (256-16k elements)
 - im::HashMap clone: ~6.2ns (2.2x slower)
-- im::OrdMap clone: ~2.8ns (comparable, but lacks structural sharing)
+- im::OrdMap clone: ~2.8ns (comparable performance)
 
-**Copy-on-Write Efficiency**:
+**Persistent Structure Trade-offs**:
 
-- Multiple mutations per snapshot: im types excel here due to different design trade-offs
-- Structural sharing: Memory advantages for concurrent access patterns
-- Versioned workloads: Better for read-heavy scenarios with occasional snapshots
+- **Write-heavy workloads**: im types excel due to mature, optimized persistent implementations
+- **Read-heavy workloads**: VersionedART's radix structure provides better cache locality
+- **Both provide structural sharing** - VersionedART via CoW radix nodes, im types via HAMT/B-tree
+  sharing
+- **Sequential access**: VersionedART's prefix compression provides significant advantages
 
 **Best suited for**: Read-heavy versioned workloads, database snapshots, concurrent systems
 requiring point-in-time consistency and efficient structural sharing.
 
-**[📊 View Complete Performance Analysis](benchmarks/PERFORMANCE_ANALYSIS.md)** - Detailed benchmarks, technical insights, and workload recommendations.
+**[📊 View Complete Performance Analysis](benchmarks/PERFORMANCE_ANALYSIS.md)** - Detailed
+benchmarks, technical insights, and workload recommendations.
 
 _Benchmarks run on AMD Ryzen 9 7940HS using Criterion.rs_
 
