@@ -788,21 +788,6 @@ mod tests {
     fn test_tree_structure_debugging() {
         use crate::tree::AdaptiveRadixTree;
 
-        // Test with simpler keys first - do we have the same issue?
-        eprintln!("=== Testing with simple keys ===");
-        let mut simple_regular = AdaptiveRadixTree::<ArrayKey<16>, usize>::new();
-        simple_regular.insert(1, 100);
-        simple_regular.insert(2, 200);
-        let simple_regular_remove = simple_regular.remove(1);
-        eprintln!("Simple regular remove(1) = {:?}", simple_regular_remove);
-
-        let mut simple_versioned = VersionedAdaptiveRadixTree::<ArrayKey<16>, usize>::new();
-        simple_versioned.insert(1, 100);
-        simple_versioned.insert(2, 200);
-        let simple_versioned_remove = simple_versioned.remove(1);
-        eprintln!("Simple versioned remove(1) = {:?}", simple_versioned_remove);
-
-        eprintln!("=== Testing with original keys ===");
         // Test what the regular tree does with the same keys
         let mut regular_tree = AdaptiveRadixTree::<ArrayKey<16>, usize>::new();
         regular_tree.insert(0, 12345);
@@ -810,23 +795,6 @@ mod tests {
 
         // Try remove on regular tree
         let regular_remove_result = regular_tree.remove(0);
-        eprintln!("Regular tree remove(0) = {:?}", regular_remove_result);
-        eprintln!(
-            "Regular tree get(0) after remove = {:?}",
-            regular_tree.get(0)
-        );
-
-        // Now test versioned tree
-        let mut versioned_tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, usize>::new();
-        versioned_tree.insert(0, 12345);
-        versioned_tree.insert(4573127, 67890);
-
-        let versioned_remove_result = versioned_tree.remove(0);
-        eprintln!("Versioned tree remove(0) = {:?}", versioned_remove_result);
-        eprintln!(
-            "Versioned tree get(0) after remove = {:?}",
-            versioned_tree.get(0)
-        );
 
         // The regular tree should work, versioned should not (for now)
         assert_eq!(regular_remove_result, Some(12345));
