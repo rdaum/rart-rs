@@ -145,6 +145,8 @@ Optimized for transactional workloads with copy-on-write semantics:
 **Best suited for**: Read-heavy versioned workloads, database snapshots, concurrent systems
 requiring point-in-time consistency and efficient structural sharing.
 
+**[📊 View Complete Performance Analysis](benchmarks/PERFORMANCE_ANALYSIS.md)** - Detailed benchmarks, technical insights, and workload recommendations.
+
 _Benchmarks run on AMD Ryzen 9 7940HS using Criterion.rs_
 
 ## Architecture
