@@ -1064,16 +1064,20 @@ mod tests {
 mod shuttle_tests {
     use super::*;
     use crate::keys::array_key::ArrayKey;
-    use shuttle::{sync::Arc as ShuttleArc, thread, Runner, Config};
+    use shuttle::{Config, Runner, sync::Arc as ShuttleArc, thread};
 
     #[test]
     fn shuttle_concurrent_snapshots() {
-        let runner = Runner::new(shuttle::scheduler::DfsScheduler::new(Some(1000), false), Config::new());
+        let runner = Runner::new(
+            shuttle::scheduler::DfsScheduler::new(Some(1000), false),
+            Config::new(),
+        );
         runner.run(|| {
-            let tree = ShuttleArc::new(std::sync::Mutex::new(
-                VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new()
-            ));
-            
+            let tree = ShuttleArc::new(std::sync::Mutex::new(VersionedAdaptiveRadixTree::<
+                ArrayKey<16>,
+                i32,
+            >::new()));
+
             // Pre-populate the tree
             {
                 let mut t = tree.lock().unwrap();
@@ -1081,7 +1085,7 @@ mod shuttle_tests {
                     t.insert(i, i * 10);
                 }
             }
-            
+
             // Take snapshots BEFORE starting any writer threads
             let snapshot1 = {
                 let t = tree.lock().unwrap();
@@ -1091,9 +1095,9 @@ mod shuttle_tests {
                 let t = tree.lock().unwrap();
                 t.snapshot()
             };
-            
+
             let tree1 = ShuttleArc::clone(&tree);
-            
+
             let handle1 = thread::spawn(move || {
                 // Verify snapshot contents
                 for i in 0..10 {
@@ -1101,7 +1105,7 @@ mod shuttle_tests {
                 }
                 snapshot1
             });
-            
+
             let handle2 = thread::spawn(move || {
                 // Verify snapshot contents
                 for i in 0..10 {
@@ -1109,22 +1113,22 @@ mod shuttle_tests {
                 }
                 snapshot2
             });
-            
+
             let handle3 = thread::spawn(move || {
                 // Modify the original tree
                 let mut t = tree1.lock().unwrap();
                 t.insert(100, 1000);
                 assert_eq!(t.get(100), Some(&1000));
             });
-            
+
             let snapshot1 = handle1.join().unwrap();
             let snapshot2 = handle2.join().unwrap();
             handle3.join().unwrap();
-            
+
             // Snapshots should not see the new key
             assert_eq!(snapshot1.get(100), None);
             assert_eq!(snapshot2.get(100), None);
-            
+
             // But original tree should
             let t = tree.lock().unwrap();
             assert_eq!(t.get(100), Some(&1000));
@@ -1133,20 +1137,23 @@ mod shuttle_tests {
 
     #[test]
     fn shuttle_snapshot_sharing_across_threads() {
-        let runner = Runner::new(shuttle::scheduler::DfsScheduler::new(Some(1000), false), Config::new());
+        let runner = Runner::new(
+            shuttle::scheduler::DfsScheduler::new(Some(1000), false),
+            Config::new(),
+        );
         runner.run(|| {
             let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new();
-            
+
             // Pre-populate
             for i in 0..5 {
                 tree.insert(i, i * 2);
             }
-            
+
             let snapshot = ShuttleArc::new(tree.snapshot());
             let snapshot1 = ShuttleArc::clone(&snapshot);
             let snapshot2 = ShuttleArc::clone(&snapshot);
             let snapshot3 = ShuttleArc::clone(&snapshot);
-            
+
             let handle1 = thread::spawn(move || {
                 // Read from snapshot in thread 1
                 let mut results = Vec::new();
@@ -1157,7 +1164,7 @@ mod shuttle_tests {
                 }
                 results
             });
-            
+
             let handle2 = thread::spawn(move || {
                 // Read from snapshot in thread 2
                 let mut results = Vec::new();
@@ -1168,7 +1175,7 @@ mod shuttle_tests {
                 }
                 results
             });
-            
+
             let handle3 = thread::spawn(move || {
                 // Read from snapshot in thread 3
                 let mut results = Vec::new();
@@ -1179,11 +1186,11 @@ mod shuttle_tests {
                 }
                 results
             });
-            
+
             let results1 = handle1.join().unwrap();
             let results2 = handle2.join().unwrap();
             let results3 = handle3.join().unwrap();
-            
+
             // All threads should see the same data
             let expected: Vec<i32> = (0..5).map(|i| i * 2).collect();
             assert_eq!(results1, expected);
@@ -1194,55 +1201,58 @@ mod shuttle_tests {
 
     #[test]
     fn shuttle_concurrent_snapshot_mutations() {
-        let runner = Runner::new(shuttle::scheduler::DfsScheduler::new(Some(1000), false), Config::new());
+        let runner = Runner::new(
+            shuttle::scheduler::DfsScheduler::new(Some(1000), false),
+            Config::new(),
+        );
         runner.run(|| {
             let mut base_tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new();
-            
+
             // Pre-populate
             for i in 0..3 {
                 base_tree.insert(i, i);
             }
-            
+
             // Create snapshots that will be mutated concurrently
             let snapshot1 = ShuttleArc::new(std::sync::Mutex::new(base_tree.snapshot()));
             let snapshot2 = ShuttleArc::new(std::sync::Mutex::new(base_tree.snapshot()));
-            
+
             let s1 = ShuttleArc::clone(&snapshot1);
             let s2 = ShuttleArc::clone(&snapshot2);
-            
+
             let handle1 = thread::spawn(move || {
                 let mut snap = s1.lock().unwrap();
                 snap.insert(10, 100);
                 snap.insert(11, 110);
-                
+
                 // Verify our mutations
                 assert_eq!(snap.get(10), Some(&100));
                 assert_eq!(snap.get(11), Some(&110));
-                
+
                 // Should still see original data
                 for i in 0..3 {
                     assert_eq!(snap.get(i), Some(&i));
                 }
             });
-            
+
             let handle2 = thread::spawn(move || {
                 let mut snap = s2.lock().unwrap();
                 snap.insert(20, 200);
                 snap.insert(21, 210);
-                
+
                 // Verify our mutations
                 assert_eq!(snap.get(20), Some(&200));
                 assert_eq!(snap.get(21), Some(&210));
-                
+
                 // Should still see original data
                 for i in 0..3 {
                     assert_eq!(snap.get(i), Some(&i));
                 }
             });
-            
+
             handle1.join().unwrap();
             handle2.join().unwrap();
-            
+
             // Verify independence - snapshot1 shouldn't see snapshot2's changes
             {
                 let snap1 = snapshot1.lock().unwrap();
@@ -1251,7 +1261,7 @@ mod shuttle_tests {
                 assert_eq!(snap1.get(20), None); // Shouldn't see snapshot2's data
                 assert_eq!(snap1.get(21), None);
             }
-            
+
             {
                 let snap2 = snapshot2.lock().unwrap();
                 assert_eq!(snap2.get(20), Some(&200));
@@ -1264,12 +1274,16 @@ mod shuttle_tests {
 
     #[test]
     fn shuttle_many_readers_one_writer() {
-        let runner = Runner::new(shuttle::scheduler::DfsScheduler::new(Some(1000), false), Config::new());
+        let runner = Runner::new(
+            shuttle::scheduler::DfsScheduler::new(Some(1000), false),
+            Config::new(),
+        );
         runner.run(|| {
-            let tree = ShuttleArc::new(std::sync::Mutex::new(
-                VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new()
-            ));
-            
+            let tree = ShuttleArc::new(std::sync::Mutex::new(VersionedAdaptiveRadixTree::<
+                ArrayKey<16>,
+                i32,
+            >::new()));
+
             // Pre-populate
             {
                 let mut t = tree.lock().unwrap();
@@ -1277,15 +1291,15 @@ mod shuttle_tests {
                     t.insert(i, i * 3);
                 }
             }
-            
+
             // Take a snapshot before spawning threads
             let snapshot = {
                 let t = tree.lock().unwrap();
                 ShuttleArc::new(t.snapshot())
             };
-            
+
             let tree_for_writer = ShuttleArc::clone(&tree);
-            
+
             // Spawn multiple readers
             let mut reader_handles = Vec::new();
             for reader_id in 0..3 {
@@ -1301,7 +1315,7 @@ mod shuttle_tests {
                 });
                 reader_handles.push(handle);
             }
-            
+
             // Spawn one writer
             let writer_handle = thread::spawn(move || {
                 let mut tree = tree_for_writer.lock().unwrap();
@@ -1309,7 +1323,7 @@ mod shuttle_tests {
                 for i in 100..105 {
                     tree.insert(i, i * 5);
                 }
-                
+
                 // Verify writer can see its own changes
                 let mut writer_sum = 0;
                 for i in 100..105 {
@@ -1319,18 +1333,18 @@ mod shuttle_tests {
                 }
                 writer_sum
             });
-            
+
             // Collect results
             let expected_reader_sum = (0..10).map(|i| i * 3).sum::<i32>();
             for handle in reader_handles {
                 let (reader_id, sum) = handle.join().unwrap();
                 assert_eq!(sum, expected_reader_sum, "Reader {reader_id} got wrong sum");
             }
-            
+
             let writer_sum = writer_handle.join().unwrap();
             let expected_writer_sum = (100..105).map(|i| i * 5).sum::<i32>();
             assert_eq!(writer_sum, expected_writer_sum);
-            
+
             // Verify readers didn't see writer's changes (they used snapshot)
             for i in 100..105 {
                 assert_eq!(snapshot.get(i), None);
@@ -1340,12 +1354,16 @@ mod shuttle_tests {
 
     #[test]
     fn shuttle_snapshot_drop_safety() {
-        let runner = Runner::new(shuttle::scheduler::DfsScheduler::new(Some(1000), false), Config::new());
+        let runner = Runner::new(
+            shuttle::scheduler::DfsScheduler::new(Some(1000), false),
+            Config::new(),
+        );
         runner.run(|| {
-            let tree = ShuttleArc::new(std::sync::Mutex::new(
-                VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new()
-            ));
-            
+            let tree = ShuttleArc::new(std::sync::Mutex::new(VersionedAdaptiveRadixTree::<
+                ArrayKey<16>,
+                i32,
+            >::new()));
+
             // Pre-populate
             {
                 let mut t = tree.lock().unwrap();
@@ -1353,16 +1371,16 @@ mod shuttle_tests {
                     t.insert(i, i * 7);
                 }
             }
-            
+
             let tree1 = ShuttleArc::clone(&tree);
             let tree2 = ShuttleArc::clone(&tree);
-            
+
             let handle1 = thread::spawn(move || {
                 let snapshot = {
                     let t = tree1.lock().unwrap();
                     t.snapshot()
                 };
-                
+
                 // Use snapshot briefly
                 let mut sum = 0;
                 for i in 0..5 {
@@ -1373,14 +1391,14 @@ mod shuttle_tests {
                 sum
                 // Snapshot drops here
             });
-            
+
             let handle2 = thread::spawn(move || {
                 let snapshot = {
                     let t = tree2.lock().unwrap();
                     t.snapshot()
                 };
-                
-                // Use snapshot briefly  
+
+                // Use snapshot briefly
                 let mut count = 0;
                 for i in 0..5 {
                     if snapshot.get(i).is_some() {
@@ -1390,13 +1408,13 @@ mod shuttle_tests {
                 count
                 // Snapshot drops here
             });
-            
+
             let sum = handle1.join().unwrap();
             let count = handle2.join().unwrap();
-            
+
             assert_eq!(sum, (0..5).map(|i| i * 7).sum::<i32>());
             assert_eq!(count, 5);
-            
+
             // Original tree should still work after snapshots are dropped
             let t = tree.lock().unwrap();
             for i in 0..5 {
