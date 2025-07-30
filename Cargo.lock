@@ -554,7 +554,7 @@ dependencies = [
 
 [[package]]
 name = "rart"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "criterion",
  "im",
@@ -566,7 +566,7 @@ dependencies = [
 
 [[package]]
 name = "rart-rs-fuzz"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arbitrary",
  "libfuzzer-sys",
