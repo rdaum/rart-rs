@@ -2,16 +2,16 @@
 resolver = "2"
 
 members = [
-  "fuzz",
-  "rart"
+    "fuzz",
+    "rart",
 ]
 
 [workspace.package]
 version = "0.1.1"
-edition = "2024"
 authors = ["Ryan Daum <ryan.daum@gmail.com>"]
-license = "Apache-2.0"
+edition = "2024"
 homepage = "https://github.com/rdaum/rart-rs"
+license = "Apache-2.0"
 repository = "https://github.com/rdaum/rart-rs"
 
 [workspace.dependencies]
@@ -21,9 +21,9 @@ simdeez = "2.0.0-dev5"
 
 # Dev dependencies
 criterion = { version = "0.7", features = ["html_reports"] }
-rand = "0.9"
 im = "15.1"
+rand = "0.9"
 
 # Fuzz dependencies
-libfuzzer-sys = "0.4"
 arbitrary = { version = "1.4", features = ["derive"] }
+libfuzzer-sys = "0.4"

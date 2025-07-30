@@ -144,7 +144,7 @@ def analyze_benchmark(bench_name: str, data: Dict) -> None:
         print(f"{ratios[0]:<12} {ratios[1]:<15} {ratios[2]:<15}")
 
 def main():
-    criterion_dir = Path("/Users/ryan/rart-rs/target/criterion")
+    criterion_dir = Path("./target/criterion")
     
     if not criterion_dir.exists():
         print(f"Criterion directory not found: {criterion_dir}")

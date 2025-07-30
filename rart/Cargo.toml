@@ -1,20 +1,20 @@
 [package]
 name = "rart"
-description = "High-performance Adaptive Radix Tree implementation with SIMD optimizations"
-keywords = ["datastructure", "tree", "radix", "index"]
-categories = ["data-structures"]
-readme = "../README.md"
 version.workspace = true
-edition.workspace = true
 authors.workspace = true
-license.workspace = true
+categories = ["data-structures"]
+edition.workspace = true
 homepage.workspace = true
+keywords = ["datastructure", "tree", "radix", "index"]
+license.workspace = true
+readme = "../README.md"
 repository.workspace = true
+description = "High-performance Adaptive Radix Tree implementation with SIMD optimizations"
 
 [dev-dependencies]
 criterion.workspace = true
-rand.workspace = true
 im.workspace = true
+rand.workspace = true
 
 [features]
 default = ["simd_keys"]

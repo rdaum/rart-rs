@@ -1,7 +1,7 @@
 # `rart` - Ryan's Adaptive Radix Tree
 
-A high-performance, memory-efficient implementation of Adaptive Radix Trees (ART) in Rust, with support for both
-single-threaded and versioned concurrent data structures.
+A high-performance, memory-efficient implementation of Adaptive Radix Trees (ART) in Rust, with
+support for both single-threaded and versioned concurrent data structures.
 
 [![Crates.io](https://img.shields.io/crates/v/rart.svg)](https://crates.io/crates/rart)
 [![Documentation](https://docs.rs/rart/badge.svg)](https://docs.rs/rart)
@@ -12,11 +12,11 @@ single-threaded and versioned concurrent data structures.
 This crate provides two high-performance tree implementations:
 
 1. **`AdaptiveRadixTree`** - Single-threaded radix tree optimized for speed
-2. **`VersionedAdaptiveRadixTree`** - Thread-safe versioned tree with copy-on-write snapshots for transactional
-   workloads
+2. **`VersionedAdaptiveRadixTree`** - Thread-safe versioned tree with copy-on-write snapshots for
+   concurrent workloads
 
-Both trees automatically adjust their internal representation based on data density, providing excellent performance
-characteristics for ordered associative data structures.
+Both trees automatically adjust their internal representation based on data density for ordered
+associative data structures.
 
 ## Tree Types
 
@@ -24,12 +24,12 @@ characteristics for ordered associative data structures.
 
 **Key Features:**
 
-- **Blazing fast**: Optimized for single-threaded performance
-- **Cache friendly**: Optimized memory layout for modern CPU architectures
-- **SIMD support**: Vectorized operations for x86 SSE and ARM NEON
-- **Range queries**: Efficient iteration over key ranges with proper ordering
+- Optimized for single-threaded performance
+- Cache-friendly memory layout for modern CPU architectures
+- SIMD support for vectorized operations (x86 SSE and ARM NEON)
+- Efficient iteration over key ranges with proper ordering
 
-**Best for:** Single-threaded applications requiring maximum performance.
+**Best for:** Single-threaded applications.
 
 ```rust
 use rart::{AdaptiveRadixTree, ArrayKey};
@@ -46,17 +46,17 @@ for (key, value) in tree.iter() {
 }
 ```
 
-### VersionedAdaptiveRadixTree - MVCC & Concurrency
+### VersionedAdaptiveRadixTree - Concurrent Versioning
 
 **Key Features:**
 
-- **O(1) snapshots**: Create new versions instantly without copying data
-- **Copy-on-write mutations**: Only copy nodes along modified paths, so structure is shared
-- **Structural sharing**: Unmodified subtrees shared between versions
-- **Thread-safe**: Snapshots can be moved across threads safely
-- **Multiversion support**: Ideal for database and concurrent applications
+- O(1) snapshots: Create new versions without copying data
+- Copy-on-write mutations: Only copy nodes along modified paths
+- Structural sharing: Unmodified subtrees shared between versions
+- Thread-safe: Snapshots can be moved across threads safely
+- Multiversion support for database and concurrent applications
 
-**Best for:** Multi-version concurrency control, databases, concurrent systems.
+**Best for:** Concurrent versioned workloads, databases, multi-reader systems.
 
 ```rust
 use rart::{VersionedAdaptiveRadixTree, ArrayKey};
@@ -99,17 +99,17 @@ let key4: VectorKey = 1337u32.into();
 
 ### Single-threaded Performance (AdaptiveRadixTree)
 
-Excellent performance characteristics, particularly for sequential access patterns:
+Performance characteristics for sequential and random access patterns:
 
-**Sequential access** (cache-friendly):
+**Sequential access**:
 
-- **ART: ~2ns** - 10x faster than random access
+- ART: ~2ns (10x faster than random access)
 - HashMap: ~10ns
 - BTree: ~22ns
 
-**Random access** (competitive):
+**Random access**:
 
-- **ART: ~14ns** - comparable to HashMap
+- ART: ~14ns (comparable to HashMap)
 - HashMap: ~14ns
 - BTree: ~55ns
 
@@ -117,21 +117,35 @@ Excellent performance characteristics, particularly for sequential access patter
 
 Optimized for transactional workloads with copy-on-write semantics:
 
-**Read operations** (versioned ART is superior):
+**Lookup Performance** (vs [im crate](https://crates.io/crates/im) persistent collections):
 
-- **Lookups**: 1.3-2.1x faster than im::HashMap, 2.2-4.5x faster than im::OrdMap
-- **Sequential scans**: 1.4-2.9x faster than im::HashMap, 2.7-4.9x faster than im::OrdMap
+- Small datasets (256-1024 elements): VersionedART 8.7ns vs im::HashMap 15.2ns and im::OrdMap 13.6ns
+- Medium datasets (16k elements): VersionedART 17.1ns vs im::HashMap 21.5ns and im::OrdMap 27.5ns
+- Generally 1.3-1.7x faster than alternatives across most workloads
 
-**Snapshot operations**:
+**Sequential Scanning**:
 
-- **O(1) snapshots**: Instant snapshot creation
-- **Structural sharing**: Efficient memory usage across versions
-- **Copy-on-write**: Only copy modified paths, not entire structure
+- Good cache locality for most dataset sizes
+- 256 elements: VersionedART 1.2µs vs im types 2.2µs (1.8x faster)
+- 1024 elements: VersionedART 7.2µs vs im::HashMap 9.9µs/im::OrdMap 10.7µs (1.4-1.5x faster)
+- 16k elements: VersionedART 149µs vs im::HashMap 260µs/im::OrdMap 289µs (1.7-1.9x faster)
 
-**Best suited for**: Read-heavy MVCC workloads, database snapshots, concurrent systems requiring point-in-time
-consistency.
+**Snapshot Operations**:
 
-*Benchmarks run on AMD Ryzen 9 7940HS using Criterion.rs*
+- O(1) snapshots: ~2.8ns consistently regardless of tree size (256-16k elements)
+- im::HashMap clone: ~6.2ns (2.2x slower)
+- im::OrdMap clone: ~2.8ns (comparable, but lacks structural sharing)
+
+**Copy-on-Write Efficiency**:
+
+- Multiple mutations per snapshot: im types excel here due to different design trade-offs
+- Structural sharing: Memory advantages for concurrent access patterns
+- Versioned workloads: Better for read-heavy scenarios with occasional snapshots
+
+**Best suited for**: Read-heavy versioned workloads, database snapshots, concurrent systems
+requiring point-in-time consistency and efficient structural sharing.
+
+_Benchmarks run on AMD Ryzen 9 7940HS using Criterion.rs_
 
 ## Architecture
 
@@ -150,9 +164,10 @@ Both implementations use several key optimizations:
 
 ## Implementation Notes
 
-Based
-on ["The Adaptive Radix Tree: ARTful Indexing for Main-Memory Databases"](https://db.in.tum.de/~leis/papers/ART.pdf) by
-Viktor Leis, Alfons Kemper, and Thomas Neumann, with additional optimizations for Rust and versioning support.
+Based on
+["The Adaptive Radix Tree: ARTful Indexing for Main-Memory Databases"](https://db.in.tum.de/~leis/papers/ART.pdf)
+by Viktor Leis, Alfons Kemper, and Thomas Neumann, with additional optimizations for Rust and
+versioning support.
 
 **Technical Details:**
 
@@ -169,8 +184,8 @@ For detailed API documentation and examples, visit [docs.rs/rart](https://docs.r
 
 ## License
 
-Licensed under the Apache License, Version 2.0. See [LICENSE](https://github.com/rdaum/rart-rs/blob/main/LICENSE) for
-details.
+Licensed under the Apache License, Version 2.0. See
+[LICENSE](https://github.com/rdaum/rart-rs/blob/main/LICENSE) for details.
 
 ## Contributing
 
