@@ -35,5 +35,11 @@ jobs:
         run: cargo build --all-features
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz
-      - name: Get fuzzy for 30 seconds
+      - name: Fuzz rart_check for 30 seconds
         run: cargo fuzz run rart_check -- -max_total_time=30s
+      - name: Fuzz rart_iter_range for 30 seconds
+        run: cargo fuzz run rart_iter_range -- -max_total_time=30s
+      - name: Fuzz versioned_tree_check for 30 seconds
+        run: cargo fuzz run versioned_tree_check -- -max_total_time=30s
+      - name: Fuzz versioned_tree_multithread for 30 seconds
+        run: cargo fuzz run versioned_tree_multithread -- -max_total_time=30s
