@@ -15,6 +15,7 @@ description = "High-performance Adaptive Radix Tree implementation with SIMD opt
 criterion.workspace = true
 im.workspace = true
 rand.workspace = true
+shuttle.workspace = true
 
 [features]
 default = ["simd_keys"]

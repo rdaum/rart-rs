@@ -568,7 +568,6 @@ mod tests {
 
         let stats = tree.get_tree_stats();
         debug_assert_eq!(stats.num_values, num_inserted);
-        eprintln!("Tree stats: {stats:?}");
     }
 
     #[test]
