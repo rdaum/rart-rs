@@ -10,7 +10,6 @@ use rart::VersionedAdaptiveRadixTree;
 use rart::keys::array_key::ArrayKey;
 
 const TREE_SIZES: [usize; 4] = [1 << 8, 1 << 10, 1 << 12, 1 << 14];
-const SNAPSHOT_COUNTS: [usize; 3] = [1, 5, 10];
 
 /// Benchmark lookup operations
 pub fn lookup_comparison(c: &mut Criterion) {
