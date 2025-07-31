@@ -41,7 +41,8 @@ fuzz_target!(|ops: Vec<TreeOp>| {
                 if reference_old.is_none() {
                     // For new insertions, both should agree
                     assert_eq!(
-                        versioned_old, reference_old.is_some(),
+                        versioned_old,
+                        reference_old.is_some(),
                         "Insert mismatch for new key {key}: versioned={versioned_old:?}, reference={reference_old:?}"
                     );
                 }
