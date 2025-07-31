@@ -1487,26 +1487,26 @@ mod tests {
         let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new();
 
         // Insert new key should return false (not a replacement)
-        assert_eq!(tree.insert("key1", 100), false);
+        assert!(!tree.insert("key1", 100));
         assert_eq!(tree.get("key1"), Some(&100));
 
         // Insert same key should return true (was a replacement)
-        assert_eq!(tree.insert("key1", 200), true);
+        assert!(tree.insert("key1", 200));
         assert_eq!(tree.get("key1"), Some(&200));
 
         // Insert same key again should return true
-        assert_eq!(tree.insert("key1", 300), true);
+        assert!(tree.insert("key1", 300));
         assert_eq!(tree.get("key1"), Some(&300));
 
         // Insert different key should return false (new key)
-        assert_eq!(tree.insert("key2", 400), false);
+        assert!(!tree.insert("key2", 400));
         assert_eq!(tree.get("key2"), Some(&400));
 
         // Original key should still have latest value
         assert_eq!(tree.get("key1"), Some(&300));
 
         // Replace existing key should return true
-        assert_eq!(tree.insert("key2", 500), true);
+        assert!(tree.insert("key2", 500));
         assert_eq!(tree.get("key2"), Some(&500));
     }
 
@@ -1542,21 +1542,21 @@ mod tests {
         let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new();
 
         // Insert initial data
-        assert_eq!(tree.insert("key1", 100), false);
-        assert_eq!(tree.insert("key2", 200), false);
+        assert!(!tree.insert("key1", 100));
+        assert!(!tree.insert("key2", 200));
 
         // Take a snapshot to create shared ownership
         let snapshot = tree.snapshot();
 
         // Insert same key should return true (replacement) even with shared nodes
-        assert_eq!(tree.insert("key1", 300), true);
+        assert!(tree.insert("key1", 300));
         assert_eq!(tree.get("key1"), Some(&300));
 
         // Verify snapshot still has original value
         assert_eq!(snapshot.get("key1"), Some(&100));
 
         // Insert new key should return false (new key)
-        assert_eq!(tree.insert("key3", 400), false);
+        assert!(!tree.insert("key3", 400));
         assert_eq!(tree.get("key3"), Some(&400));
 
         // Snapshot should not see new key
