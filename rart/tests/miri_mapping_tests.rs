@@ -2,16 +2,17 @@
 //!
 //! These tests focus on the low-level memory operations in the mapping layer
 //! that are most likely to have memory safety issues under Miri's strict checking.
+//!
+//! Note: These tests are only compiled when SIMD features are disabled,
+//! as Miri cannot handle SIMD instructions.
+
+#![cfg(not(feature = "simd_keys"))]
 
 use rart::mapping::{
     NodeMapping, direct_mapping::DirectMapping, indexed_mapping::IndexedMapping,
     sorted_keyed_mapping::SortedKeyedMapping,
 };
 use rart::utils::bitset::Bitset64;
-
-// Verify that SIMD is disabled for Miri tests
-#[cfg(feature = "simd_keys")]
-compile_error!("SIMD features must be disabled for Miri tests. Run with --no-default-features");
 
 /// Test DirectMapping for memory safety issues around BitArray operations
 #[test]
@@ -243,12 +244,12 @@ fn miri_mapping_stress_patterns() {
 fn miri_uninitialized_access_patterns() {
     // Test DirectMapping with sparse, uninitialized access
     let mut dm = DirectMapping::<Box<i32>>::new();
-    
+
     // Only fill a few scattered positions
     dm.add_child(0, Box::new(0));
     dm.add_child(127, Box::new(127));
     dm.add_child(255, Box::new(255));
-    
+
     // Test accessing uninitialized slots
     for i in 1..127u8 {
         assert_eq!(dm.seek_child(i), None);
@@ -258,20 +259,22 @@ fn miri_uninitialized_access_patterns() {
         assert_eq!(dm.seek_child(i), None);
         assert_eq!(dm.seek_child_mut(i), None);
     }
-    
+
     // Test IndexedMapping with partial initialization
     let mut im = IndexedMapping::<String, 48, Bitset64<1>>::new();
-    
+
     // Only use positions 5, 15, 30 - leave gaps
     im.add_child(5, "five".to_string());
     im.add_child(15, "fifteen".to_string());
     im.add_child(30, "thirty".to_string());
-    
+
     // Access uninitialized positions
-    for i in [0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 29, 31, 47] {
+    for i in [
+        0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 29, 31, 47,
+    ] {
         assert_eq!(im.seek_child(i), None);
     }
-    
+
     // Verify initialized positions still work
     assert_eq!(im.seek_child(5).unwrap(), "five");
     assert_eq!(im.seek_child(15).unwrap(), "fifteen");
@@ -289,7 +292,7 @@ fn miri_create_destroy_untouched() {
         assert_eq!(dm.seek_child(0), None);
         assert_eq!(dm.seek_child(255), None);
     } // Drop should be clean
-    
+
     // IndexedMapping - create and drop without operations
     {
         let im = IndexedMapping::<Box<String>, 48, Bitset64<1>>::new();
@@ -298,7 +301,7 @@ fn miri_create_destroy_untouched() {
         assert_eq!(im.seek_child(0), None);
         assert_eq!(im.seek_child(47), None);
     } // Drop should be clean
-    
+
     // SortedKeyedMapping - create and drop
     {
         let skm = SortedKeyedMapping::<Vec<i32>, 16>::new();
@@ -312,11 +315,11 @@ fn miri_create_destroy_untouched() {
 fn miri_partial_fill_manipulation() {
     // DirectMapping - only fill every 4th position
     let mut dm = DirectMapping::<Box<i64>>::new();
-    
+
     for i in (0..=255u8).step_by(4) {
         dm.add_child(i, Box::new(i as i64));
     }
-    
+
     // Verify only the filled positions work
     for i in 0..=255u8 {
         if i % 4 == 0 {
@@ -325,25 +328,25 @@ fn miri_partial_fill_manipulation() {
             assert_eq!(dm.seek_child(i), None);
         }
     }
-    
+
     // Modify some values
     for i in (0..=255u8).step_by(8) {
         if let Some(val) = dm.seek_child_mut(i) {
             **val *= 2;
         }
     }
-    
+
     // Verify modifications
     for i in (0..=255u8).step_by(4) {
         let expected = if i % 8 == 0 { (i as i64) * 2 } else { i as i64 };
         assert_eq!(**dm.seek_child(i).unwrap(), expected);
     }
-    
+
     // Delete some entries, leaving gaps
     for i in (0..=255u8).step_by(12) {
         dm.delete_child(i);
     }
-    
+
     // Verify deletions created gaps
     for i in (0..=255u8).step_by(4) {
         if i % 12 == 0 {
@@ -358,10 +361,10 @@ fn miri_partial_fill_manipulation() {
 #[test]
 fn miri_indexed_mapping_minimal_usage() {
     let mut im = IndexedMapping::<Box<String>, 48, Bitset64<1>>::new();
-    
+
     // Add just one element
     im.add_child(42, Box::new("answer".to_string()));
-    
+
     // Test accessing the one element and empty slots
     assert_eq!(im.seek_child(42).unwrap().as_str(), "answer");
     for i in 0..48u8 {
@@ -369,26 +372,26 @@ fn miri_indexed_mapping_minimal_usage() {
             assert_eq!(im.seek_child(i), None);
         }
     }
-    
+
     // Delete the one element - should be completely empty now
     let deleted = im.delete_child(42).unwrap();
     assert_eq!(deleted.as_str(), "answer");
     assert_eq!(im.num_children(), 0);
-    
+
     // Test accessing after complete emptying
     for i in 0..48u8 {
         assert_eq!(im.seek_child(i), None);
     }
-    
+
     // Add a few scattered elements
     im.add_child(1, Box::new("one".to_string()));
     im.add_child(25, Box::new("twenty-five".to_string()));
     im.add_child(47, Box::new("forty-seven".to_string()));
-    
+
     // Test iterator with sparse data
     let items: Vec<_> = im.into_iter().collect();
     assert_eq!(items.len(), 3);
-    
+
     // Should contain our three items
     let values: Vec<String> = items.into_iter().map(|(_, v)| *v).collect();
     assert!(values.contains(&"one".to_string()));
@@ -401,29 +404,29 @@ fn miri_indexed_mapping_minimal_usage() {
 fn miri_sorted_keyed_dangerous_conversions() {
     // Test conversion with minimal data
     let mut skm = SortedKeyedMapping::<Box<i32>, 16>::new();
-    
+
     // Add just two elements
     skm.add_child(5, Box::new(50));
     skm.add_child(10, Box::new(100));
-    
+
     // This hits the MaybeUninit::assume_init() path with mostly uninitialized data
     let im = IndexedMapping::<Box<i32>, 48, Bitset64<1>>::from_sorted_keyed(&mut skm);
-    
+
     // Verify conversion worked with sparse data
     assert_eq!(**im.seek_child(5).unwrap(), 50);
     assert_eq!(**im.seek_child(10).unwrap(), 100);
     assert_eq!(im.num_children(), 2);
-    
+
     // Test accessing positions that were never initialized in the original
     for i in [0, 1, 2, 3, 4, 6, 7, 8, 9, 11, 12, 13, 14, 15] {
         assert_eq!(im.seek_child(i), None);
     }
-    
+
     // Test empty conversion
     let mut empty_skm = SortedKeyedMapping::<Box<i32>, 4>::new();
     let empty_im = IndexedMapping::<Box<i32>, 48, Bitset64<1>>::from_sorted_keyed(&mut empty_skm);
     assert_eq!(empty_im.num_children(), 0);
-    
+
     // Should be safe to access any position in empty converted mapping
     for i in 0..48u8 {
         assert_eq!(empty_im.seek_child(i), None);
