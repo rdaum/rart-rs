@@ -142,7 +142,28 @@ where
 
     /// Insert a key-value pair (generic version).
     ///
-    /// Returns the previous value if the key already existed.
+    /// Follows standard Rust container conventions by returning the old value
+    /// when a key is replaced.
+    ///
+    /// # Returns
+    ///
+    /// - `Some(old_value)` if a previous value was replaced
+    /// - `None` if this was a new key
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use rart::{AdaptiveRadixTree, ArrayKey};
+    ///
+    /// let mut tree = AdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+    ///
+    /// // Insert new key returns None
+    /// assert_eq!(tree.insert("key1", 100), None);
+    ///
+    /// // Insert same key returns old value
+    /// assert_eq!(tree.insert("key1", 200), Some(100));
+    /// assert_eq!(tree.get("key1"), Some(&200));
+    /// ```
     #[inline]
     pub fn insert<KV>(&mut self, key: KV, value: ValueType) -> Option<ValueType>
     where
@@ -153,7 +174,13 @@ where
 
     /// Insert a key-value pair using key reference (direct version).
     ///
-    /// Returns the previous value if the key already existed.
+    /// Follows standard Rust container conventions by returning the old value
+    /// when a key is replaced.
+    ///
+    /// # Returns
+    ///
+    /// - `Some(old_value)` if a previous value was replaced
+    /// - `None` if this was a new key
     #[inline]
     pub fn insert_k(&mut self, key: &KeyType, value: ValueType) -> Option<ValueType> {
         let Some(root) = &mut self.root else {
@@ -692,6 +719,30 @@ mod tests {
         );
         assert_eq!(tree.get(0usize), None);
         assert_eq!(tree.remove(0usize), None);
+    }
+
+    #[test]
+    fn test_insert_returns_replaced_value() {
+        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+
+        // Insert new key should return None
+        assert_eq!(tree.insert("key1", 100), None);
+        assert_eq!(tree.get("key1"), Some(&100));
+
+        // Insert same key should return previous value
+        assert_eq!(tree.insert("key1", 200), Some(100));
+        assert_eq!(tree.get("key1"), Some(&200));
+
+        // Insert same key again should return current value
+        assert_eq!(tree.insert("key1", 300), Some(200));
+        assert_eq!(tree.get("key1"), Some(&300));
+
+        // Insert different key should return None
+        assert_eq!(tree.insert("key2", 400), None);
+        assert_eq!(tree.get("key2"), Some(&400));
+
+        // Original key should still have latest value
+        assert_eq!(tree.get("key1"), Some(&300));
     }
 
     #[test]

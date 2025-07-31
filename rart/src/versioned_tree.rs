@@ -32,11 +32,16 @@ type RemoveResult<P, V> = (Option<Arc<VersionedNode<P, V>>>, V);
 ///
 /// ## Examples
 ///
+/// Basic insertion and snapshots:
+///
 /// ```rust
 /// use rart::{VersionedAdaptiveRadixTree, ArrayKey};
 ///
 /// let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, String>::new();
-/// tree.insert("key1", "value1".to_string());
+///
+/// // insert() returns bool - optimized for performance
+/// assert_eq!(tree.insert("key1", "value1".to_string()), false); // new key
+/// assert_eq!(tree.insert("key1", "updated".to_string()), true);  // replacement
 ///
 /// // Take a snapshot - O(1) operation
 /// let mut snapshot = tree.snapshot();
@@ -46,6 +51,18 @@ type RemoveResult<P, V> = (Option<Arc<VersionedNode<P, V>>>, V);
 ///
 /// assert_eq!(tree.get("key2"), None);
 /// assert_eq!(snapshot.get("key2"), Some(&"value2".to_string()));
+/// ```
+///
+/// Getting old values on replacement:
+///
+/// ```rust
+/// use rart::{VersionedAdaptiveRadixTree, ArrayKey};
+///
+/// let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+///
+/// // insert_and_replace() returns Option<old_value> - may clone when needed
+/// assert_eq!(tree.insert_and_replace("key", 100), None);      // new key
+/// assert_eq!(tree.insert_and_replace("key", 200), Some(100)); // got old value
 /// ```
 pub struct VersionedAdaptiveRadixTree<KeyType, ValueType>
 where
@@ -142,10 +159,37 @@ where
 
     /// Insert a key-value pair (generic version).
     ///
-    /// Uses copy-on-write to ensure this operation doesn't affect other snapshots.
-    /// Returns the previous value if the key already existed.
+    /// This is a performance-optimized insertion method that uses copy-on-write
+    /// to ensure this operation doesn't affect other snapshots, but doesn't
+    /// return the old value to avoid unnecessary cloning.
+    ///
+    /// # Returns
+    ///
+    /// - `true` if a previous value was replaced
+    /// - `false` if this was a new key
+    ///
+    /// # Performance
+    ///
+    /// This method is optimized for cases where you don't need the old value.
+    /// If you need the old value, use [`insert_and_replace`] instead.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use rart::{VersionedAdaptiveRadixTree, ArrayKey};
+    ///
+    /// let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+    ///
+    /// // Insert new key returns false
+    /// assert_eq!(tree.insert("key1", 100), false);
+    ///
+    /// // Insert same key returns true (replacement)
+    /// assert_eq!(tree.insert("key1", 200), true);
+    /// ```
+    ///
+    /// [`insert_and_replace`]: Self::insert_and_replace
     #[inline]
-    pub fn insert<KV>(&mut self, key: KV, value: ValueType) -> Option<ValueType>
+    pub fn insert<KV>(&mut self, key: KV, value: ValueType) -> bool
     where
         KV: Into<KeyType>,
     {
@@ -154,9 +198,111 @@ where
 
     /// Insert a key-value pair using key reference (direct version).
     ///
-    /// Uses copy-on-write to ensure this operation doesn't affect other snapshots.
-    /// Returns the previous value if the key already existed.
-    pub fn insert_k(&mut self, key: &KeyType, value: ValueType) -> Option<ValueType> {
+    /// This is a performance-optimized insertion method that uses copy-on-write
+    /// to ensure this operation doesn't affect other snapshots, but doesn't
+    /// return the old value to avoid unnecessary cloning.
+    ///
+    /// # Returns
+    ///
+    /// - `true` if a previous value was replaced
+    /// - `false` if this was a new key
+    ///
+    /// # Performance
+    ///
+    /// This method is optimized for cases where you don't need the old value.
+    /// If you need the old value, use [`insert_and_replace_k`] instead.
+    ///
+    /// [`insert_and_replace_k`]: Self::insert_and_replace_k
+    pub fn insert_k(&mut self, key: &KeyType, value: ValueType) -> bool {
+        self.version += 1;
+
+        let Some(root) = &self.root else {
+            self.root = Some(Arc::new(VersionedNode::new_leaf(
+                key.to_partial(0),
+                value,
+                self.version,
+            )));
+            return false;
+        };
+
+        let (new_root, was_replaced) =
+            Self::insert_recurse(Arc::clone(root), key, value, 0, self.version, None);
+        self.root = Some(new_root);
+        was_replaced
+    }
+
+    /// Insert a key-value pair and return the previous value if it existed (generic version).
+    ///
+    /// This method uses copy-on-write to ensure this operation doesn't affect other
+    /// snapshots, and returns the old value when a replacement occurs. This method
+    /// may need to clone the old value when nodes are shared between snapshots.
+    ///
+    /// # Returns
+    ///
+    /// - `Some(old_value)` if a previous value was replaced
+    /// - `None` if this was a new key
+    ///
+    /// # Performance
+    ///
+    /// This method has higher overhead than [`insert`] because it may need to clone
+    /// the old value when nodes are shared. Use [`insert`] if you don't need the old value.
+    ///
+    /// # Copy-on-Write Behavior
+    ///
+    /// - When the tree has exclusive ownership of nodes (fast path), extracts old value without cloning
+    /// - When nodes are shared with snapshots (slow path), clones the old value
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use rart::{VersionedAdaptiveRadixTree, ArrayKey};
+    ///
+    /// let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+    ///
+    /// // Insert new key returns None
+    /// assert_eq!(tree.insert_and_replace("key1", 100), None);
+    ///
+    /// // Insert same key returns old value
+    /// assert_eq!(tree.insert_and_replace("key1", 200), Some(100));
+    ///
+    /// // With snapshots, old value is cloned when necessary
+    /// let snapshot = tree.snapshot();
+    /// assert_eq!(tree.insert_and_replace("key1", 300), Some(200));
+    /// assert_eq!(snapshot.get("key1"), Some(&200)); // Snapshot unchanged
+    /// ```
+    ///
+    /// [`insert`]: Self::insert
+    #[inline]
+    pub fn insert_and_replace<KV>(&mut self, key: KV, value: ValueType) -> Option<ValueType>
+    where
+        KV: Into<KeyType>,
+    {
+        self.insert_and_replace_k(&key.into(), value)
+    }
+
+    /// Insert a key-value pair and return the previous value if it existed (direct version).
+    ///
+    /// This method uses copy-on-write to ensure this operation doesn't affect other
+    /// snapshots, and returns the old value when a replacement occurs. This method
+    /// may need to clone the old value when nodes are shared between snapshots.
+    ///
+    /// # Returns
+    ///
+    /// - `Some(old_value)` if a previous value was replaced
+    /// - `None` if this was a new key
+    ///
+    /// # Performance
+    ///
+    /// This method has higher overhead than [`insert_k`] because it may need to clone
+    /// the old value when nodes are shared. Use [`insert_k`] if you don't need the old value.
+    ///
+    /// # Copy-on-Write Behavior
+    ///
+    /// - When the tree has exclusive ownership of nodes (fast path), extracts old value without cloning
+    /// - When nodes are shared with snapshots (slow path), clones the old value
+    ///
+    /// [`insert_k`]: Self::insert_k
+    pub fn insert_and_replace_k(&mut self, key: &KeyType, value: ValueType) -> Option<ValueType> {
         self.version += 1;
 
         let Some(root) = &self.root else {
@@ -168,8 +314,15 @@ where
             return None;
         };
 
-        let (new_root, old_value) =
-            Self::insert_recurse(Arc::clone(root), key, value, 0, self.version);
+        let mut old_value = None;
+        let (new_root, _was_replaced) = Self::insert_recurse(
+            Arc::clone(root),
+            key,
+            value,
+            0,
+            self.version,
+            Some(&mut old_value),
+        );
         self.root = Some(new_root);
         old_value
     }
@@ -607,47 +760,48 @@ where
     }
 
     /// Insert with copy-on-write semantics.
-    /// Returns (new_root, old_value).
+    /// Returns (new_root, was_replaced).
+    /// If old_value_out is Some, captures the replaced value (cloning if necessary).
     fn insert_recurse(
         cur_node: Arc<VersionedNode<KeyType::PartialType, ValueType>>,
         key: &KeyType,
         value: ValueType,
         depth: usize,
         version: u64,
-    ) -> (
-        Arc<VersionedNode<KeyType::PartialType, ValueType>>,
-        Option<ValueType>,
-    ) {
+        old_value_out: Option<&mut Option<ValueType>>,
+    ) -> (Arc<VersionedNode<KeyType::PartialType, ValueType>>, bool) {
         let longest_common_prefix = cur_node.prefix.prefix_length_key(key, depth);
         let is_prefix_match =
             min(cur_node.prefix.len(), key.length_at(depth)) == longest_common_prefix;
 
         // Case 1: Exact match, replace existing leaf value
         if is_prefix_match && cur_node.prefix.len() == key.length_at(depth) && cur_node.is_leaf() {
-            // For leaf replacement, we can't extract the old value without Clone
-            // Instead, we'll use a different strategy - try to get a unique reference
-            // If we can't, we know someone else has a reference and we need CoW
-            return match Arc::try_unwrap(cur_node) {
+            // This is a replacement - capture old value if requested
+            let new_node = match Arc::try_unwrap(cur_node) {
                 Ok(owned_node) => {
-                    // We have exclusive ownership, can extract the old value
-                    let old_value = match owned_node.content {
-                        VersionedContent::Leaf(v) => Some(v),
-                        _ => unreachable!(),
-                    };
-                    let new_node =
-                        Arc::new(VersionedNode::new_leaf(owned_node.prefix, value, version));
-                    (new_node, old_value)
+                    // We have exclusive ownership, can extract the old value without cloning
+                    if let Some(old_value_out) = old_value_out {
+                        if let VersionedContent::Leaf(old_val) = owned_node.content {
+                            *old_value_out = Some(old_val);
+                        }
+                    }
+                    Arc::new(VersionedNode::new_leaf(owned_node.prefix, value, version))
                 }
                 Err(shared_node) => {
-                    // Node is shared, use CoW semantics - can't return old value
-                    let new_node = Arc::new(VersionedNode::new_leaf(
+                    // Node is shared, clone the old value if requested
+                    if let Some(old_value_out) = old_value_out {
+                        if let VersionedContent::Leaf(old_val) = &shared_node.content {
+                            *old_value_out = Some(old_val.clone());
+                        }
+                    }
+                    Arc::new(VersionedNode::new_leaf(
                         shared_node.prefix.clone(),
                         value,
                         version,
-                    ));
-                    (new_node, None)
+                    ))
                 }
             };
+            return (new_node, true);
         }
         // Case 2: Prefix mismatch, need to split the node
         else if !is_prefix_match {
@@ -680,7 +834,7 @@ where
                 _ => unreachable!(),
             }
 
-            return (Arc::new(new_inner), None);
+            return (Arc::new(new_inner), false);
         }
 
         // Case 3: Need to recurse deeper
@@ -693,8 +847,14 @@ where
 
         if let Some(child) = existing_child {
             // Recurse into existing child
-            let (new_child, old_value) =
-                Self::insert_recurse(Arc::clone(child), key, value, depth + prefix_len, version);
+            let (new_child, was_replaced) = Self::insert_recurse(
+                Arc::clone(child),
+                key,
+                value,
+                depth + prefix_len,
+                version,
+                old_value_out,
+            );
 
             // Create new version of this node with updated child
             // Since ensure_cow_node gave us ownership, we can unwrap safely
@@ -722,7 +882,7 @@ where
                 VersionedContent::Leaf(_) => unreachable!("Inner node expected"),
             }
 
-            (Arc::new(new_node_mut), old_value)
+            (Arc::new(new_node_mut), was_replaced)
         } else {
             // Add new child - check if node needs to grow first
             let new_leaf = Arc::new(VersionedNode::new_leaf(
@@ -760,7 +920,7 @@ where
                 VersionedContent::Leaf(_) => unreachable!("Inner node expected"),
             }
 
-            (Arc::new(new_node_mut), None)
+            (Arc::new(new_node_mut), false)
         }
     }
 
@@ -1319,6 +1479,95 @@ mod tests {
             let key = format!("key_{i:03}");
             assert_eq!(snapshot.get(&key), None);
         }
+    }
+
+    #[test]
+    fn test_insert_returns_bool() {
+        // Test insert() return values behavior in versioned tree
+        let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+
+        // Insert new key should return false (not a replacement)
+        assert_eq!(tree.insert("key1", 100), false);
+        assert_eq!(tree.get("key1"), Some(&100));
+
+        // Insert same key should return true (was a replacement)
+        assert_eq!(tree.insert("key1", 200), true);
+        assert_eq!(tree.get("key1"), Some(&200));
+
+        // Insert same key again should return true
+        assert_eq!(tree.insert("key1", 300), true);
+        assert_eq!(tree.get("key1"), Some(&300));
+
+        // Insert different key should return false (new key)
+        assert_eq!(tree.insert("key2", 400), false);
+        assert_eq!(tree.get("key2"), Some(&400));
+
+        // Original key should still have latest value
+        assert_eq!(tree.get("key1"), Some(&300));
+
+        // Replace existing key should return true
+        assert_eq!(tree.insert("key2", 500), true);
+        assert_eq!(tree.get("key2"), Some(&500));
+    }
+
+    #[test]
+    fn test_insert_and_replace_returns_old_value() {
+        // Test insert_and_replace() method that captures old values
+        let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+
+        // Insert new key should return None
+        assert_eq!(tree.insert_and_replace("key1", 100), None);
+        assert_eq!(tree.get("key1"), Some(&100));
+
+        // Insert same key should return old value (cloned if necessary)
+        assert_eq!(tree.insert_and_replace("key1", 200), Some(100));
+        assert_eq!(tree.get("key1"), Some(&200));
+
+        // Insert same key again should return current value
+        assert_eq!(tree.insert_and_replace("key1", 300), Some(200));
+        assert_eq!(tree.get("key1"), Some(&300));
+
+        // Insert different key should return None
+        assert_eq!(tree.insert_and_replace("key2", 400), None);
+        assert_eq!(tree.get("key2"), Some(&400));
+
+        // Replace existing key should return old value
+        assert_eq!(tree.insert_and_replace("key2", 500), Some(400));
+        assert_eq!(tree.get("key2"), Some(&500));
+    }
+
+    #[test]
+    fn test_insert_with_snapshots() {
+        // Test insert() behavior when nodes are shared (with snapshots)
+        let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+
+        // Insert initial data
+        assert_eq!(tree.insert("key1", 100), false);
+        assert_eq!(tree.insert("key2", 200), false);
+
+        // Take a snapshot to create shared ownership
+        let snapshot = tree.snapshot();
+
+        // Insert same key should return true (replacement) even with shared nodes
+        assert_eq!(tree.insert("key1", 300), true);
+        assert_eq!(tree.get("key1"), Some(&300));
+
+        // Verify snapshot still has original value
+        assert_eq!(snapshot.get("key1"), Some(&100));
+
+        // Insert new key should return false (new key)
+        assert_eq!(tree.insert("key3", 400), false);
+        assert_eq!(tree.get("key3"), Some(&400));
+
+        // Snapshot should not see new key
+        assert_eq!(snapshot.get("key3"), None);
+
+        // Test insert_and_replace with snapshots - should still capture old values
+        assert_eq!(tree.insert_and_replace("key1", 500), Some(300));
+        assert_eq!(tree.get("key1"), Some(&500));
+
+        // Snapshot should still have its original value
+        assert_eq!(snapshot.get("key1"), Some(&100));
     }
 
     #[test]
