@@ -1,6 +1,7 @@
 pub mod direct_mapping;
 pub mod indexed_mapping;
 pub mod keyed_mapping;
+pub mod multilevel_node4;
 pub mod sorted_keyed_mapping;
 
 pub trait NodeMapping<N, const NUM_CHILDREN: usize> {

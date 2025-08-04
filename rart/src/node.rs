@@ -1,5 +1,6 @@
 use crate::mapping::direct_mapping::DirectMapping;
 use crate::mapping::indexed_mapping::IndexedMapping;
+use crate::mapping::multilevel_node4::MultilevelNode4;
 
 use crate::mapping::NodeMapping;
 use crate::mapping::sorted_keyed_mapping::SortedKeyedMapping;
@@ -37,6 +38,7 @@ pub struct DefaultNode<P: Partial, V> {
 pub(crate) enum Content<P: Partial, V> {
     Leaf(V),
     Node4(SortedKeyedMapping<DefaultNode<P, V>, 4>),
+    MultilevelNode4(MultilevelNode4<DefaultNode<P, V>>),
     Node16(SortedKeyedMapping<DefaultNode<P, V>, 16>),
     Node48(IndexedMapping<DefaultNode<P, V>, 48, Bitset64<1>>),
     Node256(DirectMapping<DefaultNode<P, V>>),
@@ -90,6 +92,7 @@ impl<P: Partial, V> Node<P, V> for DefaultNode<P, V> {
 
         match &self.content {
             Content::Node4(km) => km.seek_child(key),
+            Content::MultilevelNode4(mn) => mn.seek_child(key),
             Content::Node16(km) => km.seek_child(key),
             Content::Node48(km) => km.seek_child(key),
             Content::Node256(children) => children.seek_child(key),
@@ -99,6 +102,7 @@ impl<P: Partial, V> Node<P, V> for DefaultNode<P, V> {
     fn seek_child_mut(&mut self, key: u8) -> Option<&mut Self> {
         match &mut self.content {
             Content::Node4(km) => km.seek_child_mut(key),
+            Content::MultilevelNode4(mn) => mn.seek_child_mut(key),
             Content::Node16(km) => km.seek_child_mut(key),
             Content::Node48(km) => km.seek_child_mut(key),
             Content::Node256(children) => children.seek_child_mut(key),
@@ -114,6 +118,9 @@ impl<P: Partial, V> Node<P, V> for DefaultNode<P, V> {
         match &mut self.content {
             Content::Node4(km) => {
                 km.add_child(key, node);
+            }
+            Content::MultilevelNode4(mn) => {
+                mn.add_child(key, node);
             }
             Content::Node16(km) => {
                 km.add_child(key, node);
@@ -132,6 +139,15 @@ impl<P: Partial, V> Node<P, V> for DefaultNode<P, V> {
         match &mut self.content {
             Content::Node4(dm) => {
                 let node = dm.delete_child(key);
+
+                if self.num_children() == 1 {
+                    self.shrink();
+                }
+
+                node
+            }
+            Content::MultilevelNode4(mn) => {
+                let node = mn.delete_child(key);
 
                 if self.num_children() == 1 {
                     self.shrink();
@@ -173,6 +189,7 @@ impl<P: Partial, V> Node<P, V> for DefaultNode<P, V> {
     fn capacity(&self) -> usize {
         match &self.content {
             Content::Node4 { .. } => 4,
+            Content::MultilevelNode4 { .. } => 4,
             Content::Node16 { .. } => 16,
             Content::Node48 { .. } => 48,
             Content::Node256 { .. } => 256,
@@ -183,6 +200,7 @@ impl<P: Partial, V> Node<P, V> for DefaultNode<P, V> {
     fn num_children(&self) -> usize {
         match &self.content {
             Content::Node4(n) => n.num_children(),
+            Content::MultilevelNode4(n) => n.num_children(),
             Content::Node16(n) => n.num_children(),
             Content::Node48(n) => n.num_children(),
             Content::Node256(n) => n.num_children(),
@@ -236,6 +254,7 @@ impl<P: Partial, V> DefaultNode<P, V> {
     fn is_full(&self) -> bool {
         match &self.content {
             Content::Node4(km) => self.num_children() >= km.width(),
+            Content::MultilevelNode4(mn) => self.num_children() >= mn.width(),
             Content::Node16(km) => self.num_children() >= km.width(),
             Content::Node48(im) => self.num_children() >= im.width(),
             // Should not be possible.
@@ -254,6 +273,13 @@ impl<P: Partial, V> DefaultNode<P, V> {
                 let prefix = child.prefix;
                 self.content = child.content;
                 self.prefix = self.prefix.partial_extended_with(&prefix);
+            }
+            Content::MultilevelNode4(_mn) => {
+                // MultilevelNode4 with only one child should collapse like Node4
+                // For now, we'll implement a simple collapse that doesn't properly handle
+                // the multilevel key extension - this can be improved later
+                // TODO: Implement proper path compression for MultilevelNode4
+                panic!("MultilevelNode4 shrink not fully implemented yet");
             }
             Content::Node16(km) => {
                 self.content = Content::Node4(SortedKeyedMapping::from_resized(km));
@@ -274,6 +300,12 @@ impl<P: Partial, V> DefaultNode<P, V> {
             Content::Node4(km) => {
                 self.content = Content::Node16(SortedKeyedMapping::from_resized(km))
             }
+            Content::MultilevelNode4(_mn) => {
+                // When multilevel node4 is full, we need to grow
+                // For now, just panic - this shouldn't happen in normal operation
+                // since MultilevelNode4 is created through optimization, not growth
+                panic!("MultilevelNode4 should not grow - this indicates a logic error");
+            }
             Content::Node16(km) => {
                 self.content = Content::Node48(IndexedMapping::from_sorted_keyed(km))
             }
@@ -292,9 +324,11 @@ impl<P: Partial, V> DefaultNode<P, V> {
         self.capacity() - self.num_children()
     }
 
+
     pub fn iter(&self) -> Box<dyn Iterator<Item = (u8, &Self)> + '_> {
         match &self.content {
             Content::Node4(n) => Box::new(n.iter()),
+            Content::MultilevelNode4(n) => Box::new(n.iter().map(|(key_bytes, child)| (key_bytes[0], child))),
             Content::Node16(n) => Box::new(n.iter()),
             Content::Node48(n) => Box::new(n.iter()),
             Content::Node256(n) => Box::new(n.iter()),
