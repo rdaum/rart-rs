@@ -61,7 +61,7 @@ impl Default for TreeStats {
     }
 }
 
-use crate::node::{DefaultNode, Content};
+use crate::node::{Content, DefaultNode};
 
 pub(crate) fn update_tree_stats_with_content<PartialType, ValueType>(
     tree_stats: &mut TreeStats,
@@ -72,6 +72,7 @@ pub(crate) fn update_tree_stats_with_content<PartialType, ValueType>(
     let (node_type_name, capacity) = match &node.content {
         Content::Node4(_) => ("Node4", 4),
         Content::MultilevelNode4(_) => ("MultilevelNode4", 4),
+        Content::MultilevelNode8(_) => ("MultilevelNode8", 8),
         Content::Node16(_) => ("Node16", 16),
         Content::Node48(_) => ("Node48", 48),
         Content::Node256(_) => ("Node256", 256),
@@ -79,7 +80,7 @@ pub(crate) fn update_tree_stats_with_content<PartialType, ValueType>(
     };
 
     let num_children = node.num_children();
-    
+
     tree_stats
         .node_stats
         .entry(node_type_name.to_string())
@@ -95,4 +96,3 @@ pub(crate) fn update_tree_stats_with_content<PartialType, ValueType>(
             density: 0.0,
         });
 }
-

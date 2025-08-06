@@ -1,43 +1,43 @@
-//! MultilevelNode4 - A node that spans multiple key bytes while maintaining 4 children max
-//! Reduces tree height by handling longer key sequences in a single node
+//! MultilevelNode8 - A node that spans multiple key bytes while maintaining 8 children max
+//! Expands MultilevelNode4 to use the full 64-byte cache line for better compression
 
 use crate::mapping::NodeMapping;
 use std::mem::MaybeUninit;
 
-/// A multilevel node that can store up to 4 children with keys up to 4 bytes each.
-/// This allows spanning multiple levels of the radix tree while staying within one cache line.
-pub struct MultilevelNode4<N> {
+/// A multilevel node that can store up to 8 children with keys up to 4 bytes each.
+/// Uses the full 64-byte cache line for maximum efficiency.
+pub struct MultilevelNode8<N> {
     /// Keys for each child, up to 4 bytes each
-    keys: [[u8; 4]; 4],
+    keys: [[u8; 4]; 8],
     /// Actual length of each key (1-4 bytes)
-    key_lengths: [u8; 4],
+    key_lengths: [u8; 8],
     /// Child nodes (boxed to match other mapping patterns)
-    children: Box<[MaybeUninit<N>; 4]>,
+    children: Box<[MaybeUninit<N>; 8]>,
     /// Number of children currently stored
     num_children: u8,
 }
 
-impl<N> Default for MultilevelNode4<N> {
+impl<N> Default for MultilevelNode8<N> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<N> MultilevelNode4<N> {
+impl<N> MultilevelNode8<N> {
     #[inline]
     pub fn new() -> Self {
         Self {
-            keys: [[0; 4]; 4],
-            key_lengths: [0; 4],
-            children: Box::new([const { MaybeUninit::uninit() }; 4]),
+            keys: [[0; 4]; 8],
+            key_lengths: [0; 8],
+            children: Box::new([const { MaybeUninit::uninit() }; 8]),
             num_children: 0,
         }
     }
 
     /// Add a child with a multilevel key
     pub fn add_multilevel_child(&mut self, key_bytes: &[u8], child: N) -> Result<(), &'static str> {
-        if self.num_children >= 4 {
-            return Err("MultilevelNode4 is full");
+        if self.num_children >= 8 {
+            return Err("MultilevelNode8 is full");
         }
         if key_bytes.is_empty() || key_bytes.len() > 4 {
             return Err("Key must be 1-4 bytes");
@@ -164,7 +164,7 @@ impl<N> MultilevelNode4<N> {
 
     /// Check if this node is full
     pub fn is_full(&self) -> bool {
-        self.num_children >= 4
+        self.num_children >= 8
     }
 
     /// Check if this node is empty
@@ -192,7 +192,7 @@ impl<N> MultilevelNode4<N> {
     }
 }
 
-impl<N> Drop for MultilevelNode4<N> {
+impl<N> Drop for MultilevelNode8<N> {
     fn drop(&mut self) {
         // Drop all initialized children
         for i in 0..self.num_children as usize {
@@ -204,7 +204,7 @@ impl<N> Drop for MultilevelNode4<N> {
 
 // For compatibility with single-byte NodeMapping trait, we implement it
 // but only for the first byte of multilevel keys
-impl<N> NodeMapping<N, 4> for MultilevelNode4<N> {
+impl<N> NodeMapping<N, 8> for MultilevelNode8<N> {
     #[inline]
     fn add_child(&mut self, key: u8, node: N) {
         // Add as a single-byte multilevel key
@@ -275,8 +275,8 @@ mod tests {
 
     #[test]
     fn test_fits_in_cache_line() {
-        // Verify MultilevelNode4 fits within a 64-byte cache line
-        let size_u8 = std::mem::size_of::<MultilevelNode4<u8>>();
+        // Verify MultilevelNode8 fits within a 64-byte cache line
+        let size_u8 = std::mem::size_of::<MultilevelNode8<u8>>();
         assert!(size_u8 <= 64);
 
         // Also test with a typical node type to be realistic
@@ -284,13 +284,13 @@ mod tests {
         use crate::partials::array_partial::ArrPartial;
 
         let size_realistic =
-            std::mem::size_of::<MultilevelNode4<DefaultNode<ArrPartial<16>, u32>>>();
+            std::mem::size_of::<MultilevelNode8<DefaultNode<ArrPartial<16>, u32>>>();
         assert!(size_realistic <= 64);
     }
 
     #[test]
     fn test_basic_operations() {
-        let mut node = MultilevelNode4::<u32>::new();
+        let mut node = MultilevelNode8::<u32>::new();
 
         // Test single-byte keys
         assert!(node.add_multilevel_child(&[1], 10).is_ok());
@@ -307,7 +307,7 @@ mod tests {
 
     #[test]
     fn test_multilevel_keys() {
-        let mut node = MultilevelNode4::<u32>::new();
+        let mut node = MultilevelNode8::<u32>::new();
 
         // Test multilevel keys
         assert!(node.add_multilevel_child(&[1, 2], 12).is_ok());
@@ -325,7 +325,7 @@ mod tests {
 
     #[test]
     fn test_node_mapping_trait() {
-        let mut node = MultilevelNode4::<u32>::new();
+        let mut node = MultilevelNode8::<u32>::new();
 
         // Test NodeMapping trait methods
         node.add_child(1, 10);
@@ -341,26 +341,26 @@ mod tests {
 
     #[test]
     fn test_capacity_limits() {
-        let mut node = MultilevelNode4::<u32>::new();
+        let mut node = MultilevelNode8::<u32>::new();
 
         // Fill to capacity
-        for i in 0..4 {
+        for i in 0..8 {
             assert!(node.add_multilevel_child(&[i], i as u32).is_ok());
         }
 
         // Should be full now
         assert!(node.is_full());
-        assert!(node.add_multilevel_child(&[4], 4).is_err());
+        assert!(node.add_multilevel_child(&[8], 8).is_err());
 
         // Delete one and should work again
         assert!(node.delete_multilevel_child(&[0]).is_some());
         assert!(!node.is_full());
-        assert!(node.add_multilevel_child(&[4], 4).is_ok());
+        assert!(node.add_multilevel_child(&[8], 8).is_ok());
     }
 
     #[test]
     fn test_invalid_keys() {
-        let mut node = MultilevelNode4::<u32>::new();
+        let mut node = MultilevelNode8::<u32>::new();
 
         // Empty key should fail
         assert!(node.add_multilevel_child(&[], 0).is_err());
@@ -371,7 +371,7 @@ mod tests {
 
     #[test]
     fn test_iterator() {
-        let mut node = MultilevelNode4::<u32>::new();
+        let mut node = MultilevelNode8::<u32>::new();
 
         node.add_multilevel_child(&[1], 10).unwrap();
         node.add_multilevel_child(&[2, 3], 23).unwrap();
@@ -384,5 +384,25 @@ mod tests {
         assert!(items.iter().any(|(k, v)| k == &[1] && **v == 10));
         assert!(items.iter().any(|(k, v)| k == &[2, 3] && **v == 23));
         assert!(items.iter().any(|(k, v)| k == &[4, 5, 6] && **v == 456));
+    }
+
+    #[test]
+    fn test_eight_children() {
+        let mut node = MultilevelNode8::<u32>::new();
+
+        // Add 8 different multilevel keys
+        for i in 0u8..8 {
+            let key = [i, i.wrapping_add(10), i.wrapping_add(20)];
+            assert!(node.add_multilevel_child(&key, i as u32 * 100).is_ok());
+        }
+
+        assert_eq!(node.num_children(), 8);
+        assert!(node.is_full());
+
+        // Verify all keys are accessible
+        for i in 0u8..8 {
+            let key = [i, i.wrapping_add(10), i.wrapping_add(20)];
+            assert_eq!(node.seek_multilevel_child(&key), Some(&(i as u32 * 100)));
+        }
     }
 }
