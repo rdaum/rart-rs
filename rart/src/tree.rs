@@ -6,7 +6,7 @@
 use std::cmp::min;
 use std::ops::RangeBounds;
 
-use crate::iter::Iter;
+use crate::iter::{Iter, ValuesIter};
 use crate::keys::KeyTrait;
 use crate::node::{Content, DefaultNode, Node};
 use crate::partials::Partial;
@@ -240,6 +240,14 @@ where
     /// The iterator yields items in lexicographic order of the keys.
     pub fn iter(&self) -> Iter<'_, KeyType, KeyType::PartialType, ValueType> {
         Iter::new(self.root.as_ref())
+    }
+
+    /// Create an iterator over only the values in the tree.
+    ///
+    /// This iterator skips key reconstruction entirely and only yields values.
+    /// It's more efficient when you don't need the keys.
+    pub fn values_iter(&self) -> ValuesIter<'_, KeyType::PartialType, ValueType> {
+        ValuesIter::new(self.root.as_ref())
     }
 
     /// Create an iterator over key-value pairs within a specified range.

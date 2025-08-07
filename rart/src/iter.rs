@@ -247,3 +247,56 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> Iterator for IterInne
         }
     }
 }
+
+/// Iterator over only the values in an Adaptive Radix Tree.
+///
+/// This iterator skips key reconstruction entirely, only yielding values.
+/// It's useful for measuring the overhead of key reconstruction in iteration.
+pub struct ValuesIter<'a, P: Partial + 'a, V> {
+    node_iter_stack: Vec<Box<NodeIterator<'a, P, V>>>,
+}
+
+impl<'a, P: Partial + 'a, V> ValuesIter<'a, P, V> {
+    pub(crate) fn new(node: Option<&'a DefaultNode<P, V>>) -> Self {
+        let Some(root_node) = node else {
+            return Self {
+                node_iter_stack: Vec::new(),
+            };
+        };
+
+        // If root is a leaf, we handle it in the iterator
+        Self {
+            node_iter_stack: vec![root_node.iter()],
+        }
+    }
+}
+
+impl<'a, P: Partial + 'a, V> Iterator for ValuesIter<'a, P, V> {
+    type Item = &'a V;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            // Get working node iterator off the stack. If there is none, we're done.
+            let last_iter = self.node_iter_stack.last_mut()?;
+
+            // Pull the next node from the node iterator. If there's none, pop that iterator off
+            // the stack and continue with the parent.
+            let Some((_k, node)) = last_iter.next() else {
+                self.node_iter_stack.pop();
+                continue;
+            };
+
+            // We're at a non-exhausted inner node, so go further down the tree by pushing node
+            // iterator into the stack.
+            if node.is_inner() {
+                self.node_iter_stack.push(node.iter());
+                continue;
+            }
+
+            // We've got a value, return it directly without any key reconstruction.
+            if let Some(value) = node.value() {
+                return Some(value);
+            }
+        }
+    }
+}

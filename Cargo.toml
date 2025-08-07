@@ -24,6 +24,7 @@ criterion = { version = "0.7", features = ["html_reports"] }
 im = "15.1"
 rand = "0.9"
 shuttle = "0.7"
+blart = "0.4"
 
 # Fuzz dependencies
 arbitrary = { version = "1.4", features = ["derive"] }

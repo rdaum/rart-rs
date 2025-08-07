@@ -8,8 +8,8 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use rand::prelude::SliceRandom;
 use rand::{Rng, rng};
 
+use blart::TreeMap;
 use rart::keys::array_key::ArrayKey;
-
 use rart::tree::AdaptiveRadixTree;
 
 const TREE_SIZES: [u64; 4] = [1 << 10, 1 << 12, 1 << 15, 1 << 17];
@@ -42,6 +42,16 @@ pub fn seq_insert(c: &mut Criterion) {
         let mut key = 0u64;
         b.iter(|| {
             tree.insert(key, key);
+            key += 1;
+        })
+    });
+
+    group.throughput(Throughput::Elements(1));
+    group.bench_function("seq_insert_blart", |b| {
+        let mut tree = TreeMap::<Box<[u8]>, u64>::new();
+        let mut key = 0u64;
+        b.iter(|| {
+            tree.try_insert(key.to_be_bytes().into(), key).unwrap();
             key += 1;
         })
     });
@@ -91,6 +101,17 @@ pub fn rand_insert(c: &mut Criterion) {
             tree.insert(key, key.clone());
         })
     });
+
+    group.bench_function("blart", |b| {
+        let mut tree = TreeMap::<Box<[u8]>, String>::new();
+        let mut rng = rng();
+        b.iter(|| {
+            let key = &keys[rng.random_range(0..keys.len())];
+            tree.try_insert(key.as_bytes().into(), key.clone())
+                .unwrap_or_else(|_| panic!("Insert failed"));
+        })
+    });
+
     group.finish();
 }
 
@@ -134,6 +155,21 @@ pub fn seq_delete(c: &mut Criterion) {
             let start = Instant::now();
             for i in 0..iters {
                 tree.remove(&i);
+            }
+            start.elapsed()
+        })
+    });
+
+    group.bench_function("blart", |b| {
+        let mut tree = TreeMap::<Box<[u8]>, u64>::new();
+        b.iter_custom(|iters| {
+            for i in 0..iters {
+                tree.try_insert(i.to_be_bytes().into(), i).unwrap();
+            }
+            let start = Instant::now();
+            for i in 0..iters {
+                let key: Box<[u8]> = i.to_be_bytes().into();
+                tree.remove(&key);
             }
             start.elapsed()
         })
@@ -194,6 +230,20 @@ pub fn rand_delete(c: &mut Criterion) {
             std::hint::black_box(tree.remove(key));
         })
     });
+
+    group.bench_function("blart", |b| {
+        let mut tree = TreeMap::<Box<[u8]>, &String>::new();
+        let mut rng = rng();
+        for key in &keys {
+            tree.try_insert(key.as_bytes().into(), key).unwrap();
+        }
+        b.iter(|| {
+            let key = &keys[rng.random_range(0..keys.len())];
+            let key_bytes: Box<[u8]> = key.as_bytes().into();
+            std::hint::black_box(tree.remove(&key_bytes));
+        })
+    });
+
     group.finish();
 }
 
@@ -244,6 +294,23 @@ pub fn rand_get(c: &mut Criterion) {
                 b.iter(|| {
                     let key = rng.random_range(0..*size);
                     std::hint::black_box(tree.get(&key));
+                })
+            });
+        }
+    }
+
+    {
+        for size in TREE_SIZES {
+            group.bench_with_input(BenchmarkId::new("blart", size), &size, |b, size| {
+                let mut tree = TreeMap::<Box<[u8]>, u64>::new();
+                for i in 0..*size {
+                    tree.try_insert(i.to_be_bytes().into(), i).unwrap();
+                }
+                let mut rng = rng();
+                b.iter(|| {
+                    let key = rng.random_range(0..*size);
+                    let key_bytes: Box<[u8]> = key.to_be_bytes().into();
+                    std::hint::black_box(tree.get(&key_bytes));
                 })
             });
         }
@@ -326,6 +393,23 @@ pub fn rand_get_str(c: &mut Criterion) {
         }
     }
 
+    {
+        for size in TREE_SIZES {
+            group.bench_with_input(BenchmarkId::new("blart", size), &size, |b, _size| {
+                let mut tree = TreeMap::<Box<[u8]>, usize>::new();
+                for (i, key) in keys.iter().enumerate() {
+                    tree.try_insert(key.as_bytes().into(), i).unwrap();
+                }
+                let mut rng = rng();
+                b.iter(|| {
+                    let key = &keys[rng.random_range(0..keys.len())];
+                    let key_bytes: Box<[u8]> = key.as_bytes().into();
+                    std::hint::black_box(tree.get(&key_bytes));
+                })
+            });
+        }
+    }
+
     group.finish();
 }
 
@@ -374,6 +458,23 @@ pub fn seq_get(c: &mut Criterion) {
                 let mut key = 0u64;
                 b.iter(|| {
                     std::hint::black_box(tree.get(&key));
+                    key += 1;
+                })
+            });
+        }
+    }
+
+    {
+        for size in TREE_SIZES {
+            group.bench_with_input(BenchmarkId::new("blart", size), &size, |b, size| {
+                let mut tree = TreeMap::<Box<[u8]>, u64>::new();
+                for i in 0..*size {
+                    tree.try_insert(i.to_be_bytes().into(), i).unwrap();
+                }
+                let mut key = 0u64;
+                b.iter(|| {
+                    let key_bytes: Box<[u8]> = key.to_be_bytes().into();
+                    std::hint::black_box(tree.get(&key_bytes));
                     key += 1;
                 })
             });

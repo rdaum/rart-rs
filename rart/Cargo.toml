@@ -16,6 +16,7 @@ criterion.workspace = true
 im.workspace = true
 rand.workspace = true
 shuttle.workspace = true
+blart.workspace = true
 
 [features]
 default = ["simd_keys"]
@@ -39,6 +40,10 @@ harness = false
 
 [[bench]]
 name = "versioned_tree_bench"
+harness = false
+
+[[bench]]
+name = "iter_bench"
 harness = false
 
 # Miri test targets for memory safety validation
