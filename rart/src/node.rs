@@ -29,13 +29,88 @@ pub trait Node<P: Partial, V> {
     fn num_children(&self) -> usize;
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct LeafData<V> {
+    pub(crate) key_bytes: Vec<u8>,
+    pub(crate) value: V,
+    pub(crate) next: Option<*mut LeafData<V>>,
+    pub(crate) prev: Option<*mut LeafData<V>>,
+}
+
+impl<V> LeafData<V> {
+    pub(crate) fn new(key_bytes: Vec<u8>, value: V) -> Self {
+        Self {
+            key_bytes,
+            value,
+            next: None,
+            prev: None,
+        }
+    }
+
+    /// Insert this leaf after the given leaf in the linked list.
+    /// Safety: caller must ensure the pointers are valid and the linked list is consistent.
+    pub(crate) unsafe fn insert_after(&mut self, prev_leaf: *mut LeafData<V>) {
+        unsafe {
+            let next_leaf = (*prev_leaf).next;
+
+            self.prev = Some(prev_leaf);
+            self.next = next_leaf;
+
+            (*prev_leaf).next = Some(self as *mut LeafData<V>);
+
+            if let Some(next) = next_leaf {
+                (*next).prev = Some(self as *mut LeafData<V>);
+            }
+        }
+    }
+
+    /// Insert this leaf before the given leaf in the linked list.
+    /// Safety: caller must ensure the pointers are valid and the linked list is consistent.
+    pub(crate) unsafe fn insert_before(&mut self, next_leaf: *mut LeafData<V>) {
+        unsafe {
+            let prev_leaf = (*next_leaf).prev;
+
+            self.prev = prev_leaf;
+            self.next = Some(next_leaf);
+
+            (*next_leaf).prev = Some(self as *mut LeafData<V>);
+
+            if let Some(prev) = prev_leaf {
+                (*prev).next = Some(self as *mut LeafData<V>);
+            }
+        }
+    }
+
+    /// Set the key bytes for this leaf.
+    pub(crate) fn set_key_bytes(&mut self, key_bytes: Vec<u8>) {
+        self.key_bytes = key_bytes;
+    }
+
+    /// Remove this leaf from the linked list.
+    /// Safety: caller must ensure the pointers are valid and the linked list is consistent.
+    pub(crate) unsafe fn remove_from_list(&mut self) {
+        unsafe {
+            if let Some(prev) = self.prev {
+                (*prev).next = self.next;
+            }
+
+            if let Some(next) = self.next {
+                (*next).prev = self.prev;
+            }
+
+            self.prev = None;
+            self.next = None;
+        }
+    }
+}
+
 pub struct DefaultNode<P: Partial, V> {
     pub(crate) prefix: P,
     pub(crate) content: Content<P, V>,
 }
 
 pub(crate) enum Content<P: Partial, V> {
-    Leaf(V),
+    Leaf(Box<LeafData<V>>),
     Node4(SortedKeyedMapping<DefaultNode<P, V>, 4>),
     Node16(SortedKeyedMapping<DefaultNode<P, V>, 16>),
     Node48(IndexedMapping<DefaultNode<P, V>, 48, Bitset64<1>>),
@@ -47,7 +122,7 @@ impl<P: Partial, V> Node<P, V> for DefaultNode<P, V> {
     fn new_leaf(partial: P, value: V) -> Self {
         Self {
             prefix: partial,
-            content: Content::Leaf(value),
+            content: Content::Leaf(Box::new(LeafData::new(Vec::new(), value))),
         }
     }
 
@@ -61,18 +136,18 @@ impl<P: Partial, V> Node<P, V> for DefaultNode<P, V> {
     }
 
     fn value(&self) -> Option<&V> {
-        let Content::Leaf(value) = &self.content else {
+        let Content::Leaf(leaf_data) = &self.content else {
             return None;
         };
-        Some(value)
+        Some(&leaf_data.value)
     }
 
     #[allow(dead_code)]
     fn value_mut(&mut self) -> Option<&mut V> {
-        let Content::Leaf(value) = &mut self.content else {
+        let Content::Leaf(leaf_data) = &mut self.content else {
             return None;
         };
-        Some(value)
+        Some(&mut leaf_data.value)
     }
 
     fn is_leaf(&self) -> bool {

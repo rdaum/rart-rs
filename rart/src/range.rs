@@ -9,8 +9,8 @@
 
 use std::collections::Bound;
 
-use crate::iter::Iter;
 use crate::keys::KeyTrait;
+use crate::node::LeafData;
 use crate::partials::Partial;
 
 enum InnerResult<'a, K, V> {
@@ -18,22 +18,18 @@ enum InnerResult<'a, K, V> {
 }
 
 struct RangeInner<'a, K: KeyTrait + 'a, V> {
-    iter: Iter<'a, K, K::PartialType, V>,
+    current: Option<*mut LeafData<V>>,
     end: Bound<K>,
+    _phantom: std::marker::PhantomData<&'a V>,
 }
 
 struct RangeInnerNone {}
 
-struct RangeInnerWithFirst<'a, K: KeyTrait + 'a, V> {
-    first: Option<(K, &'a V)>,
-    iter: Iter<'a, K, K::PartialType, V>,
-    end: Bound<K>,
-}
-
 struct RangeInnerWithBounds<'a, K: KeyTrait + 'a, V> {
-    iter: Iter<'a, K, K::PartialType, V>,
+    current: Option<*mut LeafData<V>>,
     start: Bound<K>,
     end: Bound<K>,
+    _phantom: std::marker::PhantomData<&'a V>,
 }
 
 trait RangeInnerTrait<'a, K: KeyTrait + 'a, V> {
@@ -75,92 +71,55 @@ impl<'a, K: KeyTrait + 'a, V> RangeInnerTrait<'a, K, V> for RangeInnerNone {
     }
 }
 
-impl<'a, K: KeyTrait<PartialType = P>, P: Partial, V> RangeInner<'a, K, V> {
-    pub fn new(iter: Iter<'a, K, P, V>, end: Bound<K>) -> Self {
-        Self { iter, end }
-    }
-}
-
-impl<'a, K: KeyTrait<PartialType = P>, P: Partial, V> RangeInnerWithFirst<'a, K, V> {
-    pub fn new(first: (K, &'a V), iter: Iter<'a, K, P, V>, end: Bound<K>) -> Self {
+impl<'a, K: KeyTrait, V> RangeInner<'a, K, V> {
+    pub fn new(current: Option<*mut LeafData<V>>, end: Bound<K>) -> Self {
         Self {
-            first: Some(first),
-            iter,
+            current,
             end,
+            _phantom: std::marker::PhantomData,
         }
     }
 }
 
-impl<'a, K: KeyTrait<PartialType = P>, P: Partial, V> RangeInnerWithBounds<'a, K, V> {
-    pub fn new(iter: Iter<'a, K, P, V>, start: Bound<K>, end: Bound<K>) -> Self {
-        Self { iter, start, end }
+impl<'a, K: KeyTrait, V> RangeInnerWithBounds<'a, K, V> {
+    pub fn new(current: Option<*mut LeafData<V>>, start: Bound<K>, end: Bound<K>) -> Self {
+        Self {
+            current,
+            start,
+            end,
+            _phantom: std::marker::PhantomData,
+        }
     }
 }
 
 impl<'a, K: KeyTrait + 'a, V> RangeInnerTrait<'a, K, V> for RangeInner<'a, K, V> {
     fn next(&mut self) -> InnerResult<'a, K, V> {
-        loop {
-            let Some(next) = self.iter.next() else {
-                return InnerResult::Iter(None);
-            };
-            match &self.end {
-                Bound::Included(end_key) => match next.0.cmp(end_key) {
-                    std::cmp::Ordering::Less | std::cmp::Ordering::Equal => {
-                        return InnerResult::Iter(Some(next));
-                    }
-                    std::cmp::Ordering::Greater => continue, // Skip and continue iterating
-                },
-                Bound::Excluded(end_key) => match next.0.cmp(end_key) {
-                    std::cmp::Ordering::Less => return InnerResult::Iter(Some(next)),
-                    std::cmp::Ordering::Equal | std::cmp::Ordering::Greater => continue, // Skip and continue iterating
-                },
-                Bound::Unbounded => return InnerResult::Iter(Some(next)),
-            }
-        }
-    }
-}
+        let current = match self.current {
+            Some(ptr) => ptr,
+            None => return InnerResult::Iter(None),
+        };
 
-impl<'a, K: KeyTrait + 'a, V> RangeInnerTrait<'a, K, V> for RangeInnerWithFirst<'a, K, V> {
-    fn next(&mut self) -> InnerResult<'a, K, V> {
-        // Handle the first element if it exists
-        if let Some(first) = self.first.take() {
-            match &self.end {
-                Bound::Included(end_key) => match first.0.cmp(end_key) {
-                    std::cmp::Ordering::Less | std::cmp::Ordering::Equal => {
-                        return InnerResult::Iter(Some(first));
-                    }
-                    std::cmp::Ordering::Greater => {
-                        // First element doesn't match, continue with rest of iterator
-                    }
-                },
-                Bound::Excluded(end_key) => match first.0.cmp(end_key) {
-                    std::cmp::Ordering::Less => return InnerResult::Iter(Some(first)),
-                    std::cmp::Ordering::Equal | std::cmp::Ordering::Greater => {
-                        // First element doesn't match, continue with rest of iterator
-                    }
-                },
-                Bound::Unbounded => return InnerResult::Iter(Some(first)),
-            }
-        }
+        unsafe {
+            let leaf_data = &*current;
+            let key = K::new_from_slice(&leaf_data.key_bytes);
+            let value = &leaf_data.value;
 
-        // Continue with the rest of the iterator
-        loop {
-            let Some(next) = self.iter.next() else {
-                return InnerResult::Iter(None);
+            // Check end bound
+            let satisfies_end = match &self.end {
+                Bound::Included(end_key) => key.cmp(end_key) <= std::cmp::Ordering::Equal,
+                Bound::Excluded(end_key) => key.cmp(end_key) < std::cmp::Ordering::Equal,
+                Bound::Unbounded => true,
             };
-            match &self.end {
-                Bound::Included(end_key) => match next.0.cmp(end_key) {
-                    std::cmp::Ordering::Less | std::cmp::Ordering::Equal => {
-                        return InnerResult::Iter(Some(next));
-                    }
-                    std::cmp::Ordering::Greater => continue, // Skip and continue iterating
-                },
-                Bound::Excluded(end_key) => match next.0.cmp(end_key) {
-                    std::cmp::Ordering::Less => return InnerResult::Iter(Some(next)),
-                    std::cmp::Ordering::Equal | std::cmp::Ordering::Greater => continue, // Skip and continue iterating
-                },
-                Bound::Unbounded => return InnerResult::Iter(Some(next)),
+
+            if !satisfies_end {
+                self.current = None;
+                return InnerResult::Iter(None);
             }
+
+            // Move to next leaf
+            self.current = leaf_data.next;
+
+            InnerResult::Iter(Some((key, value)))
         }
     }
 }
@@ -168,35 +127,43 @@ impl<'a, K: KeyTrait + 'a, V> RangeInnerTrait<'a, K, V> for RangeInnerWithFirst<
 impl<'a, K: KeyTrait + 'a, V> RangeInnerTrait<'a, K, V> for RangeInnerWithBounds<'a, K, V> {
     fn next(&mut self) -> InnerResult<'a, K, V> {
         loop {
-            let Some(next) = self.iter.next() else {
-                return InnerResult::Iter(None);
-            };
-            let key = &next.0;
-
-            // Check start bound
-            let satisfies_start = match &self.start {
-                Bound::Included(start_key) => key.cmp(start_key) >= std::cmp::Ordering::Equal,
-                Bound::Excluded(start_key) => key.cmp(start_key) > std::cmp::Ordering::Equal,
-                Bound::Unbounded => true,
+            let current = match self.current {
+                Some(ptr) => ptr,
+                None => return InnerResult::Iter(None),
             };
 
-            if !satisfies_start {
-                continue; // Skip this key
-            }
+            unsafe {
+                let leaf_data = &*current;
+                let key = K::new_from_slice(&leaf_data.key_bytes);
+                let value = &leaf_data.value;
 
-            // Check end bound
-            match &self.end {
-                Bound::Included(end_key) => match next.0.cmp(end_key) {
-                    std::cmp::Ordering::Less | std::cmp::Ordering::Equal => {
-                        return InnerResult::Iter(Some(next));
-                    }
-                    std::cmp::Ordering::Greater => continue, // Skip and continue iterating
-                },
-                Bound::Excluded(end_key) => match next.0.cmp(end_key) {
-                    std::cmp::Ordering::Less => return InnerResult::Iter(Some(next)),
-                    std::cmp::Ordering::Equal | std::cmp::Ordering::Greater => continue, // Skip and continue iterating
-                },
-                Bound::Unbounded => return InnerResult::Iter(Some(next)),
+                // Move to next leaf before checking bounds (for next iteration)
+                self.current = leaf_data.next;
+
+                // Check start bound
+                let satisfies_start = match &self.start {
+                    Bound::Included(start_key) => key.cmp(start_key) >= std::cmp::Ordering::Equal,
+                    Bound::Excluded(start_key) => key.cmp(start_key) > std::cmp::Ordering::Equal,
+                    Bound::Unbounded => true,
+                };
+
+                if !satisfies_start {
+                    continue; // Skip this key
+                }
+
+                // Check end bound
+                let satisfies_end = match &self.end {
+                    Bound::Included(end_key) => key.cmp(end_key) <= std::cmp::Ordering::Equal,
+                    Bound::Excluded(end_key) => key.cmp(end_key) < std::cmp::Ordering::Equal,
+                    Bound::Unbounded => true,
+                };
+
+                if !satisfies_end {
+                    self.current = None;
+                    return InnerResult::Iter(None);
+                }
+
+                return InnerResult::Iter(Some((key, value)));
             }
         }
     }
@@ -212,36 +179,26 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial, V: 'a> Iterator for Range<'a,
     }
 }
 
-impl<'a, K: KeyTrait + 'a, V> Range<'a, K, V> {
+impl<'a, K: KeyTrait + 'a, V: 'a> Range<'a, K, V> {
     pub fn empty() -> Self {
         Self {
             inner: Box::new(RangeInnerNone {}),
         }
     }
 
-    pub fn for_iter(iter: Iter<'a, K, K::PartialType, V>, end: Bound<K>) -> Self {
+    pub(crate) fn for_linked_list(current: Option<*mut LeafData<V>>, end: Bound<K>) -> Self {
         Self {
-            inner: Box::new(RangeInner::new(iter, end)),
+            inner: Box::new(RangeInner::new(current, end)),
         }
     }
 
-    pub fn for_iter_with_first(
-        first: (K, &'a V),
-        iter: Iter<'a, K, K::PartialType, V>,
-        end: Bound<K>,
-    ) -> Self {
-        Self {
-            inner: Box::new(RangeInnerWithFirst::new(first, iter, end)),
-        }
-    }
-
-    pub fn for_iter_with_bounds(
-        iter: Iter<'a, K, K::PartialType, V>,
+    pub(crate) fn for_linked_list_with_bounds(
+        current: Option<*mut LeafData<V>>,
         start: Bound<K>,
         end: Bound<K>,
     ) -> Self {
         Self {
-            inner: Box::new(RangeInnerWithBounds::new(iter, start, end)),
+            inner: Box::new(RangeInnerWithBounds::new(current, start, end)),
         }
     }
 }

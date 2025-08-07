@@ -39,7 +39,7 @@ pub fn full_iteration_numeric(c: &mut Criterion) {
             }
 
             b.iter(|| {
-                let sum: u64 = map.iter().map(|(_, v)| *v).sum();
+                let sum: u64 = map.values().copied().sum();
                 std::hint::black_box(sum);
             })
         });
@@ -52,7 +52,7 @@ pub fn full_iteration_numeric(c: &mut Criterion) {
             }
 
             b.iter(|| {
-                let sum: u64 = map.iter().map(|(_, v)| *v).sum();
+                let sum: u64 = map.values().copied().sum();
                 std::hint::black_box(sum);
             })
         });
@@ -92,7 +92,7 @@ pub fn range_iteration(c: &mut Criterion) {
 
         b.iter(|| {
             let sum: u64 = tree
-                .range(start.clone()..end.clone())
+                .range(start..end)
                 .map(|(_, v)| *v)
                 .sum();
             std::hint::black_box(sum);
@@ -152,7 +152,20 @@ pub fn values_iteration_numeric(c: &mut Criterion) {
             }
 
             b.iter(|| {
-                let sum: u64 = tree.values_iter().map(|v| *v).sum();
+                let sum: u64 = tree.values_iter().copied().sum();
+                std::hint::black_box(sum);
+            })
+        });
+
+        // ART linked list iteration (O(1) per element)
+        group.bench_with_input(BenchmarkId::new("art_linked", size), &size, |b, size| {
+            let mut tree = AdaptiveRadixTree::<ArrayKey<16>, u64>::new();
+            for i in 0..*size {
+                tree.insert(i, i * 2);
+            }
+
+            b.iter(|| {
+                let sum: u64 = tree.linked_iter().map(|(_, v)| *v).sum();
                 std::hint::black_box(sum);
             })
         });
@@ -181,7 +194,7 @@ pub fn values_iteration_numeric(c: &mut Criterion) {
                 }
 
                 b.iter(|| {
-                    let sum: u64 = map.values().map(|v| *v).sum();
+                    let sum: u64 = map.values().copied().sum();
                     std::hint::black_box(sum);
                 })
             },
@@ -198,7 +211,7 @@ pub fn values_iteration_numeric(c: &mut Criterion) {
                 }
 
                 b.iter(|| {
-                    let sum: u64 = map.values().map(|v| *v).sum();
+                    let sum: u64 = map.values().copied().sum();
                     std::hint::black_box(sum);
                 })
             },
@@ -212,7 +225,7 @@ pub fn values_iteration_numeric(c: &mut Criterion) {
             }
 
             b.iter(|| {
-                let sum: u64 = tree.values().map(|v| *v).sum();
+                let sum: u64 = tree.values().copied().sum();
                 std::hint::black_box(sum);
             })
         });

@@ -447,13 +447,15 @@ where
             direct_mapping::DirectMapping, indexed_mapping::IndexedMapping,
             sorted_keyed_mapping::SortedKeyedMapping,
         };
-        use crate::node::{Content, DefaultNode};
+        use crate::node::{Content, DefaultNode, LeafData};
 
         match Arc::try_unwrap(node) {
             Ok(owned_node) => {
                 // Fast path: we have unique ownership, convert in-place
                 let unversioned_content = match owned_node.content {
-                    VersionedContent::Leaf(value) => Content::Leaf(value),
+                    VersionedContent::Leaf(value) => {
+                        Content::Leaf(Box::new(LeafData::new(Vec::new(), value)))
+                    }
                     VersionedContent::Node4(km) => {
                         let mut new_km = SortedKeyedMapping::new();
                         for (key, child) in km.into_iter() {
@@ -496,7 +498,9 @@ where
             Err(shared_node) => {
                 // Slow path: node is shared, must clone
                 let unversioned_content = match &shared_node.content {
-                    VersionedContent::Leaf(value) => Content::Leaf(value.clone()),
+                    VersionedContent::Leaf(value) => {
+                        Content::Leaf(Box::new(LeafData::new(Vec::new(), value.clone())))
+                    }
                     VersionedContent::Node4(km) => {
                         let mut new_km = SortedKeyedMapping::new();
                         for (key, child) in km.iter() {
