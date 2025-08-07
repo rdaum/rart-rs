@@ -8,10 +8,11 @@ use std::ops::RangeBounds;
 
 use crate::iter::Iter;
 use crate::keys::KeyTrait;
+use crate::mapping::NodeMapping;
 use crate::node::{Content, DefaultNode, Node};
 use crate::partials::Partial;
 use crate::range::Range;
-use crate::stats::{TreeStats, TreeStatsTrait, update_tree_stats};
+use crate::stats::{TreeStats, TreeStatsTrait, update_tree_stats_with_content};
 
 /// An Adaptive Radix Tree (ART) - a high-performance, memory-efficient trie data structure.
 ///
@@ -275,6 +276,23 @@ where
     pub fn is_empty(&self) -> bool {
         self.root.is_none()
     }
+
+    /// Optimize the tree by detecting and converting Node4 chains to MultilevelNode4.
+    ///
+    /// This offline optimization pass analyzes the tree structure and replaces chains
+    /// of Node4s with MultilevelNode4s where beneficial, reducing tree height and
+    /// improving cache locality.
+    ///
+    /// # Returns
+    ///
+    /// The number of optimizations performed.
+    pub fn optimize_multilevel(&mut self) -> usize {
+        let mut optimizations = 0;
+        if let Some(ref mut root) = self.root {
+            optimizations += Self::optimize_node_multilevel(root);
+        }
+        optimizations
+    }
 }
 
 impl<KeyType, ValueType> TreeStatsTrait for AdaptiveRadixTree<KeyType, ValueType>
@@ -485,7 +503,7 @@ where
                 tree_stats.num_leaves += 1;
             }
             _ => {
-                update_tree_stats(tree_stats, node);
+                update_tree_stats_with_content(tree_stats, node);
             }
         }
         for (_k, child) in node.iter() {
@@ -495,6 +513,135 @@ where
                 height + 1,
             );
         }
+    }
+
+    /// Recursively optimize a node and its children by detecting Node4 chains
+    fn optimize_node_multilevel(node: &mut DefaultNode<KeyType::PartialType, ValueType>) -> usize {
+        let mut optimizations = 0;
+
+        // First, recursively optimize all children
+        // We need to collect child keys first to avoid borrowing issues
+        let child_keys: Vec<u8> = node.iter().map(|(key, _)| key).collect();
+
+        for key in child_keys {
+            if let Some(child) = node.seek_child_mut(key) {
+                optimizations += Self::optimize_node_multilevel(child);
+            }
+        }
+
+        // Now check if this node should be optimized
+        match &node.content {
+            Content::Node4(_) => {
+                if Self::should_convert_to_multilevel(node) && Self::convert_to_multilevel(node) {
+                    optimizations += 1;
+                }
+            }
+            Content::Node16(_) => {
+                // Also check Node16s for conversion to MultilevelNode8
+                if Self::should_convert_to_multilevel(node) && Self::convert_to_multilevel(node) {
+                    optimizations += 1;
+                }
+            }
+            _ => {} // Other node types not eligible for multilevel conversion
+        }
+
+        optimizations
+    }
+
+    /// Check if a Node4 should be converted to a multilevel node
+    fn should_convert_to_multilevel(node: &DefaultNode<KeyType::PartialType, ValueType>) -> bool {
+        // Enhanced heuristic: Convert Node4s that have only leaf children
+        // We can now handle up to 8 children with MultilevelNode8
+
+        if node.num_children() == 0 || node.num_children() > 8 {
+            return false;
+        }
+
+        // Check if all children are leaves
+        for (_, child) in node.iter() {
+            if !child.is_leaf() {
+                return false;
+            }
+        }
+
+        // Convert if we have 2-8 leaf children
+        node.num_children() >= 2 && node.num_children() <= 8
+    }
+
+    /// Convert a node to appropriate multilevel node (MultilevelNode4 or MultilevelNode8)
+    fn convert_to_multilevel(node: &mut DefaultNode<KeyType::PartialType, ValueType>) -> bool {
+        use crate::mapping::multilevel_node4::MultilevelNode4;
+        use crate::mapping::multilevel_node8::MultilevelNode8;
+
+        // Only convert Node4s and Node16s
+        match &node.content {
+            Content::Node4(_) | Content::Node16(_) => {}
+            _ => return false,
+        }
+
+        let child_keys: Vec<u8> = node.iter().map(|(key, _)| key).collect();
+
+        // Check that all children are leaves
+        let mut all_leaves = true;
+        for &child_key in &child_keys {
+            if let Some(child) = node.seek_child(child_key) {
+                if !child.is_leaf() {
+                    all_leaves = false;
+                    break;
+                }
+            }
+        }
+
+        if !all_leaves || child_keys.is_empty() || child_keys.len() > 8 {
+            return false;
+        }
+
+        // Choose the appropriate multilevel node type based on number of children
+        // Use MultilevelNode4 for 2-4 children, MultilevelNode8 for 5-8 children
+        let use_multilevel8 = child_keys.len() > 4;
+
+        // Extract children from the current node
+        let mut extracted_children = Vec::new();
+
+        match &mut node.content {
+            Content::Node4(mapping) => {
+                for &child_key in &child_keys {
+                    if let Some(child) = mapping.delete_child(child_key) {
+                        extracted_children.push((child_key, child));
+                    }
+                }
+            }
+            Content::Node16(mapping) => {
+                for &child_key in &child_keys {
+                    if let Some(child) = mapping.delete_child(child_key) {
+                        extracted_children.push((child_key, child));
+                    }
+                }
+            }
+            _ => return false,
+        }
+
+        if use_multilevel8 {
+            // Create MultilevelNode8 for 5-8 children
+            let mut multilevel_node = MultilevelNode8::new();
+
+            for (child_key, child) in extracted_children {
+                let _ = multilevel_node.add_multilevel_child(&[child_key], child);
+            }
+
+            node.content = Content::MultilevelNode8(multilevel_node);
+        } else {
+            // Create MultilevelNode4 for 2-4 children
+            let mut multilevel_node = MultilevelNode4::new();
+
+            for (child_key, child) in extracted_children {
+                let _ = multilevel_node.add_multilevel_child(&[child_key], child);
+            }
+
+            node.content = Content::MultilevelNode4(multilevel_node);
+        }
+
+        true
     }
 }
 
@@ -673,6 +820,40 @@ mod tests {
         let mut iter = tree.iter();
         let result = iter.next().expect("Expected an entry");
         assert_eq!(result.1, &456)
+    }
+
+    #[test]
+    fn test_optimize_multilevel() {
+        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, String>::new();
+
+        // Insert data that creates a specific pattern:
+        // Keys that share prefixes but create Node4 chains
+        tree.insert("aa", "value1".to_string());
+        tree.insert("ab", "value2".to_string());
+        tree.insert("ba", "value3".to_string());
+        tree.insert("bb", "value4".to_string());
+
+        // Run optimization - this might convert chains to multilevel nodes
+        let _optimizations = tree.optimize_multilevel();
+
+        // The exact number depends on the tree structure created by these insertions
+        // For now, just verify it doesn't crash and tree still works
+
+        // Verify tree still works correctly after optimization
+        assert_eq!(tree.get("aa"), Some(&"value1".to_string()));
+        assert_eq!(tree.get("ab"), Some(&"value2".to_string()));
+        assert_eq!(tree.get("ba"), Some(&"value3".to_string()));
+        assert_eq!(tree.get("bb"), Some(&"value4".to_string()));
+        assert_eq!(tree.get("xyz"), None);
+    }
+
+    #[test]
+    fn test_optimize_multilevel_empty_tree() {
+        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, String>::new();
+
+        // Empty tree should have 0 optimizations
+        let optimizations = tree.optimize_multilevel();
+        assert_eq!(optimizations, 0);
     }
 
     #[test]

@@ -28,3 +28,4 @@ shuttle = "0.7"
 # Fuzz dependencies
 arbitrary = { version = "1.4", features = ["derive"] }
 libfuzzer-sys = "0.4"
+

@@ -14,6 +14,7 @@ description = "High-performance Adaptive Radix Tree implementation with SIMD opt
 [dev-dependencies]
 criterion.workspace = true
 im.workspace = true
+proptest = "1.4"
 rand.workspace = true
 shuttle.workspace = true
 
@@ -39,6 +40,14 @@ harness = false
 
 [[bench]]
 name = "versioned_tree_bench"
+harness = false
+
+[[bench]]
+name = "multilevel_optimization_bench"
+harness = false
+
+[[bench]]
+name = "join_bench"
 harness = false
 
 # Miri test targets for memory safety validation

@@ -67,6 +67,7 @@ pub mod utils;
 
 // Public API modules
 pub mod iter;
+pub mod join;
 pub mod keys;
 pub mod partials;
 pub mod range;

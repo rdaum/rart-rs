@@ -401,6 +401,13 @@ where
         self.version
     }
 
+    /// Create an iterator over all key-value pairs in the versioned tree.
+    ///
+    /// The iterator yields items in lexicographic order of the keys.
+    pub fn iter(&self) -> VersionedIter<'_, KeyType, KeyType::PartialType, ValueType> {
+        VersionedIter::new(self.root.as_ref())
+    }
+
     /// Convert this versioned tree into a regular AdaptiveRadixTree.
     ///
     /// This method attempts to avoid cloning when possible:
@@ -702,6 +709,17 @@ impl<P: Partial + Clone, V> VersionedNode<P, V> {
             version: new_version,
         }
     }
+
+    /// Create an iterator over child nodes.
+    pub fn iter(&self) -> Box<dyn Iterator<Item = (u8, &Arc<VersionedNode<P, V>>)> + '_> {
+        match &self.content {
+            VersionedContent::Node4(n) => Box::new(n.iter()),
+            VersionedContent::Node16(n) => Box::new(n.iter()),
+            VersionedContent::Node48(n) => Box::new(n.iter()),
+            VersionedContent::Node256(n) => Box::new(n.iter()),
+            VersionedContent::Leaf(_) => Box::new(std::iter::empty()),
+        }
+    }
 }
 
 // Internal implementation
@@ -1001,6 +1019,129 @@ where
         }
 
         Some((Some(Arc::new(new_node_mut)), removed_value))
+    }
+}
+
+/// Iterator over all key-value pairs in a versioned Adaptive Radix Tree.
+///
+/// This iterator traverses the tree in lexicographic order of the keys,
+/// yielding `(Key, &Value)` pairs.
+pub struct VersionedIter<'a, K: KeyTrait, P: Partial, V> {
+    inner: Box<dyn Iterator<Item = (K, &'a V)> + 'a>,
+    _marker: std::marker::PhantomData<P>,
+}
+
+struct VersionedIterInner<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> {
+    node_iter_stack: Vec<(
+        usize,
+        Box<dyn Iterator<Item = (u8, &'a Arc<VersionedNode<P, V>>)> + 'a>,
+    )>,
+    cur_key: K,
+}
+
+impl<'a, K, P, V> VersionedIter<'a, K, P, V>
+where
+    K: KeyTrait<PartialType = P> + 'a,
+    P: Partial + Clone + 'a,
+{
+    pub(crate) fn new(root: Option<&'a Arc<VersionedNode<P, V>>>) -> Self {
+        let Some(root_node) = root else {
+            return Self {
+                inner: Box::new(std::iter::empty()),
+                _marker: std::marker::PhantomData,
+            };
+        };
+
+        // If root is a leaf, we can just return it
+        if let VersionedContent::Leaf(value) = &root_node.content {
+            let root_key = K::new_from_partial(&root_node.prefix);
+            return Self {
+                inner: Box::new(std::iter::once((root_key, value))),
+                _marker: std::marker::PhantomData,
+            };
+        }
+
+        Self {
+            inner: Box::new(VersionedIterInner::new(root_node)),
+            _marker: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<'a, K, P, V> Iterator for VersionedIter<'a, K, P, V>
+where
+    K: KeyTrait<PartialType = P> + 'a,
+    P: Partial + Clone + 'a,
+{
+    type Item = (K, &'a V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+}
+
+impl<'a, K, P, V> VersionedIterInner<'a, K, P, V>
+where
+    K: KeyTrait<PartialType = P>,
+    P: Partial + Clone + 'a,
+{
+    fn new(root: &'a Arc<VersionedNode<P, V>>) -> Self {
+        let node_iter_stack = vec![(
+            root.prefix.len(), /* initial tree depth */
+            root.iter(),       /* root node iter */
+        )];
+
+        Self {
+            node_iter_stack,
+            cur_key: K::new_from_partial(&root.prefix),
+        }
+    }
+}
+
+impl<'a, K, P, V> Iterator for VersionedIterInner<'a, K, P, V>
+where
+    K: KeyTrait<PartialType = P>,
+    P: Partial + Clone + 'a,
+{
+    type Item = (K, &'a V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            // Get working node iterator off the stack. If there is none, we're done.
+            let (tree_depth, last_iter) = self.node_iter_stack.last_mut()?;
+            let tree_depth = *tree_depth;
+
+            // Pull the next node from the node iterator. If there's none, pop that iterator off
+            // the stack, truncate our working key length back to the parent's depth, return to our
+            // parent, and continue there.
+            let Some((_k, node)) = last_iter.next() else {
+                self.node_iter_stack.pop();
+                // Get the parent-depth, and truncate our working key to that depth. If there is no
+                // parent, no need to truncate, we'll be done in the next loop
+                if let Some((parent_depth, _)) = self.node_iter_stack.last() {
+                    self.cur_key = self.cur_key.truncate(*parent_depth);
+                };
+                continue;
+            };
+
+            // We're at a non-exhausted inner node, so go further down the tree by pushing node
+            // iterator into the stack. We also extend our working key with this node's prefix.
+            if node.is_inner() {
+                self.node_iter_stack
+                    .push((tree_depth + node.prefix.len(), node.iter()));
+                self.cur_key = self.cur_key.extend_from_partial(&node.prefix);
+                continue;
+            }
+
+            // We've got a value, so tack it onto our working key, and return it. If there's nothing
+            // here, that's an issue, leaf nodes should always have values.
+            let v = node
+                .value()
+                .expect("corruption: missing data at leaf node during iteration");
+            let key = self.cur_key.extend_from_partial(&node.prefix);
+
+            return Some((key, v));
+        }
     }
 }
 
@@ -1627,6 +1768,37 @@ mod tests {
         // Verify the boxed values are preserved
         assert_eq!(**tree.get("key1").unwrap(), 42);
         assert_eq!(**tree.get("key2").unwrap(), 84);
+    }
+
+    #[test]
+    fn test_versioned_tree_iteration() {
+        let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+
+        // Insert some keys
+        tree.insert("apple", 1);
+        tree.insert("banana", 2);
+        tree.insert("cherry", 3);
+
+        // Collect all key-value pairs from iteration
+        let mut results: Vec<_> = tree.iter().collect();
+        results.sort_by_key(|(k, _)| k.clone());
+
+        assert_eq!(results.len(), 3);
+
+        // Convert back to strings for comparison
+        let keys: Vec<String> = results
+            .iter()
+            .map(|(k, _)| {
+                let bytes = k.as_ref();
+                let null_pos = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+                String::from_utf8_lossy(&bytes[..null_pos]).into_owned()
+            })
+            .collect();
+
+        assert_eq!(keys, vec!["apple", "banana", "cherry"]);
+        assert_eq!(*results[0].1, 1);
+        assert_eq!(*results[1].1, 2);
+        assert_eq!(*results[2].1, 3);
     }
 }
 
