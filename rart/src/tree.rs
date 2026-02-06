@@ -514,7 +514,9 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use rand::seq::SliceRandom;
+    use rand::rngs::StdRng;
     use rand::{Rng, rng};
+    use rand::SeedableRng;
 
     use crate::keys::KeyTrait;
     use crate::keys::array_key::ArrayKey;
@@ -983,5 +985,28 @@ mod tests {
 
         let expected: Vec<u64> = (12..=25).collect();
         assert_eq!(collected, expected);
+    }
+
+    #[test]
+    fn test_range_start_sequence_matches_btreemap_seeded() {
+        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, u64>::new();
+        let mut btree = BTreeMap::new();
+        let mut rng = StdRng::seed_from_u64(0x5eed_5eed_dead_beef);
+        const COUNT: usize = 20_000;
+        const SPACE: u64 = 80_000;
+
+        for _ in 0..COUNT {
+            let k = rng.random_range(0..SPACE);
+            tree.insert_k(&ArrayKey::<16>::from(k), k * 3 + 7);
+            btree.insert(k, k * 3 + 7);
+        }
+
+        let start_raw = rng.random_range(0..SPACE);
+        let start_key: ArrayKey<16> = start_raw.into();
+
+        let art_values: Vec<u64> = tree.range(start_key..).map(|(_, v)| *v).collect();
+        let btree_values: Vec<u64> = btree.range(start_raw..).map(|(_, v)| *v).collect();
+
+        assert_eq!(art_values, btree_values);
     }
 }
