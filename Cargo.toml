@@ -10,6 +10,7 @@ members = [
 version = "0.2.1"
 authors = ["Ryan Daum <ryan.daum@gmail.com>"]
 edition = "2024"
+rust-version = "1.85"
 homepage = "https://github.com/rdaum/rart-rs"
 license = "Apache-2.0"
 repository = "https://github.com/rdaum/rart-rs"
@@ -17,13 +18,13 @@ repository = "https://github.com/rdaum/rart-rs"
 [workspace.dependencies]
 # Core dependencies
 num-traits = "0.2"
-simdeez = "2.0.0-dev5"
+simdeez = "2.0.0"
 
 # Dev dependencies
-criterion = { version = "0.7", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 im = "15.1"
 rand = "0.9"
-shuttle = "0.7"
+shuttle = "0.8"
 blart = "0.4"
 
 # Fuzz dependencies
