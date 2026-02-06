@@ -780,19 +780,19 @@ where
             let new_node = match Arc::try_unwrap(cur_node) {
                 Ok(owned_node) => {
                     // We have exclusive ownership, can extract the old value without cloning
-                    if let Some(old_value_out) = old_value_out {
-                        if let VersionedContent::Leaf(old_val) = owned_node.content {
-                            *old_value_out = Some(old_val);
-                        }
+                    if let (Some(old_value_out), VersionedContent::Leaf(old_val)) =
+                        (old_value_out, owned_node.content)
+                    {
+                        *old_value_out = Some(old_val);
                     }
                     Arc::new(VersionedNode::new_leaf(owned_node.prefix, value, version))
                 }
                 Err(shared_node) => {
                     // Node is shared, clone the old value if requested
-                    if let Some(old_value_out) = old_value_out {
-                        if let VersionedContent::Leaf(old_val) = &shared_node.content {
-                            *old_value_out = Some(old_val.clone());
-                        }
+                    if let (Some(old_value_out), VersionedContent::Leaf(old_val)) =
+                        (old_value_out, &shared_node.content)
+                    {
+                        *old_value_out = Some(old_val.clone());
                     }
                     Arc::new(VersionedNode::new_leaf(
                         shared_node.prefix.clone(),
