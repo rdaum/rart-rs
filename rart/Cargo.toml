@@ -12,11 +12,11 @@ repository.workspace = true
 description = "High-performance Adaptive Radix Tree implementation with SIMD optimizations"
 
 [dev-dependencies]
+blart.workspace = true
 criterion.workspace = true
 im.workspace = true
 rand.workspace = true
 shuttle.workspace = true
-blart.workspace = true
 
 [features]
 default = ["simd_keys"]
