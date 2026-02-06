@@ -102,13 +102,51 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> IterInner<'a, K, P, V
     /// Build positioned iterator stack with O(log N) navigation to starting position
     fn build_positioned_stack(
         node: &'a DefaultNode<P, V>,
-        _seek_key: &K,
-        _depth: usize,
+        seek_key: &K,
+        depth: usize,
     ) -> Vec<(usize, Box<NodeIterator<'a, P, V>>)> {
-        // For correctness, always return at least the root iterator
-        // The O(log N) benefit comes from the start_bound filtering in IterInner::next()
-        // which can skip large portions of the iteration space
-        vec![(node.prefix.len(), node.iter())]
+        // Compare node prefix against seek key segment at this depth.
+        let prefix_common = node.prefix.prefix_length_key(seek_key, depth);
+        if prefix_common != node.prefix.len() {
+            let seek_remaining = seek_key.length_at(depth);
+            if prefix_common >= seek_remaining {
+                // Seek key is a prefix of this subtree's prefix; whole subtree can be included.
+                return vec![(node.prefix.len(), node.iter())];
+            }
+
+            let node_byte = node.prefix.at(prefix_common);
+            let seek_byte = seek_key.at(depth + prefix_common);
+
+            if node_byte < seek_byte {
+                // Entire subtree is below the seek key.
+                return vec![];
+            }
+
+            // Subtree prefix is above seek key; include subtree from beginning.
+            return vec![(node.prefix.len(), node.iter())];
+        }
+
+        // Prefix fully matches. If seek key is exhausted at this node, include whole subtree.
+        if seek_key.length_at(depth) == node.prefix.len() {
+            return vec![(node.prefix.len(), node.iter())];
+        }
+
+        // Choose the first child with key-byte >= target.
+        let target_depth = depth + node.prefix.len();
+        let target_byte = seek_key.at(target_depth);
+        let mut iter = node.iter();
+        while let Some((k, child)) = iter.next() {
+            if k < target_byte {
+                continue;
+            }
+
+            let positioned_iter: Box<NodeIterator<'a, P, V>> =
+                Box::new(std::iter::once((k, child)).chain(iter));
+            return vec![(node.prefix.len(), positioned_iter)];
+        }
+
+        // No child can satisfy the start bound.
+        vec![]
     }
 }
 

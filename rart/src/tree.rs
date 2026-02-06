@@ -523,6 +523,7 @@ mod tests {
     use crate::tree::AdaptiveRadixTree;
 
     static PANIC_ON_FOUR_CMP: AtomicBool = AtomicBool::new(false);
+    static PANIC_ON_BELOW_M_CMP: AtomicBool = AtomicBool::new(false);
 
     #[derive(Clone, Eq, PartialEq, Debug)]
     struct PanickyRangeKey(ArrayKey<16>);
@@ -552,12 +553,25 @@ mod tests {
             {
                 panic!("range compared past first out-of-range key");
             }
+            if PANIC_ON_BELOW_M_CMP.load(Ordering::Relaxed) {
+                let lhs = self.as_ref().first().copied().unwrap_or_default();
+                let rhs = other.as_ref().first().copied().unwrap_or_default();
+                if lhs < b'm' || rhs < b'm' {
+                    panic!("range start seek compared a key below start prefix");
+                }
+            }
             self.0.cmp(&other.0)
         }
     }
 
     impl From<u64> for PanickyRangeKey {
         fn from(value: u64) -> Self {
+            Self(value.into())
+        }
+    }
+
+    impl From<&str> for PanickyRangeKey {
+        fn from(value: &str) -> Self {
             Self(value.into())
         }
     }
@@ -942,5 +956,22 @@ mod tests {
         PANIC_ON_FOUR_CMP.store(false, Ordering::Relaxed);
 
         assert_eq!(results, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn test_range_start_seek_regression() {
+        let mut tree = AdaptiveRadixTree::<PanickyRangeKey, u64>::new();
+        for (i, c) in ('a'..='z').enumerate() {
+            let key: PanickyRangeKey = format!("{c}key").as_str().into();
+            tree.insert_k(&key, i as u64);
+        }
+
+        let start: PanickyRangeKey = "m".into();
+        PANIC_ON_BELOW_M_CMP.store(true, Ordering::Relaxed);
+        let collected: Vec<u64> = tree.range(start..).map(|(_, v)| *v).collect();
+        PANIC_ON_BELOW_M_CMP.store(false, Ordering::Relaxed);
+
+        let expected: Vec<u64> = (12..=25).collect();
+        assert_eq!(collected, expected);
     }
 }
