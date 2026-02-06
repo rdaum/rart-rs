@@ -510,15 +510,100 @@ where
 mod tests {
     use std::collections::{BTreeMap, BTreeSet, btree_map};
     use std::fmt::Debug;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use rand::seq::SliceRandom;
     use rand::{Rng, rng};
 
     use crate::keys::KeyTrait;
     use crate::keys::array_key::ArrayKey;
+    use crate::partials::array_partial::ArrPartial;
     use crate::stats::TreeStatsTrait;
     use crate::tree;
     use crate::tree::AdaptiveRadixTree;
+
+    static PANIC_ON_FOUR_CMP: AtomicBool = AtomicBool::new(false);
+
+    #[derive(Clone, Eq, PartialEq, Debug)]
+    struct PanickyRangeKey(ArrayKey<16>);
+
+    impl PanickyRangeKey {
+        fn as_u64(&self) -> u64 {
+            self.0.to_be_u64()
+        }
+    }
+
+    impl AsRef<[u8]> for PanickyRangeKey {
+        fn as_ref(&self) -> &[u8] {
+            self.0.as_ref()
+        }
+    }
+
+    impl PartialOrd for PanickyRangeKey {
+        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+
+    impl Ord for PanickyRangeKey {
+        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+            if PANIC_ON_FOUR_CMP.load(Ordering::Relaxed)
+                && (self.as_u64() == 4 || other.as_u64() == 4)
+            {
+                panic!("range compared past first out-of-range key");
+            }
+            self.0.cmp(&other.0)
+        }
+    }
+
+    impl From<u64> for PanickyRangeKey {
+        fn from(value: u64) -> Self {
+            Self(value.into())
+        }
+    }
+
+    impl From<PanickyRangeKey> for ArrPartial<16> {
+        fn from(value: PanickyRangeKey) -> Self {
+            value.0.to_partial(0)
+        }
+    }
+
+    impl KeyTrait for PanickyRangeKey {
+        type PartialType = ArrPartial<16>;
+        const MAXIMUM_SIZE: Option<usize> = Some(16);
+
+        fn new_from_slice(slice: &[u8]) -> Self {
+            Self(ArrayKey::new_from_slice(slice))
+        }
+
+        fn new_from_partial(partial: &Self::PartialType) -> Self {
+            Self(ArrayKey::new_from_partial(partial))
+        }
+
+        fn extend_from_partial(&self, partial: &Self::PartialType) -> Self {
+            Self(self.0.extend_from_partial(partial))
+        }
+
+        fn truncate(&self, at_depth: usize) -> Self {
+            Self(self.0.truncate(at_depth))
+        }
+
+        fn at(&self, pos: usize) -> u8 {
+            self.0.at(pos)
+        }
+
+        fn length_at(&self, at_depth: usize) -> usize {
+            self.0.length_at(at_depth)
+        }
+
+        fn to_partial(&self, at_depth: usize) -> Self::PartialType {
+            self.0.to_partial(at_depth)
+        }
+
+        fn matches_slice(&self, slice: &[u8]) -> bool {
+            self.0.matches_slice(slice)
+        }
+    }
 
     #[test]
     fn test_root_set_get() {
@@ -841,5 +926,21 @@ mod tests {
         let t_r = tree.range(start_key..=end_key);
         let k_r = keys_inserted.range(100..=1000);
         test_range_matches(t_r, k_r);
+    }
+
+    #[test]
+    fn test_range_stops_after_first_out_of_bounds_regression() {
+        let mut tree = AdaptiveRadixTree::<PanickyRangeKey, u64>::new();
+        for i in 0..=4u64 {
+            let key: PanickyRangeKey = i.into();
+            tree.insert_k(&key, i);
+        }
+
+        let end: PanickyRangeKey = 2u64.into();
+        PANIC_ON_FOUR_CMP.store(true, Ordering::Relaxed);
+        let results: Vec<u64> = tree.range(..=end).map(|(_, v)| *v).collect();
+        PANIC_ON_FOUR_CMP.store(false, Ordering::Relaxed);
+
+        assert_eq!(results, vec![0, 1, 2]);
     }
 }

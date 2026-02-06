@@ -99,23 +99,21 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial, V> RangeInnerWithBounds<'a, K
 
 impl<'a, K: KeyTrait + 'a, V> RangeInnerTrait<'a, K, V> for RangeInner<'a, K, V> {
     fn next(&mut self) -> InnerResult<'a, K, V> {
-        loop {
-            let Some(next) = self.iter.next() else {
-                return InnerResult::Iter(None);
-            };
-            match &self.end {
-                Bound::Included(end_key) => match next.0.cmp(end_key) {
-                    std::cmp::Ordering::Less | std::cmp::Ordering::Equal => {
-                        return InnerResult::Iter(Some(next));
-                    }
-                    std::cmp::Ordering::Greater => continue, // Skip and continue iterating
-                },
-                Bound::Excluded(end_key) => match next.0.cmp(end_key) {
-                    std::cmp::Ordering::Less => return InnerResult::Iter(Some(next)),
-                    std::cmp::Ordering::Equal | std::cmp::Ordering::Greater => continue, // Skip and continue iterating
-                },
-                Bound::Unbounded => return InnerResult::Iter(Some(next)),
-            }
+        let Some(next) = self.iter.next() else {
+            return InnerResult::Iter(None);
+        };
+        match &self.end {
+            Bound::Included(end_key) => match next.0.cmp(end_key) {
+                std::cmp::Ordering::Less | std::cmp::Ordering::Equal => {
+                    InnerResult::Iter(Some(next))
+                }
+                std::cmp::Ordering::Greater => InnerResult::Iter(None),
+            },
+            Bound::Excluded(end_key) => match next.0.cmp(end_key) {
+                std::cmp::Ordering::Less => InnerResult::Iter(Some(next)),
+                std::cmp::Ordering::Equal | std::cmp::Ordering::Greater => InnerResult::Iter(None),
+            },
+            Bound::Unbounded => InnerResult::Iter(Some(next)),
         }
     }
 }
@@ -129,14 +127,12 @@ impl<'a, K: KeyTrait + 'a, V> RangeInnerTrait<'a, K, V> for RangeInnerWithFirst<
                     std::cmp::Ordering::Less | std::cmp::Ordering::Equal => {
                         return InnerResult::Iter(Some(first));
                     }
-                    std::cmp::Ordering::Greater => {
-                        // First element doesn't match, continue with rest of iterator
-                    }
+                    std::cmp::Ordering::Greater => return InnerResult::Iter(None),
                 },
                 Bound::Excluded(end_key) => match first.0.cmp(end_key) {
                     std::cmp::Ordering::Less => return InnerResult::Iter(Some(first)),
                     std::cmp::Ordering::Equal | std::cmp::Ordering::Greater => {
-                        // First element doesn't match, continue with rest of iterator
+                        return InnerResult::Iter(None);
                     }
                 },
                 Bound::Unbounded => return InnerResult::Iter(Some(first)),
@@ -144,23 +140,21 @@ impl<'a, K: KeyTrait + 'a, V> RangeInnerTrait<'a, K, V> for RangeInnerWithFirst<
         }
 
         // Continue with the rest of the iterator
-        loop {
-            let Some(next) = self.iter.next() else {
-                return InnerResult::Iter(None);
-            };
-            match &self.end {
-                Bound::Included(end_key) => match next.0.cmp(end_key) {
-                    std::cmp::Ordering::Less | std::cmp::Ordering::Equal => {
-                        return InnerResult::Iter(Some(next));
-                    }
-                    std::cmp::Ordering::Greater => continue, // Skip and continue iterating
-                },
-                Bound::Excluded(end_key) => match next.0.cmp(end_key) {
-                    std::cmp::Ordering::Less => return InnerResult::Iter(Some(next)),
-                    std::cmp::Ordering::Equal | std::cmp::Ordering::Greater => continue, // Skip and continue iterating
-                },
-                Bound::Unbounded => return InnerResult::Iter(Some(next)),
-            }
+        let Some(next) = self.iter.next() else {
+            return InnerResult::Iter(None);
+        };
+        match &self.end {
+            Bound::Included(end_key) => match next.0.cmp(end_key) {
+                std::cmp::Ordering::Less | std::cmp::Ordering::Equal => {
+                    InnerResult::Iter(Some(next))
+                }
+                std::cmp::Ordering::Greater => InnerResult::Iter(None),
+            },
+            Bound::Excluded(end_key) => match next.0.cmp(end_key) {
+                std::cmp::Ordering::Less => InnerResult::Iter(Some(next)),
+                std::cmp::Ordering::Equal | std::cmp::Ordering::Greater => InnerResult::Iter(None),
+            },
+            Bound::Unbounded => InnerResult::Iter(Some(next)),
         }
     }
 }
@@ -190,11 +184,13 @@ impl<'a, K: KeyTrait + 'a, V> RangeInnerTrait<'a, K, V> for RangeInnerWithBounds
                     std::cmp::Ordering::Less | std::cmp::Ordering::Equal => {
                         return InnerResult::Iter(Some(next));
                     }
-                    std::cmp::Ordering::Greater => continue, // Skip and continue iterating
+                    std::cmp::Ordering::Greater => return InnerResult::Iter(None),
                 },
                 Bound::Excluded(end_key) => match next.0.cmp(end_key) {
                     std::cmp::Ordering::Less => return InnerResult::Iter(Some(next)),
-                    std::cmp::Ordering::Equal | std::cmp::Ordering::Greater => continue, // Skip and continue iterating
+                    std::cmp::Ordering::Equal | std::cmp::Ordering::Greater => {
+                        return InnerResult::Iter(None);
+                    }
                 },
                 Bound::Unbounded => return InnerResult::Iter(Some(next)),
             }
