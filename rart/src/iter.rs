@@ -85,7 +85,7 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> IterInner<'a, K, P, V
 
     pub fn new(node: &'a DefaultNode<P, V>) -> Self {
         let node_iter_stack = vec![(
-            node.prefix.len(), /* initial tree depth*/
+            node.prefix.len(),                 /* initial tree depth*/
             IterFrameIter::Plain(node.iter()), /* root node iter*/
         )];
 
@@ -297,8 +297,10 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> Iterator for IterInne
             // We're at a non-exhausted inner node, so go further down the tree by pushing node
             // iterator into the stack. We also extend our working key with this node's prefix.
             if node.is_inner() {
-                self.node_iter_stack
-                    .push((tree_depth + node.prefix.len(), IterFrameIter::Plain(node.iter())));
+                self.node_iter_stack.push((
+                    tree_depth + node.prefix.len(),
+                    IterFrameIter::Plain(node.iter()),
+                ));
                 self.cur_key = self.cur_key.extend_from_partial(&node.prefix);
                 continue;
             }

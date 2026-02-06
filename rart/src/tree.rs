@@ -513,10 +513,10 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use rand::seq::SliceRandom;
-    use rand::rngs::StdRng;
-    use rand::{Rng, rng};
     use rand::SeedableRng;
+    use rand::rngs::StdRng;
+    use rand::seq::SliceRandom;
+    use rand::{Rng, rng};
 
     use crate::keys::KeyTrait;
     use crate::keys::array_key::ArrayKey;

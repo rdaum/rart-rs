@@ -143,17 +143,21 @@ pub fn start_seek_positioning(c: &mut Criterion) {
     for size in SIZES {
         group.throughput(Throughput::Elements(1));
 
-        group.bench_with_input(BenchmarkId::new("art_unbounded_first", size), &size, |b, size| {
-            let mut tree = AdaptiveRadixTree::<ArrayKey<16>, u64>::new();
-            for i in 0..*size {
-                tree.insert(i, i * 2);
-            }
+        group.bench_with_input(
+            BenchmarkId::new("art_unbounded_first", size),
+            &size,
+            |b, size| {
+                let mut tree = AdaptiveRadixTree::<ArrayKey<16>, u64>::new();
+                for i in 0..*size {
+                    tree.insert(i, i * 2);
+                }
 
-            b.iter(|| {
-                let first = tree.range(..).next().map(|(_, v)| *v);
-                std::hint::black_box(first);
-            })
-        });
+                b.iter(|| {
+                    let first = tree.range(..).next().map(|(_, v)| *v);
+                    std::hint::black_box(first);
+                })
+            },
+        );
 
         group.bench_with_input(
             BenchmarkId::new("art_start_mid_first", size),

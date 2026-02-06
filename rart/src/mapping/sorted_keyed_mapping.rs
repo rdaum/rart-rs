@@ -159,10 +159,9 @@ impl<'a, N, const WIDTH: usize> Iterator for SortedKeyedMappingIter<'a, N, WIDTH
         }
         let i = self.idx;
         self.idx += 1;
-        Some((
-            self.mapping.keys[i],
-            unsafe { self.mapping.children[i].assume_init_ref() },
-        ))
+        Some((self.mapping.keys[i], unsafe {
+            self.mapping.children[i].assume_init_ref()
+        }))
     }
 }
 
