@@ -134,6 +134,65 @@ pub fn range_iteration(c: &mut Criterion) {
     group.finish();
 }
 
+/// Isolate the cost of positioning range iteration at a start bound.
+/// We only consume the first element so work is dominated by seek/setup.
+pub fn start_seek_positioning(c: &mut Criterion) {
+    let mut group = c.benchmark_group("start_seek_positioning");
+    const SIZES: [u64; 3] = [1 << 12, 1 << 15, 1 << 17];
+
+    for size in SIZES {
+        group.throughput(Throughput::Elements(1));
+
+        group.bench_with_input(BenchmarkId::new("art_unbounded_first", size), &size, |b, size| {
+            let mut tree = AdaptiveRadixTree::<ArrayKey<16>, u64>::new();
+            for i in 0..*size {
+                tree.insert(i, i * 2);
+            }
+
+            b.iter(|| {
+                let first = tree.range(..).next().map(|(_, v)| *v);
+                std::hint::black_box(first);
+            })
+        });
+
+        group.bench_with_input(
+            BenchmarkId::new("art_start_mid_first", size),
+            &size,
+            |b, size| {
+                let mut tree = AdaptiveRadixTree::<ArrayKey<16>, u64>::new();
+                for i in 0..*size {
+                    tree.insert(i, i * 2);
+                }
+                let start: ArrayKey<16> = (size / 2).into();
+
+                b.iter(|| {
+                    let first = tree.range(start..).next().map(|(_, v)| *v);
+                    std::hint::black_box(first);
+                })
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("art_start_high_first", size),
+            &size,
+            |b, size| {
+                let mut tree = AdaptiveRadixTree::<ArrayKey<16>, u64>::new();
+                for i in 0..*size {
+                    tree.insert(i, i * 2);
+                }
+                let start: ArrayKey<16> = ((size * 15) / 16).into();
+
+                b.iter(|| {
+                    let first = tree.range(start..).next().map(|(_, v)| *v);
+                    std::hint::black_box(first);
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
 /// Values-only iteration benchmarks - test iteration without key reconstruction
 pub fn values_iteration_numeric(c: &mut Criterion) {
     let mut group = c.benchmark_group("values_iteration_numeric");
@@ -235,6 +294,7 @@ criterion_group!(
     iteration_benches,
     full_iteration_numeric,
     range_iteration,
+    start_seek_positioning,
     values_iteration_numeric
 );
 criterion_main!(iteration_benches);

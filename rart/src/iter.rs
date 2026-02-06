@@ -310,9 +310,10 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> Iterator for IterInne
                 .expect("corruption: missing data at leaf node during iteration");
             let key = self.cur_key.extend_from_partial(&node.prefix);
 
-            // Handle start bound filtering
-            if let Some(ref start_bound) = self.start_bound
-                && !match start_bound {
+            // Handle start bound filtering. Once we yield a key that satisfies the start bound,
+            // all subsequent keys will also satisfy it due to sorted iteration order.
+            if let Some(start_bound) = self.start_bound.as_ref() {
+                let satisfies_start = match start_bound {
                     Bound::Included(start_key) => {
                         Self::key_order(&key, start_key) >= std::cmp::Ordering::Equal
                     }
@@ -320,9 +321,11 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> Iterator for IterInne
                         Self::key_order(&key, start_key) > std::cmp::Ordering::Equal
                     }
                     Bound::Unbounded => true,
+                };
+                if !satisfies_start {
+                    continue; // Skip this key, it doesn't satisfy start bound
                 }
-            {
-                continue; // Skip this key, it doesn't satisfy start bound
+                self.start_bound = None;
             }
 
             return Some((key, v));
