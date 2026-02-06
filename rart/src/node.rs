@@ -1,8 +1,11 @@
 use crate::mapping::direct_mapping::DirectMapping;
+use crate::mapping::direct_mapping::DirectMappingIter;
 use crate::mapping::indexed_mapping::IndexedMapping;
+use crate::mapping::indexed_mapping::IndexedMappingIter;
 
 use crate::mapping::NodeMapping;
 use crate::mapping::sorted_keyed_mapping::SortedKeyedMapping;
+use crate::mapping::sorted_keyed_mapping::SortedKeyedMappingIter;
 use crate::partials::Partial;
 use crate::utils::bitset::Bitset64;
 
@@ -40,6 +43,28 @@ pub(crate) enum Content<P: Partial, V> {
     Node16(SortedKeyedMapping<DefaultNode<P, V>, 16>),
     Node48(IndexedMapping<DefaultNode<P, V>, 48, Bitset64<1>>),
     Node256(DirectMapping<DefaultNode<P, V>>),
+}
+
+pub enum NodeIter<'a, P: Partial, V> {
+    Node4(SortedKeyedMappingIter<'a, DefaultNode<P, V>, 4>),
+    Node16(SortedKeyedMappingIter<'a, DefaultNode<P, V>, 16>),
+    Node48(IndexedMappingIter<'a, DefaultNode<P, V>, 48, Bitset64<1>>),
+    Node256(DirectMappingIter<'a, DefaultNode<P, V>>),
+    Empty,
+}
+
+impl<'a, P: Partial, V> Iterator for NodeIter<'a, P, V> {
+    type Item = (u8, &'a DefaultNode<P, V>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            NodeIter::Node4(iter) => iter.next(),
+            NodeIter::Node16(iter) => iter.next(),
+            NodeIter::Node48(iter) => iter.next(),
+            NodeIter::Node256(iter) => iter.next(),
+            NodeIter::Empty => None,
+        }
+    }
 }
 
 impl<P: Partial, V> Node<P, V> for DefaultNode<P, V> {
@@ -292,13 +317,13 @@ impl<P: Partial, V> DefaultNode<P, V> {
         self.capacity() - self.num_children()
     }
 
-    pub fn iter(&self) -> Box<dyn Iterator<Item = (u8, &Self)> + '_> {
+    pub fn iter(&self) -> NodeIter<'_, P, V> {
         match &self.content {
-            Content::Node4(n) => Box::new(n.iter()),
-            Content::Node16(n) => Box::new(n.iter()),
-            Content::Node48(n) => Box::new(n.iter()),
-            Content::Node256(n) => Box::new(n.iter()),
-            Content::Leaf(_) => Box::new(std::iter::empty()),
+            Content::Node4(n) => NodeIter::Node4(n.iter()),
+            Content::Node16(n) => NodeIter::Node16(n.iter()),
+            Content::Node48(n) => NodeIter::Node48(n.iter()),
+            Content::Node256(n) => NodeIter::Node256(n.iter()),
+            Content::Leaf(_) => NodeIter::Empty,
         }
     }
 }

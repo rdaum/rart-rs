@@ -72,8 +72,32 @@ impl<N> DirectMapping<N> {
     }
 
     #[inline]
-    pub fn iter(&self) -> impl Iterator<Item = (u8, &N)> {
-        self.children.iter().map(|(key, node)| (key as u8, node))
+    pub fn iter(&self) -> DirectMappingIter<'_, N> {
+        DirectMappingIter {
+            mapping: self,
+            current_key: 0,
+        }
+    }
+}
+
+pub struct DirectMappingIter<'a, N> {
+    mapping: &'a DirectMapping<N>,
+    current_key: usize,
+}
+
+impl<'a, N> Iterator for DirectMappingIter<'a, N> {
+    type Item = (u8, &'a N);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.current_key < 256 {
+            let key = self.current_key as u8;
+            self.current_key += 1;
+
+            if let Some(child) = self.mapping.children.get(key as usize) {
+                return Some((key, child));
+            }
+        }
+        None
     }
 }
 

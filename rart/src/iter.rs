@@ -9,11 +9,29 @@
 use std::collections::Bound;
 
 use crate::keys::KeyTrait;
-use crate::node::{DefaultNode, Node};
+use crate::node::{DefaultNode, Node, NodeIter};
 use crate::partials::Partial;
 
 type IterEntry<'a, P, V> = (u8, &'a DefaultNode<P, V>);
-type NodeIterator<'a, P, V> = dyn Iterator<Item = IterEntry<'a, P, V>> + 'a;
+
+enum IterFrameIter<'a, P: Partial, V> {
+    Plain(NodeIter<'a, P, V>),
+    Leading {
+        first: Option<IterEntry<'a, P, V>>,
+        rest: NodeIter<'a, P, V>,
+    },
+}
+
+impl<'a, P: Partial, V> Iterator for IterFrameIter<'a, P, V> {
+    type Item = IterEntry<'a, P, V>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            IterFrameIter::Plain(iter) => iter.next(),
+            IterFrameIter::Leading { first, rest } => first.take().or_else(|| rest.next()),
+        }
+    }
+}
 
 /// Iterator over all key-value pairs in an Adaptive Radix Tree.
 ///
@@ -41,7 +59,7 @@ pub struct Iter<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> {
 }
 
 struct IterInner<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> {
-    node_iter_stack: Vec<(usize, Box<NodeIterator<'a, P, V>>)>,
+    node_iter_stack: Vec<(usize, IterFrameIter<'a, P, V>)>,
 
     // Pushed and popped with prefix portions as we descend the tree,
     cur_key: K,
@@ -51,10 +69,24 @@ struct IterInner<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> {
 }
 
 impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> IterInner<'a, K, P, V> {
+    #[inline]
+    fn key_order(lhs: &K, rhs: &K) -> std::cmp::Ordering {
+        let lhs_len = lhs.length_at(0);
+        let rhs_len = rhs.length_at(0);
+        let common = lhs_len.min(rhs_len);
+        for i in 0..common {
+            match lhs.at(i).cmp(&rhs.at(i)) {
+                std::cmp::Ordering::Equal => {}
+                ord => return ord,
+            }
+        }
+        lhs_len.cmp(&rhs_len)
+    }
+
     pub fn new(node: &'a DefaultNode<P, V>) -> Self {
         let node_iter_stack = vec![(
             node.prefix.len(), /* initial tree depth*/
-            node.iter(),       /* root node iter*/
+            IterFrameIter::Plain(node.iter()), /* root node iter*/
         )];
 
         Self {
@@ -85,12 +117,12 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> IterInner<'a, K, P, V
             return Self {
                 node_iter_stack: final_stack,
                 cur_key: K::new_from_partial(&node.prefix),
-                start_bound: Some(start_bound.clone()), // Still filter to handle exact boundary cases
+                start_bound: Some(start_bound.clone()),
             };
         }
 
         // No seek key means unbounded start, use regular iteration
-        let node_iter_stack = vec![(node.prefix.len(), node.iter())];
+        let node_iter_stack = vec![(node.prefix.len(), IterFrameIter::Plain(node.iter()))];
 
         Self {
             node_iter_stack,
@@ -104,14 +136,14 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> IterInner<'a, K, P, V
         node: &'a DefaultNode<P, V>,
         seek_key: &K,
         depth: usize,
-    ) -> Vec<(usize, Box<NodeIterator<'a, P, V>>)> {
+    ) -> Vec<(usize, IterFrameIter<'a, P, V>)> {
         // Compare node prefix against seek key segment at this depth.
         let prefix_common = node.prefix.prefix_length_key(seek_key, depth);
         if prefix_common != node.prefix.len() {
             let seek_remaining = seek_key.length_at(depth);
             if prefix_common >= seek_remaining {
                 // Seek key is a prefix of this subtree's prefix; whole subtree can be included.
-                return vec![(node.prefix.len(), node.iter())];
+                return vec![(node.prefix.len(), IterFrameIter::Plain(node.iter()))];
             }
 
             let node_byte = node.prefix.at(prefix_common);
@@ -123,12 +155,12 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> IterInner<'a, K, P, V
             }
 
             // Subtree prefix is above seek key; include subtree from beginning.
-            return vec![(node.prefix.len(), node.iter())];
+            return vec![(node.prefix.len(), IterFrameIter::Plain(node.iter()))];
         }
 
         // Prefix fully matches. If seek key is exhausted at this node, include whole subtree.
         if seek_key.length_at(depth) == node.prefix.len() {
-            return vec![(node.prefix.len(), node.iter())];
+            return vec![(node.prefix.len(), IterFrameIter::Plain(node.iter()))];
         }
 
         // Choose the first child with key-byte >= target.
@@ -140,8 +172,10 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> IterInner<'a, K, P, V
                 continue;
             }
 
-            let positioned_iter: Box<NodeIterator<'a, P, V>> =
-                Box::new(std::iter::once((k, child)).chain(iter));
+            let positioned_iter = IterFrameIter::Leading {
+                first: Some((k, child)),
+                rest: iter,
+            };
             return vec![(node.prefix.len(), positioned_iter)];
         }
 
@@ -193,8 +227,14 @@ impl<'a, K: KeyTrait<PartialType = P> + 'a, P: Partial + 'a, V> Iter<'a, K, P, V
         if root_node.is_leaf() {
             let root_key = K::new_from_partial(&root_node.prefix);
             let satisfies_start = match &start_bound {
-                Bound::Included(start_key) => root_key.cmp(start_key) >= std::cmp::Ordering::Equal,
-                Bound::Excluded(start_key) => root_key.cmp(start_key) > std::cmp::Ordering::Equal,
+                Bound::Included(start_key) => {
+                    IterInner::<K, P, V>::key_order(&root_key, start_key)
+                        >= std::cmp::Ordering::Equal
+                }
+                Bound::Excluded(start_key) => {
+                    IterInner::<K, P, V>::key_order(&root_key, start_key)
+                        > std::cmp::Ordering::Equal
+                }
                 Bound::Unbounded => true,
             };
 
@@ -258,7 +298,7 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> Iterator for IterInne
             // iterator into the stack. We also extend our working key with this node's prefix.
             if node.is_inner() {
                 self.node_iter_stack
-                    .push((tree_depth + node.prefix.len(), node.iter()));
+                    .push((tree_depth + node.prefix.len(), IterFrameIter::Plain(node.iter())));
                 self.cur_key = self.cur_key.extend_from_partial(&node.prefix);
                 continue;
             }
@@ -273,8 +313,12 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> Iterator for IterInne
             // Handle start bound filtering
             if let Some(ref start_bound) = self.start_bound
                 && !match start_bound {
-                    Bound::Included(start_key) => key.cmp(start_key) >= std::cmp::Ordering::Equal,
-                    Bound::Excluded(start_key) => key.cmp(start_key) > std::cmp::Ordering::Equal,
+                    Bound::Included(start_key) => {
+                        Self::key_order(&key, start_key) >= std::cmp::Ordering::Equal
+                    }
+                    Bound::Excluded(start_key) => {
+                        Self::key_order(&key, start_key) > std::cmp::Ordering::Equal
+                    }
                     Bound::Unbounded => true,
                 }
             {
@@ -291,7 +335,7 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> Iterator for IterInne
 /// This iterator skips key reconstruction entirely, only yielding values.
 /// It's useful for measuring the overhead of key reconstruction in iteration.
 pub struct ValuesIter<'a, P: Partial + 'a, V> {
-    node_iter_stack: Vec<Box<NodeIterator<'a, P, V>>>,
+    node_iter_stack: Vec<NodeIter<'a, P, V>>,
 }
 
 impl<'a, P: Partial + 'a, V> ValuesIter<'a, P, V> {

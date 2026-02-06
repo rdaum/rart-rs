@@ -510,6 +510,7 @@ where
 mod tests {
     use std::collections::{BTreeMap, BTreeSet, btree_map};
     use std::fmt::Debug;
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use rand::seq::SliceRandom;
@@ -524,6 +525,7 @@ mod tests {
 
     static PANIC_ON_FOUR_CMP: AtomicBool = AtomicBool::new(false);
     static PANIC_ON_BELOW_M_CMP: AtomicBool = AtomicBool::new(false);
+    static PANIC_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[derive(Clone, Eq, PartialEq, Debug)]
     struct PanickyRangeKey(ArrayKey<16>);
@@ -944,6 +946,9 @@ mod tests {
 
     #[test]
     fn test_range_stops_after_first_out_of_bounds_regression() {
+        let _guard = PANIC_TEST_LOCK.lock().unwrap();
+        PANIC_ON_FOUR_CMP.store(false, Ordering::Relaxed);
+        PANIC_ON_BELOW_M_CMP.store(false, Ordering::Relaxed);
         let mut tree = AdaptiveRadixTree::<PanickyRangeKey, u64>::new();
         for i in 0..=4u64 {
             let key: PanickyRangeKey = i.into();
@@ -954,12 +959,16 @@ mod tests {
         PANIC_ON_FOUR_CMP.store(true, Ordering::Relaxed);
         let results: Vec<u64> = tree.range(..=end).map(|(_, v)| *v).collect();
         PANIC_ON_FOUR_CMP.store(false, Ordering::Relaxed);
+        PANIC_ON_BELOW_M_CMP.store(false, Ordering::Relaxed);
 
         assert_eq!(results, vec![0, 1, 2]);
     }
 
     #[test]
     fn test_range_start_seek_regression() {
+        let _guard = PANIC_TEST_LOCK.lock().unwrap();
+        PANIC_ON_FOUR_CMP.store(false, Ordering::Relaxed);
+        PANIC_ON_BELOW_M_CMP.store(false, Ordering::Relaxed);
         let mut tree = AdaptiveRadixTree::<PanickyRangeKey, u64>::new();
         for (i, c) in ('a'..='z').enumerate() {
             let key: PanickyRangeKey = format!("{c}key").as_str().into();
@@ -970,6 +979,7 @@ mod tests {
         PANIC_ON_BELOW_M_CMP.store(true, Ordering::Relaxed);
         let collected: Vec<u64> = tree.range(start..).map(|(_, v)| *v).collect();
         PANIC_ON_BELOW_M_CMP.store(false, Ordering::Relaxed);
+        PANIC_ON_FOUR_CMP.store(false, Ordering::Relaxed);
 
         let expected: Vec<u64> = (12..=25).collect();
         assert_eq!(collected, expected);

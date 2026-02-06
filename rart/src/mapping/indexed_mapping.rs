@@ -124,10 +124,34 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> IndexedMapping<N, WIDTH, Bitset
         }
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (u8, &N)> {
-        self.child_ptr_indexes
-            .iter()
-            .map(|(key, pos)| (key as u8, &self.children[*pos as usize]))
+    pub fn iter(&self) -> IndexedMappingIter<'_, N, WIDTH, Bitset> {
+        IndexedMappingIter {
+            mapping: self,
+            current_key: 0,
+        }
+    }
+}
+
+pub struct IndexedMappingIter<'a, N, const WIDTH: usize, Bitset: BitsetTrait> {
+    mapping: &'a IndexedMapping<N, WIDTH, Bitset>,
+    current_key: usize,
+}
+
+impl<'a, N, const WIDTH: usize, Bitset: BitsetTrait> Iterator
+    for IndexedMappingIter<'a, N, WIDTH, Bitset>
+{
+    type Item = (u8, &'a N);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.current_key < 256 {
+            let key = self.current_key as u8;
+            self.current_key += 1;
+
+            if let Some(pos) = self.mapping.child_ptr_indexes.get(key as usize) {
+                return Some((key, &self.mapping.children[*pos as usize]));
+            }
+        }
+        None
     }
 }
 

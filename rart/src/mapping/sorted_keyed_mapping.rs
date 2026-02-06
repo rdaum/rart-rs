@@ -137,12 +137,32 @@ impl<N, const WIDTH: usize> SortedKeyedMapping<N, WIDTH> {
 
     #[inline]
     #[allow(dead_code)]
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (u8, &N)> {
-        self.keys
-            .iter()
-            .zip(self.children.iter())
-            .take(self.num_children as usize)
-            .map(|(&k, c)| (k, unsafe { c.assume_init_ref() }))
+    pub(crate) fn iter(&self) -> SortedKeyedMappingIter<'_, N, WIDTH> {
+        SortedKeyedMappingIter {
+            mapping: self,
+            idx: 0,
+        }
+    }
+}
+
+pub(crate) struct SortedKeyedMappingIter<'a, N, const WIDTH: usize> {
+    mapping: &'a SortedKeyedMapping<N, WIDTH>,
+    idx: usize,
+}
+
+impl<'a, N, const WIDTH: usize> Iterator for SortedKeyedMappingIter<'a, N, WIDTH> {
+    type Item = (u8, &'a N);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.idx >= self.mapping.num_children as usize {
+            return None;
+        }
+        let i = self.idx;
+        self.idx += 1;
+        Some((
+            self.mapping.keys[i],
+            unsafe { self.mapping.children[i].assume_init_ref() },
+        ))
     }
 }
 
