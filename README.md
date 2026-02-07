@@ -102,6 +102,50 @@ let key3: VectorKey = "hello world".into();
 let key4: VectorKey = 1337u32.into();
 ```
 
+## Prefix Operations
+
+`AdaptiveRadixTree` now exposes explicit prefix-oriented APIs:
+
+- `longest_prefix_match` / `longest_prefix_match_k`
+- `prefix_iter` / `prefix_iter_k`
+
+These are useful when exact lookup is not enough:
+
+- `longest_prefix_match*`: find the deepest stored key that is a prefix of a probe key
+- `prefix_iter*`: iterate only the subtree under a prefix, in sorted key order
+
+```rust
+use rart::{AdaptiveRadixTree, KeyTrait, VectorKey};
+
+let mut tree = AdaptiveRadixTree::<VectorKey, u32>::new();
+tree.insert_k(&VectorKey::new_from_slice(b"cat"), 1);
+tree.insert_k(&VectorKey::new_from_slice(b"catalog"), 2);
+tree.insert_k(&VectorKey::new_from_slice(b"dog"), 3);
+
+let (k, v) = tree
+    .longest_prefix_match_k(&VectorKey::new_from_slice(b"catalogue"))
+    .unwrap();
+assert_eq!(k.as_ref(), b"catalog");
+assert_eq!(*v, 2);
+
+let prefix = VectorKey::new_from_slice(b"cat");
+let matches: Vec<_> = tree.prefix_iter_k(&prefix).map(|(k, _)| k).collect();
+assert_eq!(matches.len(), 2);
+```
+
+Typical uses:
+
+- URL/path routing: match `/api/v1/users/42` to the best registered prefix
+- Network prefix tables: longest-prefix lookup for address-like keys
+- Policy/config lookup: most specific override wins
+- Autocomplete/search narrowing: iterate all keys under a typed prefix
+- Prefix cache reuse: find best existing cached prefix before extending
+
+How this differs from standard maps:
+
+- `HashMap`: no ordered prefix traversal; prefix queries require scanning keys
+- `BTreeMap`: prefix ranges are possible, but longest-prefix matching is not a built-in operation
+
 ## Performance
 
 Benchmark environment: NVIDIA GB10 (NVIDIA Spark equivalent, ASUS GX10 variant), ARM Cortex-X925, Criterion.rs.
@@ -138,6 +182,20 @@ Performance characteristics for lookup patterns and iteration:
 - BTreeMap: ~0.87ns/element
 - HashMap: ~0.63ns/element
 - *`values_iter` avoids key reconstruction and is ~4x faster than ART full iteration in this run (~8.2ns/element).*
+
+**Prefix-specific Operations** (`prefix_bench`, quick profile):
+
+- `longest_prefix_match` (32k probes):
+- ART: ~3.45ms total (~9.5M probes/sec)
+- BTreeMap baseline: ~6.73ms total (~4.9M probes/sec)
+- HashMap baseline: ~1.31ms total (~25.1M probes/sec)
+- *HashMap baseline uses repeated exact lookups on shorter prefixes; this is fast but does not provide ordered subtree traversal.*
+
+- `prefix_iter` (narrow prefixes, 32k tree, 1024 queries):
+- ART: ~852µs total (~1.20M queries/sec)
+- BTreeMap baseline: ~122µs total (~8.4M queries/sec)
+- HashMap baseline: ~100ms total (~10K queries/sec)
+- *ART is much faster than hash-scan for prefix enumeration, while BTree range iteration is still faster in this benchmark.*
 
 ### Versioned Tree Performance (VersionedAdaptiveRadixTree)
 

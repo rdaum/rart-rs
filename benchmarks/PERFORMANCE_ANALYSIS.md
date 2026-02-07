@@ -138,6 +138,50 @@ Recent optimizations have improved range iteration performance by ~40% (down fro
 - **Use `iter()`** if you need to discover keys, but be aware of the higher cost (~8.2ns/op).
 - For workloads primarily dominated by *ordered range scans*, BTree currently retains an advantage.
 
+---
+
+### Prefix Operations (`prefix_bench`)
+
+This benchmark targets two explicit ART APIs:
+
+- `longest_prefix_match*` for deepest-prefix lookup
+- `prefix_iter*` for prefix-subtree enumeration
+
+#### Longest Prefix Match
+
+Dataset size: 32k probes (quick profile)
+
+- **HashMap baseline**: ~1.30ms total (~25.1M probes/sec)
+- **ART**: ~3.45ms total (~9.5M probes/sec)
+- **BTree baseline**: ~6.73ms total (~4.9M probes/sec)
+
+**Notes**:
+
+- HashMap/BTree baselines emulate longest-prefix semantics by trying shorter exact keys.
+- ART is faster than BTree here and provides longest-prefix behavior directly as a tree operation.
+
+#### Prefix Iteration
+
+Dataset: 32k keys, 1024 prefix queries
+
+Narrow prefixes (small matching subsets):
+
+- **BTree range baseline**: ~122µs total (~8.4M queries/sec)
+- **ART prefix_iter**: ~852µs total (~1.2M queries/sec)
+- **HashMap scan baseline**: ~100ms total (~10K queries/sec)
+
+Medium prefixes (larger matching subsets):
+
+- **BTree range baseline**: ~899µs total (~1.14M queries/sec)
+- **ART prefix_iter**: ~27.4ms total (~37K queries/sec)
+- **HashMap scan baseline**: ~101ms total (~10K queries/sec)
+
+**Takeaway**:
+
+- For prefix enumeration, ART is orders of magnitude faster than full HashMap scans.
+- BTree range iteration is still faster than current ART prefix iteration in this benchmark.
+- ART remains useful when you want explicit trie-prefix operations (`longest_prefix_match*`, `prefix_iter*`) in the same ordered structure.
+
 ## Performance Characteristics by Use Case
 
 | Operation              | Winner                  | Runner-up      | Performance Gap |
