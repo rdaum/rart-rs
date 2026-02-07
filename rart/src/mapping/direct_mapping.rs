@@ -1,7 +1,7 @@
 use crate::mapping::NodeMapping;
 use crate::mapping::indexed_mapping::IndexedMapping;
 use crate::utils::bitarray::BitArray;
-use crate::utils::bitset::{Bitset64, BitsetTrait};
+use crate::utils::bitset::{Bitset64, BitsetOnesIter, BitsetTrait};
 
 pub struct DirectMapping<N> {
     pub(crate) children: BitArray<N, 256, Bitset64<4>>,
@@ -20,30 +20,24 @@ impl<N> IntoIterator for DirectMapping<N> {
 
     fn into_iter(self) -> Self::IntoIter {
         DirectMappingIntoIter {
+            key_iter: self.children.bitset.iter(),
             mapping: self,
-            current_key: 0,
         }
     }
 }
 
 pub struct DirectMappingIntoIter<N> {
+    key_iter: BitsetOnesIter<u64, 4>,
     mapping: DirectMapping<N>,
-    current_key: usize,
 }
 
 impl<N> Iterator for DirectMappingIntoIter<N> {
     type Item = (u8, N);
 
     fn next(&mut self) -> Option<Self::Item> {
-        while self.current_key < 256 {
-            let key = self.current_key as u8;
-            self.current_key += 1;
-
-            if let Some(child) = self.mapping.delete_child(key) {
-                return Some((key, child));
-            }
-        }
-        None
+        let key = self.key_iter.next()? as u8;
+        let child = self.mapping.delete_child(key)?;
+        Some((key, child))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -74,30 +68,24 @@ impl<N> DirectMapping<N> {
     #[inline]
     pub fn iter(&self) -> DirectMappingIter<'_, N> {
         DirectMappingIter {
+            key_iter: self.children.bitset.iter(),
             mapping: self,
-            current_key: 0,
         }
     }
 }
 
 pub struct DirectMappingIter<'a, N> {
+    key_iter: BitsetOnesIter<u64, 4>,
     mapping: &'a DirectMapping<N>,
-    current_key: usize,
 }
 
 impl<'a, N> Iterator for DirectMappingIter<'a, N> {
     type Item = (u8, &'a N);
 
     fn next(&mut self) -> Option<Self::Item> {
-        while self.current_key < 256 {
-            let key = self.current_key as u8;
-            self.current_key += 1;
-
-            if let Some(child) = self.mapping.children.get(key as usize) {
-                return Some((key, child));
-            }
-        }
-        None
+        let key = self.key_iter.next()? as u8;
+        let child = self.mapping.children.get(key as usize)?;
+        Some((key, child))
     }
 }
 
@@ -146,5 +134,16 @@ mod tests {
             assert_eq!(dm.delete_child(i), Some(i));
             assert_eq!(dm.seek_child(i), None);
         }
+    }
+
+    #[test]
+    fn iter_preserves_key_order_for_sparse_children() {
+        let mut dm = super::DirectMapping::new();
+        for key in [200u8, 3, 250, 17, 128] {
+            dm.add_child(key, key);
+        }
+
+        let keys: Vec<u8> = dm.iter().map(|(k, _)| k).collect();
+        assert_eq!(keys, vec![3, 17, 128, 200, 250]);
     }
 }

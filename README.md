@@ -123,6 +123,14 @@ Performance characteristics for lookup patterns and iteration:
 - *Note: ART is heavily optimized for ordered key probes from the caller (leveraging cache locality of prefixes). Iterating the ART itself requires reconstructing keys from compressed paths, which is more expensive than BTree leaf traversal.*
 - *ART still provides ordered key semantics (sorted traversal/range behavior), unlike `HashMap`.*
 
+**Value-only Iteration** (`values_iter`, 32k elements):
+
+- ART: ~2.1ns/element
+- BLART: ~1.9ns/element
+- BTreeMap: ~0.85ns/element
+- HashMap: ~0.64ns/element
+- *`values_iter` avoids key reconstruction and is ~4x faster than ART full iteration in this run (~8.2ns/element).*
+
 ### Versioned Tree Performance (VersionedAdaptiveRadixTree)
 
 Optimized for transactional workloads with copy-on-write semantics:

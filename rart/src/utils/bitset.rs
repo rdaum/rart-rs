@@ -45,6 +45,15 @@ where
     bitset: [StorageType; STORAGE_WIDTH],
 }
 
+pub struct BitsetOnesIter<StorageType, const STORAGE_WIDTH: usize>
+where
+    StorageType: PrimInt,
+{
+    bitset: [StorageType; STORAGE_WIDTH],
+    word_idx: usize,
+    current_word: u64,
+}
+
 impl<StorageType, const STORAGE_WIDTH: usize> Bitset<StorageType, STORAGE_WIDTH>
 where
     StorageType: PrimInt,
@@ -56,17 +65,32 @@ where
     }
 
     #[allow(dead_code)]
-    pub fn iter(&self) -> impl Iterator<Item = usize> + '_ {
-        self.bitset.iter().enumerate().flat_map(|(i, b)| {
-            (0..Self::STORAGE_BIT_WIDTH).filter_map(move |j| {
-                let b: u64 = b.to_u64().unwrap();
-                if (b) & (1 << j) != 0 {
-                    Some((i << Self::BIT_SHIFT) + j)
-                } else {
-                    None
-                }
-            })
-        })
+    pub fn iter(&self) -> BitsetOnesIter<StorageType, STORAGE_WIDTH> {
+        BitsetOnesIter {
+            bitset: self.bitset,
+            word_idx: 0,
+            current_word: 0,
+        }
+    }
+}
+
+impl<StorageType, const STORAGE_WIDTH: usize> Iterator
+    for BitsetOnesIter<StorageType, STORAGE_WIDTH>
+where
+    StorageType: PrimInt,
+{
+    type Item = usize;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.current_word == 0 {
+            let word = self.bitset.get(self.word_idx)?;
+            self.current_word = word.to_u64().unwrap();
+            self.word_idx += 1;
+        }
+
+        let bit_idx = self.current_word.trailing_zeros() as usize;
+        self.current_word &= self.current_word - 1;
+        Some(((self.word_idx - 1) << Bitset::<StorageType, STORAGE_WIDTH>::BIT_SHIFT) + bit_idx)
     }
 }
 

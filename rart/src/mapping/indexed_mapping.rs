@@ -5,7 +5,7 @@ use crate::mapping::direct_mapping::DirectMapping;
 use crate::mapping::keyed_mapping::KeyedMapping;
 use crate::mapping::sorted_keyed_mapping::SortedKeyedMapping;
 use crate::utils::bitarray::BitArray;
-use crate::utils::bitset::{Bitset64, BitsetTrait};
+use crate::utils::bitset::{Bitset64, BitsetOnesIter, BitsetTrait};
 
 /// A mapping from keys to separate child pointers. 256 keys, usually 48 children.
 pub struct IndexedMapping<N, const WIDTH: usize, Bitset: BitsetTrait> {
@@ -26,15 +26,15 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> IntoIterator for IndexedMapping
 
     fn into_iter(self) -> Self::IntoIter {
         IndexedMappingIntoIter {
+            key_iter: self.child_ptr_indexes.bitset.iter(),
             mapping: self,
-            current_key: 0,
         }
     }
 }
 
 pub struct IndexedMappingIntoIter<N, const WIDTH: usize, Bitset: BitsetTrait> {
+    key_iter: BitsetOnesIter<u64, 4>,
     mapping: IndexedMapping<N, WIDTH, Bitset>,
-    current_key: usize,
 }
 
 impl<N, const WIDTH: usize, Bitset: BitsetTrait> Iterator
@@ -43,15 +43,9 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> Iterator
     type Item = (u8, N);
 
     fn next(&mut self) -> Option<Self::Item> {
-        while self.current_key < 256 {
-            let key = self.current_key as u8;
-            self.current_key += 1;
-
-            if let Some(child) = self.mapping.delete_child(key) {
-                return Some((key, child));
-            }
-        }
-        None
+        let key = self.key_iter.next()? as u8;
+        let child = self.mapping.delete_child(key)?;
+        Some((key, child))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -126,15 +120,15 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> IndexedMapping<N, WIDTH, Bitset
 
     pub fn iter(&self) -> IndexedMappingIter<'_, N, WIDTH, Bitset> {
         IndexedMappingIter {
+            key_iter: self.child_ptr_indexes.bitset.iter(),
             mapping: self,
-            current_key: 0,
         }
     }
 }
 
 pub struct IndexedMappingIter<'a, N, const WIDTH: usize, Bitset: BitsetTrait> {
+    key_iter: BitsetOnesIter<u64, 4>,
     mapping: &'a IndexedMapping<N, WIDTH, Bitset>,
-    current_key: usize,
 }
 
 impl<'a, N, const WIDTH: usize, Bitset: BitsetTrait> Iterator
@@ -143,15 +137,9 @@ impl<'a, N, const WIDTH: usize, Bitset: BitsetTrait> Iterator
     type Item = (u8, &'a N);
 
     fn next(&mut self) -> Option<Self::Item> {
-        while self.current_key < 256 {
-            let key = self.current_key as u8;
-            self.current_key += 1;
-
-            if let Some(pos) = self.mapping.child_ptr_indexes.get(key as usize) {
-                return Some((key, &self.mapping.children[*pos as usize]));
-            }
-        }
-        None
+        let key = self.key_iter.next()? as u8;
+        let pos = self.mapping.child_ptr_indexes.get(key as usize)?;
+        Some((key, &self.mapping.children[*pos as usize]))
     }
 }
 
@@ -231,5 +219,16 @@ mod test {
         for i in 0..48 {
             debug_assert!(mapping.seek_child(i as u8).is_none());
         }
+    }
+
+    #[test]
+    fn iter_preserves_key_order_for_sparse_children() {
+        let mut mapping = super::IndexedMapping::<u8, 48, Bitset16<3>>::new();
+        for key in [200u8, 3, 47, 17, 129] {
+            mapping.add_child(key, key);
+        }
+
+        let keys: Vec<u8> = mapping.iter().map(|(k, _)| k).collect();
+        assert_eq!(keys, vec![3, 17, 47, 129, 200]);
     }
 }

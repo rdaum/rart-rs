@@ -4,6 +4,27 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Optimized Node48/Node256 child iteration to traverse only occupied slots while preserving sorted key order.
+  - Added a set-bit iterator in `utils/bitset.rs` and switched `DirectMapping`/`IndexedMapping` iterators to use it.
+  - Removed linear `0..255` probing from these hot iteration paths.
+
+### Added
+
+- Regression tests to verify sparse-key iteration order is preserved:
+  - `mapping::direct_mapping::tests::iter_preserves_key_order_for_sparse_children`
+  - `mapping::indexed_mapping::test::iter_preserves_key_order_for_sparse_children`
+
+### Performance
+
+- `values_iteration_numeric/art_values` improved in local Criterion runs after sparse iteration changes:
+  - 256: ~2.02 ns/elem
+  - 1024: ~2.02 ns/elem
+  - 4096: ~1.97 ns/elem
+  - 32768: ~2.09 ns/elem
+- On 32768 elements, `values_iter()` is ~4x faster than ART full iteration (~2.09 vs ~8.25 ns/elem).
+
 ## [0.3.1] - 2026-02-06
 
 ### Fixed

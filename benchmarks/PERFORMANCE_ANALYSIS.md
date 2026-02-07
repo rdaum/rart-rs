@@ -113,6 +113,17 @@ This distinction is critical:
 - **BTree: ~29µs** (~0.9ns/element)
 - **ART: ~281µs** (~8.6ns/element)
 
+**Value-only Iteration (32k elements, `values_iter`):**
+
+- **HashMap: ~21.0µs** (~0.64ns/element)
+- **BTreeMap: ~28.0µs** (~0.85ns/element)
+- **BLART: ~62.8µs** (~1.92ns/element)
+- **ART: ~68.5µs** (~2.09ns/element)
+
+**Observation**:
+- `values_iter` removes key reconstruction overhead and is ~4x faster than ART full iteration in this run.
+- Recent sparse-iterator changes for Node48/Node256 improved ART value-only iteration by about 10-14% versus the previous local baseline.
+
 **Range Iteration (scanning ~1k elements in 4k tree):**
 
 - **BTree: ~3.8µs**
