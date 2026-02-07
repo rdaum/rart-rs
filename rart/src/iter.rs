@@ -317,10 +317,11 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> Iterator for IterInne
             if let Some(start_bound) = self.start_bound.as_ref() {
                 let satisfies_start = match start_bound {
                     Bound::Included(start_key) => {
-                        Self::key_order(&key, start_key) >= std::cmp::Ordering::Equal
+                        IterInner::<K, P, V>::key_order(&key, start_key)
+                            >= std::cmp::Ordering::Equal
                     }
                     Bound::Excluded(start_key) => {
-                        Self::key_order(&key, start_key) > std::cmp::Ordering::Equal
+                        IterInner::<K, P, V>::key_order(&key, start_key) > std::cmp::Ordering::Equal
                     }
                     Bound::Unbounded => true,
                 };
@@ -329,7 +330,6 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> Iterator for IterInne
                 }
                 self.start_bound = None;
             }
-
             return Some((key, v));
         }
     }

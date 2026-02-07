@@ -7,10 +7,13 @@ mod simd_keys {
 
     simd_runtime_generate!(
         pub fn simdeez_find_insert_pos(key: u8, keys: &[u8], ff_mask_out: u32) -> Option<usize> {
-            let key_cmp_vec = S::Vi8::set1(key as i8);
+            // Flip the sign bit to allow signed comparison to work like unsigned
+            let key_cmp_vec = S::Vi8::set1((key ^ 0x80) as i8);
             let i8_keys: &[i8] = unsafe { std::mem::transmute(keys) };
             let key_vec = S::Vi8::load_from_slice(i8_keys);
-            let results = key_cmp_vec.cmp_lt(key_vec);
+            // Also flip the sign bit of the loaded keys. -128 is 0x80 as i8.
+            let key_vec_unsigned = key_vec ^ S::Vi8::set1(-128);
+            let results = key_cmp_vec.cmp_lt(key_vec_unsigned);
             let bitfield = results.get_mask() & (ff_mask_out as u32);
             if bitfield != 0 {
                 let idx = bitfield.trailing_zeros() as usize;

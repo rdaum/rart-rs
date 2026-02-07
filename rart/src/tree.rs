@@ -1009,4 +1009,47 @@ mod tests {
 
         assert_eq!(art_values, btree_values);
     }
+
+    #[test]
+    fn test_range_to_inclusive_fuzz_regression() {
+        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, u64>::new();
+        tree.insert(248u64, 7_800_515_995_666_006_788);
+        tree.insert(2_678_072_818_765_473_061u64, 2_387_225_703_656_202_751);
+        tree.insert(16_100_209_717_274_439_535u64, 8_027_225_910_236_114_799);
+        tree.insert(6_196_794_136_686_718_831u64, 18_446_744_073_709_514_607);
+        tree.insert(12_219_677_559_081_489_409u64, 4_683_546_028_065_928_715);
+
+        let end: ArrayKey<16> = 67_478_703_180u64.into();
+        let got: Vec<u64> = tree.range(..=end).map(|(_, v)| *v).collect();
+
+        assert_eq!(got, vec![7_800_515_995_666_006_788]);
+    }
+
+    #[test]
+    fn test_range_from_fuzz_regression() {
+        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, u64>::new();
+        let mut btree = BTreeMap::<u64, u64>::new();
+
+        let pairs = [
+            (3_124_419_705_906_079_527u64, 3_110_813_966_761_929_515u64),
+            (18_446_505_647_410_981_675u64, 23_171_125_240_484_607u64),
+            (14_251_014_049_101_104_581u64, 18_446_743_327_766_348_229u64),
+            (2_882_303_757_842_906_925u64, 71_779_585_756_702_509u64),
+            (12_297_829_382_473_187_410u64, 682u64),
+        ];
+
+        for (k, v) in pairs {
+            tree.insert(k, v);
+            btree.insert(k, v);
+        }
+
+        let start_raw = 5_931_894_175_636_062_208u64;
+        let start_key: ArrayKey<16> = start_raw.into();
+
+        let art_values: Vec<u64> = tree.range(start_key..).map(|(_, v)| *v).collect();
+        let btree_values: Vec<u64> = btree.range(start_raw..).map(|(_, v)| *v).collect();
+
+        assert_eq!(art_values, btree_values);
+    }
+
 }
