@@ -97,21 +97,31 @@ let key4: VectorKey = 1337u32.into();
 
 ## Performance
 
+Benchmark environment: NVIDIA GB10 (NVIDIA Spark equivalent, ASUS GX10 variant), ARM Cortex-X925, Criterion.rs.
+
 ### Single-threaded Performance (AdaptiveRadixTree)
 
-Performance characteristics for sequential and random access patterns:
+Performance characteristics for lookup patterns and iteration:
 
-**Sequential access**:
+**Sequential Key Lookup** (externally supplied keys in order):
 
-- ART: ~2ns (10x faster than random access)
-- HashMap: ~10ns
+- ART: ~1.7ns (13x faster than BTree, 4x faster than HashMap)
+- HashMap: ~7.4ns
 - BTree: ~22ns
 
-**Random access**:
+**Random Key Lookup**:
 
-- ART: ~14ns (comparable to HashMap)
-- HashMap: ~14ns
-- BTree: ~55ns
+- ART: ~19ns (comparable to HashMap)
+- HashMap: ~18ns
+- BTree: ~56ns
+
+**Iteration** (key discovery):
+
+- ART: ~8.6ns (slower than peers)
+- HashMap: ~0.6ns
+- BTree: ~0.9ns
+- *Note: ART is heavily optimized for ordered key probes from the caller (leveraging cache locality of prefixes). Iterating the ART itself requires reconstructing keys from compressed paths, which is more expensive than BTree leaf traversal.*
+- *ART still provides ordered key semantics (sorted traversal/range behavior), unlike `HashMap`.*
 
 ### Versioned Tree Performance (VersionedAdaptiveRadixTree)
 
@@ -122,22 +132,21 @@ Optimized for transactional workloads with copy-on-write semantics:
 _Comparison against im::HashMap (HAMT) and im::OrdMap (B-tree), both persistent data structures with
 structural sharing:_
 
-- Small datasets (256-1024 elements): VersionedART 8.7ns vs im::HashMap 15.2ns and im::OrdMap 13.6ns
-- Medium datasets (16k elements): VersionedART 17.1ns vs im::HashMap 21.5ns and im::OrdMap 27.5ns
-- Generally 1.3-1.7x faster than alternatives across most workloads
+- Small datasets (256 elements): VersionedART 8.9ns vs im::HashMap 16.1ns and im::OrdMap 17.4ns
+- Medium datasets (16k elements): VersionedART 16.4ns vs im::HashMap 24.3ns and im::OrdMap 31.8ns
+- In these benchmarks, 1.3-1.9x faster for lookup-heavy workloads
 
 **Sequential Scanning**:
 
 - Better cache locality due to radix tree structure vs hash-based (HAMT) and tree-based access
-- 256 elements: VersionedART 1.2µs vs im types 2.2µs (1.8x faster)
-- 1024 elements: VersionedART 7.2µs vs im::HashMap 9.9µs/im::OrdMap 10.7µs (1.4-1.5x faster)
-- 16k elements: VersionedART 149µs vs im::HashMap 260µs/im::OrdMap 289µs (1.7-1.9x faster)
+- 256 elements: VersionedART 1.0µs vs im types 1.9-2.7µs (2x faster)
+- 16k elements: VersionedART 119µs vs im::HashMap 205µs/im::OrdMap 401µs (1.7-3.3x faster)
 
 **Snapshot Operations**:
 
-- O(1) snapshots: ~2.8ns consistently regardless of tree size (256-16k elements)
-- im::HashMap clone: ~6.2ns (2.2x slower)
-- im::OrdMap clone: ~2.8ns (comparable performance)
+- O(1) snapshots: ~8.6ns consistently regardless of tree size
+- im::HashMap clone: ~16.2ns (2x slower)
+- im::OrdMap clone: ~8.6ns (comparable performance)
 
 **Persistent Structure Trade-offs**:
 
@@ -152,8 +161,6 @@ requiring point-in-time consistency and efficient structural sharing.
 
 **[📊 View Complete Performance Analysis](benchmarks/PERFORMANCE_ANALYSIS.md)** - Detailed
 benchmarks, technical insights, and workload recommendations.
-
-_Benchmarks run on AMD Ryzen 9 7940HS using Criterion.rs_
 
 ## Architecture
 
