@@ -6,6 +6,13 @@ support for both single-threaded and versioned concurrent data structures.
 [![Crates.io](https://img.shields.io/crates/v/rart.svg)](https://crates.io/crates/rart)
 [![Documentation](https://docs.rs/rart/badge.svg)](https://docs.rs/rart)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/rdaum/rart-rs/blob/main/LICENSE)
+[![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-pink)](https://github.com/sponsors/rdaum)
+
+If `rart` is useful in your work, consider sponsoring development on GitHub Sponsors.
+> [!NOTE]
+> I am also available for consulting in systems engineering, profiling and performance tuning, and
+> Rust development (10 years at Google, 25+ years in software development). If this project is
+> useful or interesting for your team, feel free to reach out.
 
 ## Overview
 
