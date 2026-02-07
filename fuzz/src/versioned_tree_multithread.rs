@@ -118,7 +118,10 @@ fn thread_worker(
     ops: Vec<ThreadOp>,
     mut reference_map: HashMap<usize, usize>,
 ) {
-    let mut nested_snapshots: Vec<VersionedAdaptiveRadixTree<ArrayKey<16>, usize>> = Vec::new();
+    let mut nested_snapshots: Vec<(
+        VersionedAdaptiveRadixTree<ArrayKey<16>, usize>,
+        HashMap<usize, usize>,
+    )> = Vec::new();
 
     for op in ops {
         match op {
@@ -128,16 +131,18 @@ fn thread_worker(
                 reference_map.insert(key, val);
 
                 // Also modify any nested snapshots
-                for nested in &mut nested_snapshots {
+                for (nested, nested_reference) in &mut nested_snapshots {
                     nested.insert(key, val);
+                    nested_reference.insert(key, val);
                 }
             }
             ThreadOp::Remove { key } => {
                 snapshot.remove(key);
                 reference_map.remove(&key);
 
-                for nested in &mut nested_snapshots {
+                for (nested, nested_reference) in &mut nested_snapshots {
                     nested.remove(key);
+                    nested_reference.remove(&key);
                 }
             }
             ThreadOp::Get { key } => {
@@ -149,10 +154,11 @@ fn thread_worker(
                 );
 
                 // Check nested snapshots too
-                for (i, nested) in nested_snapshots.iter().enumerate() {
+                for (i, (nested, nested_reference)) in nested_snapshots.iter().enumerate() {
                     let nested_result = nested.get(key).copied();
+                    let nested_expected = nested_reference.get(&key).copied();
                     assert_eq!(
-                        nested_result, reference_result,
+                        nested_result, nested_expected,
                         "Thread {thread_id} Nested snapshot {i} Get mismatch for key {key}"
                     );
                 }
@@ -201,7 +207,7 @@ fn thread_worker(
                 // Keep the nested snapshot around for later operations
                 if nested_snapshots.len() < 5 {
                     // Limit number of nested snapshots
-                    nested_snapshots.push(nested_snapshot);
+                    nested_snapshots.push((nested_snapshot, nested_reference));
                 }
             }
         }
