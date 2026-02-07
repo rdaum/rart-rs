@@ -10,6 +10,7 @@
 - **Memory**: High-bandwidth memory (HBM3/LPDDR5X class)
 
 **Bench Framework**: Criterion.rs statistical benchmarking
+**Run Profile**: Quick profile (`RART_BENCH_FULL` unset; shorter sample/warmup/measurement windows). Use `RART_BENCH_FULL=1` for longer high-confidence runs.
 
 ## Executive Summary
 
@@ -61,9 +62,9 @@ This analysis compares three data structures across different access patterns:
 
 **Results for 32k elements:**
 
-- **ART: 1.7ns** (4x faster than HashMap, 13x faster than BTree)
+- **ART: 1.6ns** (4.6x faster than HashMap, 13x faster than BTree)
 - **HashMap: 7.4ns** (solid performance)
-- **BTree: 22.3ns** (slowest)
+- **BTree: 22.2ns** (slowest)
 
 **Analysis**: ART is very fast for ordered key probes supplied by the caller. Prefix compression and cache-local traversal keep upper nodes hot for repeated lookups.
 
@@ -77,11 +78,11 @@ This analysis compares three data structures across different access patterns:
 
 **Results:**
 
-- **BTree: 19ns** (fastest for deletion)
-- **ART: 26ns** (competitive)
-- **HashMap: 27ns** (comparable to ART)
+- **BTree: 19.8ns** (fastest for deletion)
+- **ART: 27.1ns** (runner-up)
+- **HashMap: 31.2ns**
 
-**Analysis**: BTree's balanced structure excels at deletions. ART and HashMap are very close in performance here.
+**Analysis**: BTree's balanced structure excels at deletions. In this run, ART was faster than HashMap for sequential deletes.
 
 ---
 
@@ -91,11 +92,11 @@ This analysis compares three data structures across different access patterns:
 
 **Results:**
 
-- **HashMap: 82ns** (fastest)
-- **ART: 96ns** (17% slower than HashMap)
-- **BTree: 202ns** (2.5x slower than HashMap)
+- **HashMap: 79ns** (fastest)
+- **ART: 298ns** (3.8x slower than HashMap)
+- **BTree: 329ns** (4.2x slower than HashMap)
 
-**Analysis**: HashMap leads in random deletion, but ART is quite close. BTree struggles with the rebalancing overhead in random deletion scenarios.
+**Analysis**: HashMap leads random deletion by a wide margin in this run. ART and BTree both trail significantly.
 
 ---
 
@@ -109,16 +110,16 @@ This distinction is critical:
 
 **Full Iteration (32k elements):**
 
-- **HashMap: ~21µs** (~0.6ns/element)
-- **BTree: ~29µs** (~0.9ns/element)
-- **ART: ~281µs** (~8.6ns/element)
+- **HashMap: ~20.2µs** (~0.62ns/element)
+- **BTree: ~28.3µs** (~0.86ns/element)
+- **ART: ~268.3µs** (~8.2ns/element)
 
 **Value-only Iteration (32k elements, `values_iter`):**
 
-- **HashMap: ~21.0µs** (~0.64ns/element)
-- **BTreeMap: ~28.0µs** (~0.85ns/element)
-- **BLART: ~62.8µs** (~1.92ns/element)
-- **ART: ~68.5µs** (~2.09ns/element)
+- **HashMap: ~20.5µs** (~0.63ns/element)
+- **BTreeMap: ~28.5µs** (~0.87ns/element)
+- **BLART: ~64.1µs** (~1.96ns/element)
+- **ART: ~67.1µs** (~2.05ns/element)
 
 **Observation**:
 - `values_iter` removes key reconstruction overhead and is ~4x faster than ART full iteration in this run.
@@ -133,8 +134,8 @@ This distinction is critical:
 Recent optimizations have improved range iteration performance by ~40% (down from ~66µs), and full start-bound seeking is now implemented. However, a performance gap remains compared to BTree's highly optimized leaf traversal.
 
 **Implication**:
-- **Use `seq_get` (Sequential Get)** for ordered probes over externally supplied keys; ART is fastest in this benchmark (~1.7ns/op).
-- **Use `iter()`** if you need to discover keys, but be aware of the higher cost (~8.6ns/op).
+- **Use `seq_get` (Sequential Get)** for ordered probes over externally supplied keys; ART is fastest in this benchmark (~1.6ns/op).
+- **Use `iter()`** if you need to discover keys, but be aware of the higher cost (~8.2ns/op).
 - For workloads primarily dominated by *ordered range scans*, BTree currently retains an advantage.
 
 ## Performance Characteristics by Use Case
@@ -144,10 +145,10 @@ Recent optimizations have improved range iteration performance by ~40% (down fro
 | **Random Insert**      | HashMap (140ns)         | ART (326ns)    | 2.3x faster     |
 | **Random Get (Small)** | HashMap (18ns)          | ART (19ns)     | Comparable      |
 | **Random Get (Large)** | HashMap (24ns)          | ART (40ns)     | 1.7x faster     |
-| **Sequential Key Lookup**| **ART (1.7ns)**         | HashMap (7.4ns)| **4.3x faster** |
-| **Sequential Delete**  | BTree (19ns)            | ART (26ns)     | 27% faster      |
-| **Random Delete**      | HashMap (82ns)          | ART (96ns)     | 17% faster      |
-| **Iteration**          | HashMap (~0.6ns)        | BTree (~0.9ns) | ART is slower (~8.6ns) |
+| **Sequential Key Lookup**| **ART (1.6ns)**         | HashMap (7.4ns)| **4.6x faster** |
+| **Sequential Delete**  | BTree (19.8ns)          | ART (27.1ns)   | 1.4x faster     |
+| **Random Delete**      | HashMap (79ns)          | ART (298ns)    | 3.8x faster     |
+| **Iteration**          | HashMap (~0.62ns)       | BTree (~0.86ns)| ART is slower (~8.2ns) |
 
 ## Recommendations by Workload
 
@@ -176,7 +177,7 @@ Recent optimizations have improved range iteration performance by ~40% (down fro
 
 ### ART's Sequential Key Lookup Advantage
 
-The 4x performance improvement in sequential lookups (1.7ns vs 7.4ns) reflects ART's core strength: prefix compression creates cache-friendly access patterns when keys share common prefixes. This applies when keys are provided to the `get()` method.
+The 4.6x performance improvement in sequential lookups (1.6ns vs 7.4ns) reflects ART's core strength: prefix compression creates cache-friendly access patterns when keys share common prefixes. This applies when keys are provided to the `get()` method.
 
 ### HashMap's Insert Dominance
 
@@ -196,7 +197,7 @@ BTree's balanced structure provides predictable deletion performance through est
 
 **ART provides an ordered alternative with strong lookup performance**, offering:
 
-- **Very fast sequential lookup performance (1.7ns)**
+- **Very fast sequential lookup performance (1.6ns)**
 - **Competitive random access**, often matching HashMap for small sets
 - **Faster than BTree** for most operations except sequential delete
 - **Ordered iteration** capabilities lacking in HashMap
@@ -218,10 +219,10 @@ The **VersionedAdaptiveRadixTree** provides concurrent versioned capabilities wi
 
 | Dataset Size | VersionedART | im::HashMap | im::OrdMap | Winner       | Performance Gap |
 | ------------ | ------------ | ----------- | ---------- | ------------ | --------------- |
-| 256          | 8.9ns        | 16.1ns      | 17.4ns     | VersionedART | 1.8x faster     |
-| 1,024        | 16.0ns       | 20.3ns      | 18.6ns     | VersionedART | 1.2x faster     |
-| 4,096        | 14.0ns       | 18.0ns      | 25.9ns     | VersionedART | 1.3x faster     |
-| 16,384       | 16.4ns       | 24.3ns      | 31.8ns     | VersionedART | 1.5x faster     |
+| 256          | 8.9ns        | 18.8ns      | 17.4ns     | VersionedART | 2.0-2.1x faster |
+| 1,024        | 15.8ns       | 23.5ns      | 18.5ns     | VersionedART | 1.2-1.5x faster |
+| 4,096        | 13.9ns       | 22.1ns      | 26.1ns     | VersionedART | 1.6-1.9x faster |
+| 16,384       | 16.4ns       | 28.5ns      | 32.0ns     | VersionedART | 1.7-1.9x faster |
 
 **Analysis**: VersionedART consistently outperforms `im` collections for lookups across all dataset sizes. The radix tree structure allows for very fast path traversal even with the overhead of versioning.
 
@@ -236,9 +237,9 @@ The **VersionedAdaptiveRadixTree** provides concurrent versioned capabilities wi
 | Dataset Size | VersionedART | im::HashMap | im::OrdMap | Performance Advantage |
 | ------------ | ------------ | ----------- | ---------- | --------------------- |
 | 256          | 1.0µs        | 1.9µs       | 2.7µs      | 1.9x faster           |
-| 1,024        | 6.3µs        | 8.6µs       | 13.3µs     | 1.4x faster           |
-| 4,096        | 32.7µs       | 39.5µs      | 76.8µs     | 1.2x faster           |
-| 16,384       | 119µs        | 205µs       | 401µs      | 1.7x faster           |
+| 1,024        | 6.2µs        | 8.6µs       | 13.3µs     | 1.4x faster           |
+| 4,096        | 32.8µs       | 39.5µs      | 77.4µs     | 1.2x faster           |
+| 16,384       | 122µs        | 209µs       | 398µs      | 1.7x faster           |
 
 **Analysis**: In this run, VersionedART is faster than both `im::HashMap` and `im::OrdMap` for sequential scans, with up to about 2x improvement depending on dataset size.
 
@@ -252,8 +253,8 @@ The **VersionedAdaptiveRadixTree** provides concurrent versioned capabilities wi
 
 | Dataset Size | VersionedART Snapshot | im::HashMap Clone | im::OrdMap Clone | Advantage                |
 | ------------ | --------------------- | ----------------- | ---------------- | ------------------------ |
-| 256          | 8.5ns                 | 16.2ns            | 8.6ns            | 1.9x faster than HashMap |
-| 16,384       | 8.6ns                 | 16.1ns            | 8.6ns            | 1.9x faster than HashMap |
+| 256          | 8.6ns                 | 16.2ns            | 8.6ns            | 1.9x faster than HashMap |
+| 16,384       | 8.6ns                 | 16.2ns            | 8.5ns            | 1.9x faster than HashMap |
 
 **Analysis**: VersionedART provides O(1) snapshots with consistent ~8.6ns performance, matching `im::OrdMap` and outperforming `im::HashMap` clone time in this benchmark.
 
@@ -267,10 +268,10 @@ The **VersionedAdaptiveRadixTree** provides concurrent versioned capabilities wi
 
 | Mutations | VersionedART | im::HashMap | im::OrdMap | Trade-off Analysis       |
 | --------- | ------------ | ----------- | ---------- | ------------------------ |
-| 10        | 22.0µs       | 7.1µs       | 4.8µs      | im types 3-4x faster     |
-| 50        | 66.6µs       | 36.5µs      | 24.7µs     | im types 1.5-2.7x faster |
-| 100       | 109.4µs      | 73.7µs      | 51.1µs     | im types 1.5-2.1x faster |
-| 200       | 249.8µs      | 149.0µs     | 103.8µs    | im types 1.4-2.4x faster |
+| 10        | 21.7µs       | 7.1µs       | 4.9µs      | im types 3-4x faster     |
+| 50        | 66.4µs       | 36.2µs      | 25.3µs     | im types 1.8-2.6x faster |
+| 100       | 106.3µs      | 72.1µs      | 51.4µs     | im types 1.5-2.1x faster |
+| 200       | 243.3µs      | 146.0µs     | 107.1µs    | im types 1.4-2.3x faster |
 
 **Analysis**: The `im` types perform better for mutation-heavy workloads. VersionedART's CoW radix tree approach has more overhead for write-heavy scenarios.
 
@@ -284,9 +285,9 @@ The **VersionedAdaptiveRadixTree** provides concurrent versioned capabilities wi
 
 | Snapshots | VersionedART | im::HashMap | im::OrdMap | Memory Efficiency                   |
 | --------- | ------------ | ----------- | ---------- | ----------------------------------- |
-| 5         | 52.4µs       | 22.4µs      | 19.9µs     | Lower latency vs shared structure   |
-| 10        | 102.8µs      | 44.9µs      | 39.6µs     | 2.3x latency for structural sharing |
-| 20        | 123.3µs      | 89.8µs      | 80.1µs     | 1.4x latency for structural sharing |
+| 5         | 51.9µs       | 22.4µs      | 19.9µs     | Lower latency vs shared structure   |
+| 10        | 103.4µs      | 44.6µs      | 40.0µs     | 2.3x latency for structural sharing |
+| 20        | 124.7µs      | 89.5µs      | 80.4µs     | 1.4x latency for structural sharing |
 
 **Analysis**: Similar to mutation workloads, `im` types show lower latency. VersionedART trades higher mutation/snapshot latency for stronger read/scan performance.
 
