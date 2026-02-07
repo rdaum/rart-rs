@@ -46,6 +46,10 @@ harness = false
 name = "iter_bench"
 harness = false
 
+[[bench]]
+name = "prefix_bench"
+harness = false
+
 # Miri test targets for memory safety validation
 # Run with: cargo +nightly miri test -p rart --test miri_mapping_tests --no-default-features
 [[test]]

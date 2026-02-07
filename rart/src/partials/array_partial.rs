@@ -115,7 +115,7 @@ impl<const SIZE: usize> Partial for ArrPartial<SIZE> {
     where
         K: KeyTrait<PartialType = Self> + 'a,
     {
-        let len = min(self.len, key.length_at(0));
+        let len = min(self.len, key.length_at(at_depth));
         let len = min(len, SIZE);
         let mut idx = 0;
         while idx < len {

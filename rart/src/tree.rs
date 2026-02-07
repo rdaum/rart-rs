@@ -938,6 +938,18 @@ mod tests {
     }
 
     #[test]
+    fn test_prefix_iter_short_prefix_regression() {
+        let mut tree = AdaptiveRadixTree::<VectorKey, i32>::new();
+        tree.insert_k(&VectorKey::new_from_slice(&[0x01, 0x02, b'a']), 1);
+        tree.insert_k(&VectorKey::new_from_slice(&[0x01, 0x02, b'b']), 2);
+        tree.insert_k(&VectorKey::new_from_slice(&[0x01, 0x03, b'c']), 3);
+
+        let prefix = VectorKey::new_from_slice(&[0x01, 0x02]);
+        let got: Vec<i32> = tree.prefix_iter_k(&prefix).map(|(_, v)| *v).collect();
+        assert_eq!(got, vec![1, 2]);
+    }
+
+    #[test]
     fn test_longest_prefix_match() {
         let mut tree = AdaptiveRadixTree::<VectorKey, i32>::new();
         tree.insert_k(&VectorKey::new_from_slice(b"cat"), 10);

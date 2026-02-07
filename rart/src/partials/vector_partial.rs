@@ -86,7 +86,7 @@ impl Partial for VectorPartial {
     where
         K: KeyTrait<PartialType = Self> + 'a,
     {
-        let len = min(self.data.len(), key.length_at(0));
+        let len = min(self.data.len(), key.length_at(at_depth));
         let mut idx = 0;
         while idx < len {
             if self.data[idx] != key.at(idx + at_depth) {
