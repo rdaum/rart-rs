@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-02-06
+
+### Fixed
+
+- **Critical**: Fixed a signed vs unsigned comparison bug in `SortedKeyedMapping` (Node4/Node16) SIMD implementation.
+  - Keys with the high bit set (e.g., `>= 128`) were incorrectly treated as negative integers during insertion search, breaking the sorted order of children.
+  - This caused iteration and range queries to return results out of lexicographical order or terminate early.
+  - Fixed by flipping the sign bit before SIMD comparison to enforce unsigned ordering.
+- Restored and validated O(log N) range iteration optimizations (stopping immediately at end bound, skipping redundant start bound checks) which rely on correct sorted order.
+- Added regression tests for `RangeToInclusive` and `RangeFrom` edge cases discovered via fuzzing.
+
 ## [0.3.0] - 2026-02-06
 
 ### Added
