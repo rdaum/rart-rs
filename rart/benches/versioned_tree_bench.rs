@@ -1,6 +1,6 @@
 /// Comprehensive benchmarks comparing VersionedAdaptiveRadixTree against persistent data structures
 /// from the `im` crate (im::HashMap and im::OrdMap) for MVCC-style workloads.
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use rand::{Rng, rng};
@@ -10,6 +10,21 @@ use rart::VersionedAdaptiveRadixTree;
 use rart::keys::array_key::ArrayKey;
 
 const TREE_SIZES: [usize; 4] = [1 << 8, 1 << 10, 1 << 12, 1 << 14];
+
+fn full_bench_profile() -> bool {
+    std::env::var("RART_BENCH_FULL").as_deref() == Ok("1")
+}
+
+fn criterion_config() -> Criterion {
+    if full_bench_profile() {
+        Criterion::default()
+    } else {
+        Criterion::default()
+            .sample_size(30)
+            .warm_up_time(Duration::from_secs(1))
+            .measurement_time(Duration::from_secs(2))
+    }
+}
 
 /// Benchmark lookup operations
 pub fn lookup_comparison(c: &mut Criterion) {
@@ -401,11 +416,8 @@ pub fn snapshot_structural_sharing(c: &mut Criterion) {
 }
 
 criterion_group!(
-    versioned_benches,
-    lookup_comparison,
-    snapshot_creation,
-    sequential_scan_comparison,
-    mutations_per_snapshot,
-    snapshot_structural_sharing
+    name = versioned_benches;
+    config = criterion_config();
+    targets = lookup_comparison, snapshot_creation, sequential_scan_comparison, mutations_per_snapshot, snapshot_structural_sharing
 );
 criterion_main!(versioned_benches);

@@ -3,6 +3,7 @@
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use std::collections::{BTreeMap, HashMap};
+use std::time::Duration;
 
 use blart::TreeMap;
 use rart::keys::array_key::ArrayKey;
@@ -10,6 +11,21 @@ use rart::tree::AdaptiveRadixTree;
 
 // Test different tree sizes to see how iteration scales
 const TREE_SIZES: [u64; 4] = [1 << 8, 1 << 10, 1 << 12, 1 << 15];
+
+fn full_bench_profile() -> bool {
+    std::env::var("RART_BENCH_FULL").as_deref() == Ok("1")
+}
+
+fn criterion_config() -> Criterion {
+    if full_bench_profile() {
+        Criterion::default()
+    } else {
+        Criterion::default()
+            .sample_size(30)
+            .warm_up_time(Duration::from_secs(1))
+            .measurement_time(Duration::from_secs(2))
+    }
+}
 
 /// Full tree iteration - consume all key-value pairs
 pub fn full_iteration_numeric(c: &mut Criterion) {
@@ -295,10 +311,8 @@ pub fn values_iteration_numeric(c: &mut Criterion) {
 }
 
 criterion_group!(
-    iteration_benches,
-    full_iteration_numeric,
-    range_iteration,
-    start_seek_positioning,
-    values_iteration_numeric
+    name = iteration_benches;
+    config = criterion_config();
+    targets = full_iteration_numeric, range_iteration, start_seek_positioning, values_iteration_numeric
 );
 criterion_main!(iteration_benches);

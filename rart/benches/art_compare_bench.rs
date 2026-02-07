@@ -2,7 +2,7 @@
 /// for various numbers of keys and for various operations.
 /// Takes a long time to run.
 use std::collections::{BTreeMap, HashMap};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use rand::prelude::SliceRandom;
@@ -13,6 +13,21 @@ use rart::keys::array_key::ArrayKey;
 use rart::tree::AdaptiveRadixTree;
 
 const TREE_SIZES: [u64; 4] = [1 << 10, 1 << 12, 1 << 15, 1 << 17];
+
+fn full_bench_profile() -> bool {
+    std::env::var("RART_BENCH_FULL").as_deref() == Ok("1")
+}
+
+fn criterion_config() -> Criterion {
+    if full_bench_profile() {
+        Criterion::default()
+    } else {
+        Criterion::default()
+            .sample_size(30)
+            .warm_up_time(Duration::from_secs(1))
+            .measurement_time(Duration::from_secs(2))
+    }
+}
 
 pub fn seq_insert(c: &mut Criterion) {
     let mut group = c.benchmark_group("seq_insert");
@@ -533,7 +548,19 @@ fn gen_cached_keys(
     keys
 }
 
-criterion_group!(delete_benches, seq_delete, rand_delete);
-criterion_group!(insert_benches, seq_insert, rand_insert);
-criterion_group!(retr_benches, seq_get, rand_get, rand_get_str);
+criterion_group!(
+    name = delete_benches;
+    config = criterion_config();
+    targets = seq_delete, rand_delete
+);
+criterion_group!(
+    name = insert_benches;
+    config = criterion_config();
+    targets = seq_insert, rand_insert
+);
+criterion_group!(
+    name = retr_benches;
+    config = criterion_config();
+    targets = seq_get, rand_get, rand_get_str
+);
 criterion_main!(retr_benches, insert_benches, delete_benches);

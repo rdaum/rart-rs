@@ -21,6 +21,22 @@ type KeyMapping16_8x2 = KeyedMapping<u64, 16, Bitset8<2>>;
 
 type KeyMapping4 = KeyedMapping<u64, 4, Bitset8<1>>;
 
+fn full_bench_profile() -> bool {
+    std::env::var("RART_BENCH_FULL").as_deref() == Ok("1")
+}
+
+fn microbench_sample_size() -> usize {
+    if full_bench_profile() { 4096 } else { 256 }
+}
+
+fn microbench_measurement_time() -> Duration {
+    if full_bench_profile() {
+        Duration::from_secs(10)
+    } else {
+        Duration::from_secs(2)
+    }
+}
+
 fn benched_grow_keyed_node<const FROM_WIDTH: usize, FromBitset, const TO_WIDTH: usize, ToBitset>(
     iters: u64,
 ) -> Duration
@@ -178,8 +194,8 @@ where
 pub fn grow_node(c: &mut Criterion) {
     let mut group = c.benchmark_group("grow_node");
     group.throughput(Throughput::Elements(1));
-    group.sample_size(4096);
-    group.measurement_time(Duration::from_secs(10));
+    group.sample_size(microbench_sample_size());
+    group.measurement_time(microbench_measurement_time());
 
     group.bench_function("n4_to_n16_16x1", |b| {
         b.iter_custom(benched_grow_keyed_node::<4, Bitset8<1>, 16, Bitset16<1>>);
@@ -210,8 +226,8 @@ pub fn grow_node(c: &mut Criterion) {
 pub fn add_child(c: &mut Criterion) {
     let mut group = c.benchmark_group("add_child");
     group.throughput(Throughput::Elements(1));
-    group.sample_size(4096);
-    group.measurement_time(Duration::from_secs(10));
+    group.sample_size(microbench_sample_size());
+    group.measurement_time(microbench_measurement_time());
 
     group.bench_function("direct", |b| {
         b.iter_custom(benched_add_child::<256, DirectMapping<u64>>);
@@ -275,8 +291,8 @@ pub fn add_child(c: &mut Criterion) {
 pub fn del_child(c: &mut Criterion) {
     let mut group = c.benchmark_group("del_child");
     group.throughput(Throughput::Elements(1));
-    group.sample_size(4096);
-    group.measurement_time(Duration::from_secs(10));
+    group.sample_size(microbench_sample_size());
+    group.measurement_time(microbench_measurement_time());
 
     group.bench_function("direct", |b| {
         b.iter_custom(benched_del_child::<256, DirectMapping<u64>>);
@@ -339,8 +355,8 @@ pub fn del_child(c: &mut Criterion) {
 pub fn seek_child(c: &mut Criterion) {
     let mut group = c.benchmark_group("seek_child");
     group.throughput(Throughput::Elements(1));
-    group.sample_size(4096);
-    group.measurement_time(Duration::from_secs(10));
+    group.sample_size(microbench_sample_size());
+    group.measurement_time(microbench_measurement_time());
 
     group.bench_function("direct", |b| {
         b.iter_custom(benched_seek_child::<256, DirectMapping<u64>>);

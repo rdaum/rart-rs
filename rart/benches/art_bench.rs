@@ -13,6 +13,21 @@ use rart::tree::AdaptiveRadixTree;
 // Variations on the number of keys to insert into the tree for benchmarks that measure retrievals
 const TREE_SIZES: [u64; 4] = [1 << 10, 1 << 12, 1 << 15, 1 << 17];
 
+fn full_bench_profile() -> bool {
+    std::env::var("RART_BENCH_FULL").as_deref() == Ok("1")
+}
+
+fn criterion_config() -> Criterion {
+    if full_bench_profile() {
+        Criterion::default()
+    } else {
+        Criterion::default()
+            .sample_size(30)
+            .warm_up_time(Duration::from_secs(1))
+            .measurement_time(Duration::from_secs(2))
+    }
+}
+
 pub fn rand_insert(c: &mut Criterion) {
     let mut group = c.benchmark_group("rand_insert");
     group.throughput(Throughput::Elements(1));
@@ -243,11 +258,13 @@ fn gen_cached_keys(
 }
 
 criterion_group!(
-    rand_benches,
-    rand_get,
-    rand_get_str,
-    rand_insert,
-    rand_remove
+    name = rand_benches;
+    config = criterion_config();
+    targets = rand_get, rand_get_str, rand_insert, rand_remove
 );
-criterion_group!(seq_benches, seq_get, seq_insert, seq_remove);
+criterion_group!(
+    name = seq_benches;
+    config = criterion_config();
+    targets = seq_get, seq_insert, seq_remove
+);
 criterion_main!(seq_benches, rand_benches);
