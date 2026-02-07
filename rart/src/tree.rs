@@ -140,6 +140,51 @@ where
         AdaptiveRadixTree::get_iterate_mut(self.root.as_mut()?, key)
     }
 
+    /// Return the deepest key/value pair whose key is a prefix of `key`.
+    ///
+    /// This differs from [`Self::get`] by allowing partial matches.
+    #[inline]
+    pub fn longest_prefix_match<Key>(&self, key: Key) -> Option<(KeyType, &ValueType)>
+    where
+        Key: Into<KeyType>,
+    {
+        self.longest_prefix_match_k(&key.into())
+    }
+
+    /// Return the deepest key/value pair whose key is a prefix of `key`.
+    #[inline]
+    pub fn longest_prefix_match_k(&self, key: &KeyType) -> Option<(KeyType, &ValueType)> {
+        AdaptiveRadixTree::longest_prefix_match_iterate(self.root.as_ref()?, key)
+    }
+
+    /// Iterate over all entries whose keys start with `prefix`.
+    #[inline]
+    pub fn prefix_iter<Key>(
+        &self,
+        prefix: Key,
+    ) -> Iter<'_, KeyType, KeyType::PartialType, ValueType>
+    where
+        Key: Into<KeyType>,
+    {
+        self.prefix_iter_k(&prefix.into())
+    }
+
+    /// Iterate over all entries whose keys start with `prefix`.
+    pub fn prefix_iter_k(
+        &self,
+        prefix: &KeyType,
+    ) -> Iter<'_, KeyType, KeyType::PartialType, ValueType> {
+        let Some(root) = self.root.as_ref() else {
+            return Iter::new(None);
+        };
+        let Some((subtree_root, subtree_root_key)) =
+            AdaptiveRadixTree::find_prefix_subtree(root, prefix)
+        else {
+            return Iter::new(None);
+        };
+        Iter::new_with_prefix(Some(subtree_root), subtree_root_key)
+    }
+
     /// Insert a key-value pair (generic version).
     ///
     /// Follows standard Rust container conventions by returning the old value
@@ -348,6 +393,70 @@ where
         }
     }
 
+    fn longest_prefix_match_iterate<'a>(
+        cur_node: &'a DefaultNode<KeyType::PartialType, ValueType>,
+        key: &KeyType,
+    ) -> Option<(KeyType, &'a ValueType)> {
+        let mut cur_node = cur_node;
+        let mut cur_key = KeyType::new_from_partial(&cur_node.prefix);
+        let mut best_match = cur_node.value().map(|value| (cur_key.clone(), value));
+        let mut depth = 0;
+
+        loop {
+            let prefix_common_match = cur_node.prefix.prefix_length_key(key, depth);
+            if prefix_common_match != cur_node.prefix.len() {
+                return best_match;
+            }
+
+            if let Some(value) = cur_node.value() {
+                best_match = Some((cur_key.clone(), value));
+            }
+
+            if cur_node.prefix.len() == key.length_at(depth) {
+                return best_match;
+            }
+
+            let k = key.at(depth + cur_node.prefix.len());
+            depth += cur_node.prefix.len();
+
+            let Some(child) = cur_node.seek_child(k) else {
+                return best_match;
+            };
+            cur_node = child;
+            cur_key = cur_key.extend_from_partial(&cur_node.prefix);
+        }
+    }
+
+    fn find_prefix_subtree<'a>(
+        cur_node: &'a DefaultNode<KeyType::PartialType, ValueType>,
+        prefix: &KeyType,
+    ) -> Option<(&'a DefaultNode<KeyType::PartialType, ValueType>, KeyType)> {
+        let mut cur_node = cur_node;
+        let mut cur_key = KeyType::new_from_partial(&cur_node.prefix);
+        let mut depth = 0;
+
+        loop {
+            let prefix_common_match = cur_node.prefix.prefix_length_key(prefix, depth);
+            if prefix_common_match != cur_node.prefix.len() {
+                if prefix_common_match == prefix.length_at(depth) {
+                    return Some((cur_node, cur_key));
+                }
+                return None;
+            }
+
+            if cur_node.prefix.len() == prefix.length_at(depth) {
+                return Some((cur_node, cur_key));
+            }
+
+            let k = prefix.at(depth + cur_node.prefix.len());
+            depth += cur_node.prefix.len();
+
+            let child = cur_node.seek_child(k)?;
+            cur_node = child;
+            cur_key = cur_key.extend_from_partial(&cur_node.prefix);
+        }
+    }
+
     fn get_iterate_mut<'a>(
         cur_node: &'a mut DefaultNode<KeyType::PartialType, ValueType>,
         key: &KeyType,
@@ -520,6 +629,7 @@ mod tests {
 
     use crate::keys::KeyTrait;
     use crate::keys::array_key::ArrayKey;
+    use crate::keys::vector_key::VectorKey;
     use crate::partials::array_partial::ArrPartial;
     use crate::stats::TreeStatsTrait;
     use crate::tree;
@@ -784,6 +894,81 @@ mod tests {
         let mut iter = tree.iter();
         let result = iter.next().expect("Expected an entry");
         assert_eq!(result.1, &456)
+    }
+
+    #[test]
+    fn test_prefix_iter_returns_sorted_prefix_subset() {
+        let mut tree = AdaptiveRadixTree::<VectorKey, i32>::new();
+        tree.insert_k(&VectorKey::new_from_slice(b"alpha1"), 1);
+        tree.insert_k(&VectorKey::new_from_slice(b"alpha2"), 2);
+        tree.insert_k(&VectorKey::new_from_slice(b"alphabet"), 3);
+        tree.insert_k(&VectorKey::new_from_slice(b"alpine"), 4);
+        tree.insert_k(&VectorKey::new_from_slice(b"beta"), 5);
+
+        let prefix = VectorKey::new_from_slice(b"alp");
+        let got: Vec<(String, i32)> = tree
+            .prefix_iter_k(&prefix)
+            .map(|(k, v)| {
+                (
+                    String::from_utf8(k.as_ref().to_vec()).expect("key must be valid UTF-8"),
+                    *v,
+                )
+            })
+            .collect();
+
+        assert_eq!(
+            got,
+            vec![
+                ("alpha1".to_string(), 1),
+                ("alpha2".to_string(), 2),
+                ("alphabet".to_string(), 3),
+                ("alpine".to_string(), 4),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_prefix_iter_no_match() {
+        let mut tree = AdaptiveRadixTree::<VectorKey, i32>::new();
+        tree.insert_k(&VectorKey::new_from_slice(b"alpha"), 1);
+        tree.insert_k(&VectorKey::new_from_slice(b"beta"), 2);
+
+        let prefix = VectorKey::new_from_slice(b"zzz");
+        assert_eq!(tree.prefix_iter_k(&prefix).count(), 0);
+    }
+
+    #[test]
+    fn test_longest_prefix_match() {
+        let mut tree = AdaptiveRadixTree::<VectorKey, i32>::new();
+        tree.insert_k(&VectorKey::new_from_slice(b"cat"), 10);
+        tree.insert_k(&VectorKey::new_from_slice(b"dog"), 20);
+
+        let (matched_key, matched_value) = tree
+            .longest_prefix_match(VectorKey::new_from_slice(b"catalog"))
+            .expect("expected a prefix match");
+        assert_eq!(matched_key.as_ref(), b"cat");
+        assert_eq!(*matched_value, 10);
+
+        let (matched_key, matched_value) = tree
+            .longest_prefix_match(VectorKey::new_from_slice(b"dog"))
+            .expect("expected exact match");
+        assert_eq!(matched_key.as_ref(), b"dog");
+        assert_eq!(*matched_value, 20);
+
+        let (matched_key, matched_value) = tree
+            .longest_prefix_match(VectorKey::new_from_slice(b"doge"))
+            .expect("expected prefix match");
+        assert_eq!(matched_key.as_ref(), b"dog");
+        assert_eq!(*matched_value, 20);
+
+        assert!(
+            tree.longest_prefix_match(VectorKey::new_from_slice(b"do"))
+                .is_none()
+        );
+        assert!(
+            tree.longest_prefix_match(VectorKey::new_from_slice(b"zebra"))
+                .is_none()
+        );
     }
 
     #[test]

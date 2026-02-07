@@ -83,17 +83,20 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> IterInner<'a, K, P, V
         lhs_len.cmp(&rhs_len)
     }
 
-    pub fn new(node: &'a DefaultNode<P, V>) -> Self {
+    fn from_node_and_key(node: &'a DefaultNode<P, V>, cur_key: K) -> Self {
         let node_iter_stack = vec![(
-            node.prefix.len(),                 /* initial tree depth*/
-            IterFrameIter::Plain(node.iter()), /* root node iter*/
+            cur_key.length_at(0),              /* initial absolute tree depth */
+            IterFrameIter::Plain(node.iter()), /* root node iter */
         )];
-
         Self {
             node_iter_stack,
-            cur_key: K::new_from_partial(&node.prefix),
+            cur_key,
             start_bound: None,
         }
+    }
+
+    pub fn new(node: &'a DefaultNode<P, V>) -> Self {
+        Self::from_node_and_key(node, K::new_from_partial(&node.prefix))
     }
 
     pub fn new_with_start_bound(node: &'a DefaultNode<P, V>, start_bound: Bound<K>) -> Self {
@@ -207,6 +210,31 @@ impl<'a, K: KeyTrait<PartialType = P> + 'a, P: Partial + 'a, V> Iter<'a, K, P, V
 
         Self {
             inner: Box::new(IterInner::<K, P, V>::new(root_node)),
+            _marker: Default::default(),
+        }
+    }
+
+    /// Create an iterator from a subtree root with a fully-qualified key for that root node.
+    pub(crate) fn new_with_prefix(node: Option<&'a DefaultNode<P, V>>, root_key: K) -> Self {
+        let Some(root_node) = node else {
+            return Self {
+                inner: Box::new(std::iter::empty()),
+                _marker: Default::default(),
+            };
+        };
+
+        if root_node.is_leaf() {
+            let root_value = root_node
+                .value()
+                .expect("corruption: missing data at leaf node during iteration");
+            return Self {
+                inner: Box::new(std::iter::once((root_key, root_value))),
+                _marker: Default::default(),
+            };
+        }
+
+        Self {
+            inner: Box::new(IterInner::<K, P, V>::from_node_and_key(root_node, root_key)),
             _marker: Default::default(),
         }
     }
