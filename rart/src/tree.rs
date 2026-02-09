@@ -295,6 +295,45 @@ where
         ValuesIter::new(self.root.as_ref())
     }
 
+    /// Intersect two trees using ART-native node traversal.
+    ///
+    /// This avoids full key-stream materialization and instead walks both tries in lockstep,
+    /// pruning mismatched prefixes early.
+    pub fn intersect_with<'a, F>(&'a self, other: &'a Self, mut on_match: F)
+    where
+        F: FnMut(KeyType, &'a ValueType, &'a ValueType),
+    {
+        let (Some(left_root), Some(right_root)) = (self.root.as_ref(), other.root.as_ref()) else {
+            return;
+        };
+
+        let mut key_buf = Vec::with_capacity(KeyType::MAXIMUM_SIZE.unwrap_or(64));
+        Self::intersect_nodes(left_root, 0, right_root, 0, &mut key_buf, &mut on_match);
+    }
+
+    /// Intersect two trees and invoke a callback with value pairs only.
+    ///
+    /// This avoids key materialization and is useful when only the joined values are needed.
+    pub fn intersect_values_with<'a, F>(&'a self, other: &'a Self, mut on_match: F)
+    where
+        F: FnMut(&'a ValueType, &'a ValueType),
+    {
+        let (Some(left_root), Some(right_root)) = (self.root.as_ref(), other.root.as_ref()) else {
+            return;
+        };
+
+        Self::intersect_nodes_values(left_root, 0, right_root, 0, &mut on_match);
+    }
+
+    /// Count the number of keys that exist in both trees.
+    pub fn intersect_count(&self, other: &Self) -> usize {
+        let mut count = 0usize;
+        self.intersect_values_with(other, |_left_value, _right_value| {
+            count += 1;
+        });
+        count
+    }
+
     /// Create an iterator over key-value pairs within a specified range.
     ///
     /// The range can be any type that implements `RangeBounds<KeyType>`.
@@ -454,6 +493,165 @@ where
             let child = cur_node.seek_child(k)?;
             cur_node = child;
             cur_key = cur_key.extend_from_partial(&cur_node.prefix);
+        }
+    }
+
+    /// Recursively intersect two nodes, supporting different prefix-compression boundaries
+    /// through in-prefix offsets.
+    fn intersect_nodes<'a, F>(
+        left: &'a DefaultNode<KeyType::PartialType, ValueType>,
+        mut left_offset: usize,
+        right: &'a DefaultNode<KeyType::PartialType, ValueType>,
+        mut right_offset: usize,
+        key_buf: &mut Vec<u8>,
+        on_match: &mut F,
+    ) where
+        F: FnMut(KeyType, &'a ValueType, &'a ValueType),
+    {
+        let restore_len = key_buf.len();
+        let left_prefix = left.prefix.as_ref();
+        let right_prefix = right.prefix.as_ref();
+
+        while left_offset < left_prefix.len() && right_offset < right_prefix.len() {
+            let left_byte = left_prefix[left_offset];
+            let right_byte = right_prefix[right_offset];
+            if left_byte != right_byte {
+                key_buf.truncate(restore_len);
+                return;
+            }
+            key_buf.push(left_byte);
+            left_offset += 1;
+            right_offset += 1;
+        }
+
+        // The remaining byte in the longer prefix must transition through a matching
+        // child edge in the shorter side to continue.
+        if left_offset < left_prefix.len() {
+            if !right.is_inner() {
+                key_buf.truncate(restore_len);
+                return;
+            }
+
+            let edge = left_prefix[left_offset];
+            let Some(right_child) = right.seek_child(edge) else {
+                key_buf.truncate(restore_len);
+                return;
+            };
+
+            key_buf.push(edge);
+            Self::intersect_nodes(left, left_offset + 1, right_child, 1, key_buf, on_match);
+            key_buf.truncate(restore_len);
+            return;
+        }
+
+        if right_offset < right_prefix.len() {
+            if !left.is_inner() {
+                key_buf.truncate(restore_len);
+                return;
+            }
+
+            let edge = right_prefix[right_offset];
+            let Some(left_child) = left.seek_child(edge) else {
+                key_buf.truncate(restore_len);
+                return;
+            };
+
+            key_buf.push(edge);
+            Self::intersect_nodes(left_child, 1, right, right_offset + 1, key_buf, on_match);
+            key_buf.truncate(restore_len);
+            return;
+        }
+
+        if let (Some(left_value), Some(right_value)) = (left.value(), right.value()) {
+            on_match(
+                KeyType::new_from_slice(key_buf.as_slice()),
+                left_value,
+                right_value,
+            );
+        }
+
+        if left.is_inner() && right.is_inner() {
+            if left.num_children() <= right.num_children() {
+                for (edge, left_child) in left.iter() {
+                    if let Some(right_child) = right.seek_child(edge) {
+                        Self::intersect_nodes(left_child, 0, right_child, 0, key_buf, on_match);
+                    }
+                }
+            } else {
+                for (edge, right_child) in right.iter() {
+                    if let Some(left_child) = left.seek_child(edge) {
+                        Self::intersect_nodes(left_child, 0, right_child, 0, key_buf, on_match);
+                    }
+                }
+            }
+        }
+
+        key_buf.truncate(restore_len);
+    }
+
+    /// Recursively intersect two nodes and emit only value pairs (no key reconstruction).
+    fn intersect_nodes_values<'a, F>(
+        left: &'a DefaultNode<KeyType::PartialType, ValueType>,
+        mut left_offset: usize,
+        right: &'a DefaultNode<KeyType::PartialType, ValueType>,
+        mut right_offset: usize,
+        on_match: &mut F,
+    ) where
+        F: FnMut(&'a ValueType, &'a ValueType),
+    {
+        let left_prefix = left.prefix.as_ref();
+        let right_prefix = right.prefix.as_ref();
+
+        while left_offset < left_prefix.len() && right_offset < right_prefix.len() {
+            if left_prefix[left_offset] != right_prefix[right_offset] {
+                return;
+            }
+            left_offset += 1;
+            right_offset += 1;
+        }
+
+        if left_offset < left_prefix.len() {
+            if !right.is_inner() {
+                return;
+            }
+            let edge = left_prefix[left_offset];
+            let Some(right_child) = right.seek_child(edge) else {
+                return;
+            };
+            Self::intersect_nodes_values(left, left_offset + 1, right_child, 1, on_match);
+            return;
+        }
+
+        if right_offset < right_prefix.len() {
+            if !left.is_inner() {
+                return;
+            }
+            let edge = right_prefix[right_offset];
+            let Some(left_child) = left.seek_child(edge) else {
+                return;
+            };
+            Self::intersect_nodes_values(left_child, 1, right, right_offset + 1, on_match);
+            return;
+        }
+
+        if let (Some(left_value), Some(right_value)) = (left.value(), right.value()) {
+            on_match(left_value, right_value);
+        }
+
+        if left.is_inner() && right.is_inner() {
+            if left.num_children() <= right.num_children() {
+                for (edge, left_child) in left.iter() {
+                    if let Some(right_child) = right.seek_child(edge) {
+                        Self::intersect_nodes_values(left_child, 0, right_child, 0, on_match);
+                    }
+                }
+            } else {
+                for (edge, right_child) in right.iter() {
+                    if let Some(left_child) = left.seek_child(edge) {
+                        Self::intersect_nodes_values(left_child, 0, right_child, 0, on_match);
+                    }
+                }
+            }
         }
     }
 
@@ -1051,6 +1249,92 @@ mod tests {
 
         // Original key should still have latest value
         assert_eq!(tree.get("key1"), Some(&300));
+    }
+
+    #[test]
+    fn test_intersect_with_returns_common_keys_and_values() {
+        let mut left = AdaptiveRadixTree::<ArrayKey<32>, i32>::new();
+        let mut right = AdaptiveRadixTree::<ArrayKey<32>, i32>::new();
+
+        for (k, v) in [
+            ("a", 1),
+            ("ab", 2),
+            ("abc", 3),
+            ("abd", 4),
+            ("bzz", 5),
+            ("cat", 6),
+        ] {
+            left.insert(k, v);
+        }
+
+        for (k, v) in [("ab", 20), ("abc", 30), ("bzz", 50), ("dog", 70)] {
+            right.insert(k, v);
+        }
+
+        let mut seen = Vec::new();
+        left.intersect_with(&right, |key, left_value, right_value| {
+            seen.push((key, *left_value, *right_value));
+        });
+
+        let mut keys: Vec<String> = seen
+            .iter()
+            .map(|(k, _, _)| {
+                let bytes = k.as_ref();
+                let null_pos = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+                String::from_utf8_lossy(&bytes[..null_pos]).into_owned()
+            })
+            .collect();
+        keys.sort();
+
+        assert_eq!(keys, vec!["ab", "abc", "bzz"]);
+        assert!(
+            seen.iter()
+                .any(|(k, lv, rv)| *k == "ab".into() && *lv == 2 && *rv == 20)
+        );
+        assert!(
+            seen.iter()
+                .any(|(k, lv, rv)| *k == "abc".into() && *lv == 3 && *rv == 30)
+        );
+        assert!(
+            seen.iter()
+                .any(|(k, lv, rv)| *k == "bzz".into() && *lv == 5 && *rv == 50)
+        );
+    }
+
+    #[test]
+    fn test_intersect_with_empty_tree() {
+        let mut left = AdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+        let right = AdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+
+        left.insert("a", 1);
+        left.insert("b", 2);
+
+        let mut count = 0usize;
+        left.intersect_with(&right, |_k, _lv, _rv| {
+            count += 1;
+        });
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_intersect_values_with_and_count() {
+        let mut left = AdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+        let mut right = AdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+
+        left.insert("aa", 1);
+        left.insert("ab", 2);
+        left.insert("ac", 3);
+
+        right.insert("ab", 20);
+        right.insert("ac", 30);
+        right.insert("zz", 40);
+
+        let mut pairs = Vec::new();
+        left.intersect_values_with(&right, |lv, rv| pairs.push((*lv, *rv)));
+        pairs.sort_unstable();
+
+        assert_eq!(pairs, vec![(2, 20), (3, 30)]);
+        assert_eq!(left.intersect_count(&right), 2);
     }
 
     #[test]
