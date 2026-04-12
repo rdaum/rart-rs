@@ -322,43 +322,40 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> Iterator for IterInne
                 continue;
             };
 
-            // We're at a non-exhausted inner node, so go further down the tree by pushing node
-            // iterator into the stack. We also extend our working key with this node's prefix.
+            let key = self.cur_key.extend_from_partial(&node.prefix);
+
             if node.is_inner() {
                 self.node_iter_stack.push((
                     tree_depth + node.prefix.len(),
                     IterFrameIter::Plain(node.iter()),
                 ));
-                self.cur_key = self.cur_key.extend_from_partial(&node.prefix);
-                continue;
+                self.cur_key = key.clone();
             }
 
-            // We've got a value, so tack it onto our working key, and return it. If there's nothing
-            // here, that's an issue, leaf nodes should always have values.
-            let v = node
-                .value()
-                .expect("corruption: missing data at leaf node during iteration");
-            let key = self.cur_key.extend_from_partial(&node.prefix);
-
-            // Handle start bound filtering. Once we yield a key that satisfies the start bound,
-            // all subsequent keys will also satisfy it due to sorted iteration order.
-            if let Some(start_bound) = self.start_bound.as_ref() {
-                let satisfies_start = match start_bound {
-                    Bound::Included(start_key) => {
-                        IterInner::<K, P, V>::key_order(&key, start_key)
-                            >= std::cmp::Ordering::Equal
+            if let Some(v) = node.value() {
+                // Handle start bound filtering. Once we yield a key that satisfies the start bound,
+                // all subsequent keys will also satisfy it due to sorted iteration order.
+                if let Some(start_bound) = self.start_bound.as_ref() {
+                    let satisfies_start = match start_bound {
+                        Bound::Included(start_key) => {
+                            IterInner::<K, P, V>::key_order(&key, start_key)
+                                >= std::cmp::Ordering::Equal
+                        }
+                        Bound::Excluded(start_key) => {
+                            IterInner::<K, P, V>::key_order(&key, start_key)
+                                > std::cmp::Ordering::Equal
+                        }
+                        Bound::Unbounded => true,
+                    };
+                    if !satisfies_start {
+                        continue;
                     }
-                    Bound::Excluded(start_key) => {
-                        IterInner::<K, P, V>::key_order(&key, start_key) > std::cmp::Ordering::Equal
-                    }
-                    Bound::Unbounded => true,
-                };
-                if !satisfies_start {
-                    continue; // Skip this key, it doesn't satisfy start bound
+                    self.start_bound = None;
                 }
-                self.start_bound = None;
+                return Some((key, v));
             }
-            return Some((key, v));
+
+            continue;
         }
     }
 }
@@ -401,14 +398,10 @@ impl<'a, P: Partial + 'a, V> Iterator for ValuesIter<'a, P, V> {
                 continue;
             };
 
-            // We're at a non-exhausted inner node, so go further down the tree by pushing node
-            // iterator into the stack.
             if node.is_inner() {
                 self.node_iter_stack.push(node.iter());
-                continue;
             }
 
-            // We've got a value, return it directly without any key reconstruction.
             if let Some(value) = node.value() {
                 return Some(value);
             }

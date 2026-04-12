@@ -452,15 +452,15 @@ where
         match Arc::try_unwrap(node) {
             Ok(owned_node) => {
                 // Fast path: we have unique ownership, convert in-place
-                let unversioned_content = match owned_node.content {
-                    VersionedContent::Leaf(value) => Content::Leaf(value),
+                let (unversioned_value, unversioned_content) = match owned_node.content {
+                    VersionedContent::Leaf(value) => (Some(value), Content::Empty),
                     VersionedContent::Node4(km) => {
                         let mut new_km = SortedKeyedMapping::new();
                         for (key, child) in km.into_iter() {
                             let converted_child = Self::convert_to_unversioned_node(child);
                             new_km.add_child(key, converted_child);
                         }
-                        Content::Node4(new_km)
+                        (None, Content::Node4(new_km))
                     }
                     VersionedContent::Node16(km) => {
                         let mut new_km = SortedKeyedMapping::new();
@@ -468,7 +468,7 @@ where
                             let converted_child = Self::convert_to_unversioned_node(child);
                             new_km.add_child(key, converted_child);
                         }
-                        Content::Node16(new_km)
+                        (None, Content::Node16(new_km))
                     }
                     VersionedContent::Node48(km) => {
                         let mut new_km = IndexedMapping::new();
@@ -476,7 +476,7 @@ where
                             let converted_child = Self::convert_to_unversioned_node(child);
                             new_km.add_child(key, converted_child);
                         }
-                        Content::Node48(new_km)
+                        (None, Content::Node48(new_km))
                     }
                     VersionedContent::Node256(km) => {
                         let mut new_km = DirectMapping::new();
@@ -484,19 +484,20 @@ where
                             let converted_child = Self::convert_to_unversioned_node(child);
                             new_km.add_child(key, converted_child);
                         }
-                        Content::Node256(new_km)
+                        (None, Content::Node256(new_km))
                     }
                 };
 
                 DefaultNode {
                     prefix: owned_node.prefix,
+                    value: unversioned_value,
                     content: unversioned_content,
                 }
             }
             Err(shared_node) => {
                 // Slow path: node is shared, must clone
-                let unversioned_content = match &shared_node.content {
-                    VersionedContent::Leaf(value) => Content::Leaf(value.clone()),
+                let (unversioned_value, unversioned_content) = match &shared_node.content {
+                    VersionedContent::Leaf(value) => (Some(value.clone()), Content::Empty),
                     VersionedContent::Node4(km) => {
                         let mut new_km = SortedKeyedMapping::new();
                         for (key, child) in km.iter() {
@@ -504,7 +505,7 @@ where
                                 Self::convert_to_unversioned_node(Arc::clone(child));
                             new_km.add_child(key, converted_child);
                         }
-                        Content::Node4(new_km)
+                        (None, Content::Node4(new_km))
                     }
                     VersionedContent::Node16(km) => {
                         let mut new_km = SortedKeyedMapping::new();
@@ -513,7 +514,7 @@ where
                                 Self::convert_to_unversioned_node(Arc::clone(child));
                             new_km.add_child(key, converted_child);
                         }
-                        Content::Node16(new_km)
+                        (None, Content::Node16(new_km))
                     }
                     VersionedContent::Node48(km) => {
                         let mut new_km = IndexedMapping::new();
@@ -522,7 +523,7 @@ where
                                 Self::convert_to_unversioned_node(Arc::clone(child));
                             new_km.add_child(key, converted_child);
                         }
-                        Content::Node48(new_km)
+                        (None, Content::Node48(new_km))
                     }
                     VersionedContent::Node256(km) => {
                         let mut new_km = DirectMapping::new();
@@ -531,12 +532,13 @@ where
                                 Self::convert_to_unversioned_node(Arc::clone(child));
                             new_km.add_child(key, converted_child);
                         }
-                        Content::Node256(new_km)
+                        (None, Content::Node256(new_km))
                     }
                 };
 
                 DefaultNode {
                     prefix: shared_node.prefix.clone(),
+                    value: unversioned_value,
                     content: unversioned_content,
                 }
             }

@@ -8,7 +8,7 @@ use std::ops::RangeBounds;
 
 use crate::iter::{Iter, ValuesIter};
 use crate::keys::KeyTrait;
-use crate::node::{Content, DefaultNode, Node};
+use crate::node::{DefaultNode, Node};
 use crate::partials::Partial;
 use crate::range::Range;
 use crate::stats::{TreeStats, TreeStatsTrait, update_tree_stats};
@@ -258,23 +258,26 @@ where
             return None;
         }
 
-        // Special case, if the root is a leaf and matches the key, we can just remove it
-        // immediately. If it doesn't match our key, then we have nothing to do here anyways.
-        if root.is_leaf() {
-            // Move the value of the leaf in root. To do this, replace self.root  with None and
-            // then unwrap the value out of the Option & Leaf.
-            let stolen = self.root.take().unwrap();
-            let leaf = match stolen.content {
-                Content::Leaf(v) => v,
-                _ => unreachable!(),
-            };
-            return Some(leaf);
+        if root.prefix.len() == key.length_at(0) {
+            if root.is_leaf() {
+                let stolen = self.root.take().unwrap();
+                let leaf = stolen
+                    .value
+                    .expect("corruption: missing value at leaf root");
+                return Some(leaf);
+            }
+
+            let removed = root.value.take();
+            if root.num_children() == 0 {
+                self.root = None;
+            }
+            return removed;
         }
 
         let result = AdaptiveRadixTree::remove_recurse(root, key, prefix_common_match);
 
         // Prune root out if it's now empty.
-        if root.is_inner() && root.num_children() == 0 {
+        if root.is_inner() && root.num_children() == 0 && root.value().is_none() {
             self.root = None;
         }
         result
@@ -690,11 +693,24 @@ where
 
         // Prefix fully covers this node.
         // Either sets the value or replaces the old value already here.
-        if is_prefix_match
-            && cur_node.prefix.len() == key.length_at(depth)
-            && let Content::Leaf(v) = &mut cur_node.content
-        {
-            return Some(std::mem::replace(v, value));
+        if is_prefix_match && cur_node.prefix.len() == key.length_at(depth) {
+            if let Some(v) = cur_node.value_mut() {
+                return Some(std::mem::replace(v, value));
+            }
+            cur_node.value = Some(value);
+            return None;
+        }
+
+        if is_prefix_match && cur_node.prefix.len() > key.length_at(depth) {
+            let new_prefix = cur_node.prefix.partial_after(longest_common_prefix);
+            let old_node_prefix = std::mem::replace(&mut cur_node.prefix, new_prefix);
+            let mut new_parent =
+                DefaultNode::new_inner(old_node_prefix.partial_before(longest_common_prefix));
+            new_parent.value = Some(value);
+            let edge = old_node_prefix.at(longest_common_prefix);
+            let replacement_current = std::mem::replace(cur_node, new_parent);
+            cur_node.add_child(edge, replacement_current);
+            return None;
         }
 
         // Prefix is part of the current node, but doesn't fully cover it.
@@ -721,6 +737,16 @@ where
             cur_node.add_child(k1, replacement_current);
             cur_node.add_child(k2, new_leaf);
 
+            return None;
+        }
+
+        if cur_node.is_leaf() {
+            // Existing key ends at this node but the inserted key continues. This node must start
+            // acting as an inner node while retaining its terminal value.
+            let edge = key.at(depth + longest_common_prefix);
+            let new_leaf =
+                DefaultNode::new_leaf(key.to_partial(depth + longest_common_prefix), value);
+            cur_node.add_child(edge, new_leaf);
             return None;
         }
 
@@ -755,6 +781,24 @@ where
             return None;
         }
 
+        if child_node.prefix.len() == key.length_at(depth) {
+            if child_node.is_leaf() {
+                let node = parent_node.delete_child(c).unwrap();
+                let v = node
+                    .value
+                    .expect("corruption: missing value at deleted leaf");
+                return Some(v);
+            }
+
+            let removed = child_node.value.take();
+            if removed.is_some() && child_node.num_children() == 0 {
+                let prefix = child_node.prefix.clone();
+                let deleted = parent_node.delete_child(c).unwrap();
+                debug_assert_eq!(prefix.to_slice(), deleted.prefix.to_slice());
+            }
+            return removed;
+        }
+
         // If the child is a leaf, and the prefix matches the key, we can remove it from this parent
         // node. If the prefix does not match, then we have nothing to do here.
         if child_node.is_leaf() {
@@ -762,10 +806,9 @@ where
                 return None;
             }
             let node = parent_node.delete_child(c).unwrap();
-            let v = match node.content {
-                Content::Leaf(v) => v,
-                _ => unreachable!(),
-            };
+            let v = node
+                .value
+                .expect("corruption: missing value at deleted leaf");
             return Some(v);
         }
 
@@ -775,7 +818,11 @@ where
 
         // If after this our child we just recursed into no longer has children of its own, it can
         // be collapsed into us. In this way we can prune the tree as we go.
-        if result.is_some() && child_node.is_inner() && child_node.num_children() == 0 {
+        if result.is_some()
+            && child_node.is_inner()
+            && child_node.num_children() == 0
+            && child_node.value().is_none()
+        {
             let prefix = child_node.prefix.clone();
             let deleted = parent_node.delete_child(c).unwrap();
             debug_assert_eq!(prefix.to_slice(), deleted.prefix.to_slice());
@@ -795,13 +842,10 @@ where
         if node.value().is_some() {
             tree_stats.num_values += 1;
         }
-        match node.content {
-            Content::Leaf(_) => {
-                tree_stats.num_leaves += 1;
-            }
-            _ => {
-                update_tree_stats(tree_stats, node);
-            }
+        if node.is_leaf() {
+            tree_stats.num_leaves += 1;
+        } else {
+            update_tree_stats(tree_stats, node);
         }
         for (_k, child) in node.iter() {
             AdaptiveRadixTree::<KeyType, ValueType>::get_tree_stats_recurse(

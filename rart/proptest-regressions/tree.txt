@@ -6,3 +6,4 @@
 # everyone who runs the test benefits from these saved cases.
 cc b66d2aef08cf881b87452ab42f37e400bed32f60f332ed16594e6bdeb600699e # shrinks to entries = [([97], 0)], probes = [[98]]
 cc f9c4ae2363ad4af54ed7b6816fbd0a560242efdb05b526ae45728b49cefc1dbb # shrinks to left_entries = [], right_entries = [([97], 0), ([100], 0), ([100, 97], 0)]
+cc fb64e6c10c0c71829777ae2eb8932160592bd68f1ab2599bcfe8c7338934a7c0 # shrinks to left_entries = [([97], 0)], right_entries = [([97, 97, 97], 0), ([97, 97], 0), ([97], 0)]

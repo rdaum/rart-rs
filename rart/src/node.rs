@@ -34,11 +34,12 @@ pub trait Node<P: Partial, V> {
 
 pub struct DefaultNode<P: Partial, V> {
     pub(crate) prefix: P,
+    pub(crate) value: Option<V>,
     pub(crate) content: Content<P, V>,
 }
 
 pub(crate) enum Content<P: Partial, V> {
-    Leaf(V),
+    Empty,
     Node4(SortedKeyedMapping<DefaultNode<P, V>, 4>),
     Node16(SortedKeyedMapping<DefaultNode<P, V>, 16>),
     Node48(IndexedMapping<DefaultNode<P, V>, 48, Bitset64<1>>),
@@ -72,7 +73,8 @@ impl<P: Partial, V> Node<P, V> for DefaultNode<P, V> {
     fn new_leaf(partial: P, value: V) -> Self {
         Self {
             prefix: partial,
-            content: Content::Leaf(value),
+            value: Some(value),
+            content: Content::Empty,
         }
     }
 
@@ -81,27 +83,22 @@ impl<P: Partial, V> Node<P, V> for DefaultNode<P, V> {
         let nt = Content::Node4(SortedKeyedMapping::new());
         Self {
             prefix,
+            value: None,
             content: nt,
         }
     }
 
     fn value(&self) -> Option<&V> {
-        let Content::Leaf(value) = &self.content else {
-            return None;
-        };
-        Some(value)
+        self.value.as_ref()
     }
 
     #[allow(dead_code)]
     fn value_mut(&mut self) -> Option<&mut V> {
-        let Content::Leaf(value) = &mut self.content else {
-            return None;
-        };
-        Some(value)
+        self.value.as_mut()
     }
 
     fn is_leaf(&self) -> bool {
-        matches!(&self.content, Content::Leaf(_))
+        matches!(&self.content, Content::Empty)
     }
 
     fn is_inner(&self) -> bool {
@@ -118,7 +115,7 @@ impl<P: Partial, V> Node<P, V> for DefaultNode<P, V> {
             Content::Node16(km) => km.seek_child(key),
             Content::Node48(km) => km.seek_child(key),
             Content::Node256(children) => children.seek_child(key),
-            Content::Leaf(_) => None,
+            Content::Empty => None,
         }
     }
     fn seek_child_mut(&mut self, key: u8) -> Option<&mut Self> {
@@ -127,11 +124,15 @@ impl<P: Partial, V> Node<P, V> for DefaultNode<P, V> {
             Content::Node16(km) => km.seek_child_mut(key),
             Content::Node48(km) => km.seek_child_mut(key),
             Content::Node256(children) => children.seek_child_mut(key),
-            Content::Leaf(_) => None,
+            Content::Empty => None,
         }
     }
 
     fn add_child(&mut self, key: u8, node: Self) {
+        if matches!(self.content, Content::Empty) {
+            self.content = Content::Node4(SortedKeyedMapping::new());
+        }
+
         if self.is_full() {
             self.grow();
         }
@@ -149,7 +150,7 @@ impl<P: Partial, V> Node<P, V> for DefaultNode<P, V> {
             Content::Node256(pm) => {
                 pm.add_child(key, node);
             }
-            Content::Leaf(_) => unreachable!("Should not be possible."),
+            Content::Empty => unreachable!("empty nodes are promoted before adding children"),
         }
     }
 
@@ -191,7 +192,7 @@ impl<P: Partial, V> Node<P, V> for DefaultNode<P, V> {
                 // Return what we deleted.
                 node
             }
-            Content::Leaf(_) => unreachable!("Should not be possible."),
+            Content::Empty => unreachable!("Should not be possible."),
         }
     }
 
@@ -201,7 +202,7 @@ impl<P: Partial, V> Node<P, V> for DefaultNode<P, V> {
             Content::Node16 { .. } => 16,
             Content::Node48 { .. } => 48,
             Content::Node256 { .. } => 256,
-            Content::Leaf(_) => 0,
+            Content::Empty => 0,
         }
     }
 
@@ -211,7 +212,7 @@ impl<P: Partial, V> Node<P, V> for DefaultNode<P, V> {
             Content::Node16(n) => n.num_children(),
             Content::Node48(n) => n.num_children(),
             Content::Node256(n) => n.num_children(),
-            Content::Leaf(_) => 0,
+            Content::Empty => 0,
         }
     }
 }
@@ -223,6 +224,7 @@ impl<P: Partial, V> DefaultNode<P, V> {
         let nt = Content::Node4(SortedKeyedMapping::new());
         Self {
             prefix,
+            value: None,
             content: nt,
         }
     }
@@ -233,6 +235,7 @@ impl<P: Partial, V> DefaultNode<P, V> {
         let nt = Content::Node16(SortedKeyedMapping::new());
         Self {
             prefix,
+            value: None,
             content: nt,
         }
     }
@@ -243,6 +246,7 @@ impl<P: Partial, V> DefaultNode<P, V> {
         let nt = Content::Node48(IndexedMapping::new());
         Self {
             prefix,
+            value: None,
             content: nt,
         }
     }
@@ -253,6 +257,7 @@ impl<P: Partial, V> DefaultNode<P, V> {
         let nt = Content::Node256(DirectMapping::new());
         Self {
             prefix,
+            value: None,
             content: nt,
         }
     }
@@ -265,18 +270,22 @@ impl<P: Partial, V> DefaultNode<P, V> {
             Content::Node48(im) => self.num_children() >= im.width(),
             // Should not be possible.
             Content::Node256(_) => self.num_children() >= 256,
-            Content::Leaf(_) => unreachable!("Should not be possible."),
+            Content::Empty => unreachable!("Should not be possible."),
         }
     }
 
     fn shrink(&mut self) {
         match &mut self.content {
             Content::Node4(km) => {
+                if self.value.is_some() {
+                    return;
+                }
                 // A node4 with only one child has its childed collapsed into it.
                 // If our child is a leaf, that means we have become a leaf, and we can shrink no
                 // more beyond this.
                 let (_, child) = km.take_value_for_leaf();
                 let prefix = child.prefix;
+                self.value = child.value;
                 self.content = child.content;
                 self.prefix = self.prefix.partial_extended_with(&prefix);
             }
@@ -290,7 +299,7 @@ impl<P: Partial, V> DefaultNode<P, V> {
             Content::Node256(dm) => {
                 self.content = Content::Node48(IndexedMapping::from_direct(dm));
             }
-            Content::Leaf(_) => unreachable!("Should not be possible."),
+            Content::Empty => unreachable!("Should not be possible."),
         }
     }
 
@@ -308,7 +317,7 @@ impl<P: Partial, V> DefaultNode<P, V> {
             Content::Node256 { .. } => {
                 unreachable!("Should never grow a node256")
             }
-            Content::Leaf(_) => unreachable!("Should not be possible."),
+            Content::Empty => unreachable!("Should not be possible."),
         }
     }
 
@@ -323,7 +332,7 @@ impl<P: Partial, V> DefaultNode<P, V> {
             Content::Node16(n) => NodeIter::Node16(n.iter()),
             Content::Node48(n) => NodeIter::Node48(n.iter()),
             Content::Node256(n) => NodeIter::Node256(n.iter()),
-            Content::Leaf(_) => NodeIter::Empty,
+            Content::Empty => NodeIter::Empty,
         }
     }
 }
