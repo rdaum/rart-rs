@@ -146,6 +146,60 @@ How this differs from standard maps:
 - `HashMap`: no ordered prefix traversal; prefix queries require scanning keys
 - `BTreeMap`: prefix ranges are possible, but longest-prefix matching is not a built-in operation
 
+## Intersection Operations
+
+`AdaptiveRadixTree` also exposes ART-native intersection/join APIs for finding keys present in two
+trees:
+
+- `intersect_with`: visit matching keys and both values
+- `intersect_values_with`: visit only value pairs, avoiding key reconstruction
+- `intersect_count`: count overlapping keys
+
+These methods walk both radix tries in lockstep and prune mismatched prefixes early rather than
+merging two fully materialized key streams.
+
+```rust
+use rart::{AdaptiveRadixTree, ArrayKey};
+
+let mut left = AdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+let mut right = AdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+
+left.insert("ab", 1);
+left.insert("abc", 2);
+left.insert("dog", 3);
+
+right.insert("abc", 20);
+right.insert("dog", 30);
+right.insert("zzz", 40);
+
+let mut joined = Vec::new();
+left.intersect_with(&right, |key, left_value, right_value| {
+    joined.push((key, *left_value, *right_value));
+});
+
+assert_eq!(left.intersect_count(&right), 2);
+
+let mut value_pairs = Vec::new();
+left.intersect_values_with(&right, |left_value, right_value| {
+    value_pairs.push((*left_value, *right_value));
+});
+assert_eq!(value_pairs.len(), 2);
+```
+
+Typical uses:
+
+- Joining two in-memory indexes by shared key
+- Counting overlap between sparse keysets
+- Intersecting filtered working sets before more expensive processing
+
+Performance tradeoff:
+
+- Low overlap: the ART-native intersection can outperform a `BTreeMap` merge join by pruning
+  whole subtrees early
+- High overlap: a `BTreeMap` merge join can still be faster
+- If you only need counts or value pairs, prefer `intersect_count` or `intersect_values_with`
+  over reconstructing keys
+
 ## Performance
 
 Benchmark environment: NVIDIA GB10 (NVIDIA Spark equivalent, ASUS GX10 variant), ARM Cortex-X925, Criterion.rs.
@@ -196,6 +250,13 @@ Performance characteristics for lookup patterns and iteration:
 - BTreeMap baseline: ~122µs total (~8.4M queries/sec)
 - HashMap baseline: ~100ms total (~10K queries/sec)
 - *ART is much faster than hash-scan for prefix enumeration, while BTree range iteration is still faster in this benchmark.*
+
+**Tree Intersection / Join** (`intersection_join_bench`, quick profile):
+
+- Low overlap workloads favor ART intersection because mismatched prefixes let it skip subtrees
+  early
+- High overlap workloads favor `BTreeMap` merge join more often
+- `intersect_count` is the lightest-weight option when you only need cardinality
 
 ### Versioned Tree Performance (VersionedAdaptiveRadixTree)
 
