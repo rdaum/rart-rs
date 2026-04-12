@@ -188,6 +188,22 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> IterInner<'a, K, P, V
 }
 
 impl<'a, K: KeyTrait<PartialType = P> + 'a, P: Partial + 'a, V> Iter<'a, K, P, V> {
+    fn from_root_and_children(
+        root_key: K,
+        root_value: Option<&'a V>,
+        children: IterInner<'a, K, P, V>,
+    ) -> Self {
+        let inner: Box<dyn Iterator<Item = (K, &'a V)> + 'a> = match root_value {
+            Some(value) => Box::new(std::iter::once((root_key, value)).chain(children)),
+            None => Box::new(children),
+        };
+
+        Self {
+            inner,
+            _marker: Default::default(),
+        }
+    }
+
     pub(crate) fn new(node: Option<&'a DefaultNode<P, V>>) -> Self {
         let Some(root_node) = node else {
             return Self {
@@ -196,22 +212,22 @@ impl<'a, K: KeyTrait<PartialType = P> + 'a, P: Partial + 'a, V> Iter<'a, K, P, V
             };
         };
 
-        // If root is a leaf, we can just return it.
+        let root_key = K::new_from_partial(&root_node.prefix);
+        let root_value = root_node.value();
+
         if root_node.is_leaf() {
-            let root_key = K::new_from_partial(&root_node.prefix);
-            let root_value = root_node
-                .value()
-                .expect("corruption: missing data at leaf node during iteration");
             return Self {
-                inner: Box::new(std::iter::once((root_key, root_value))),
+                inner: Box::new(
+                    std::iter::once((
+                        root_key,
+                        root_value.expect("corruption: missing data at leaf node during iteration"),
+                    )),
+                ),
                 _marker: Default::default(),
             };
         }
 
-        Self {
-            inner: Box::new(IterInner::<K, P, V>::new(root_node)),
-            _marker: Default::default(),
-        }
+        Self::from_root_and_children(root_key, root_value, IterInner::<K, P, V>::new(root_node))
     }
 
     /// Create an iterator from a subtree root with a fully-qualified key for that root node.
@@ -223,20 +239,25 @@ impl<'a, K: KeyTrait<PartialType = P> + 'a, P: Partial + 'a, V> Iter<'a, K, P, V
             };
         };
 
+        let root_value = root_node.value();
+
         if root_node.is_leaf() {
-            let root_value = root_node
-                .value()
-                .expect("corruption: missing data at leaf node during iteration");
             return Self {
-                inner: Box::new(std::iter::once((root_key, root_value))),
+                inner: Box::new(
+                    std::iter::once((
+                        root_key,
+                        root_value.expect("corruption: missing data at leaf node during iteration"),
+                    )),
+                ),
                 _marker: Default::default(),
             };
         }
 
-        Self {
-            inner: Box::new(IterInner::<K, P, V>::from_node_and_key(root_node, root_key)),
-            _marker: Default::default(),
-        }
+        Self::from_root_and_children(
+            root_key.clone(),
+            root_value,
+            IterInner::<K, P, V>::from_node_and_key(root_node, root_key),
+        )
     }
 
     /// Create an iterator with a start bound for optimized range queries
@@ -251,42 +272,50 @@ impl<'a, K: KeyTrait<PartialType = P> + 'a, P: Partial + 'a, V> Iter<'a, K, P, V
             };
         };
 
+        let root_key = K::new_from_partial(&root_node.prefix);
+        let root_value = root_node.value();
+        let satisfies_start = match &start_bound {
+            Bound::Included(start_key) => {
+                IterInner::<K, P, V>::key_order(&root_key, start_key) >= std::cmp::Ordering::Equal
+            }
+            Bound::Excluded(start_key) => {
+                IterInner::<K, P, V>::key_order(&root_key, start_key) > std::cmp::Ordering::Equal
+            }
+            Bound::Unbounded => true,
+        };
+
         // If root is a leaf, check if it matches our start bound
         if root_node.is_leaf() {
-            let root_key = K::new_from_partial(&root_node.prefix);
-            let satisfies_start = match &start_bound {
-                Bound::Included(start_key) => {
-                    IterInner::<K, P, V>::key_order(&root_key, start_key)
-                        >= std::cmp::Ordering::Equal
-                }
-                Bound::Excluded(start_key) => {
-                    IterInner::<K, P, V>::key_order(&root_key, start_key)
-                        > std::cmp::Ordering::Equal
-                }
-                Bound::Unbounded => true,
-            };
-
             if satisfies_start {
-                let root_value = root_node
-                    .value()
-                    .expect("corruption: missing data at leaf node during iteration");
                 return Self {
-                    inner: Box::new(std::iter::once((root_key, root_value))),
-                    _marker: Default::default(),
-                };
-            } else {
-                return Self {
-                    inner: Box::new(std::iter::empty()),
+                    inner: Box::new(
+                        std::iter::once((
+                            root_key,
+                            root_value.expect(
+                                "corruption: missing data at leaf node during iteration",
+                            ),
+                        )),
+                    ),
                     _marker: Default::default(),
                 };
             }
+
+            return Self {
+                inner: Box::new(std::iter::empty()),
+                _marker: Default::default(),
+            };
+        }
+
+        let children = IterInner::<K, P, V>::new_with_start_bound(
+            root_node,
+            start_bound.clone(),
+        );
+        if satisfies_start {
+            return Self::from_root_and_children(root_key, root_value, children);
         }
 
         Self {
-            inner: Box::new(IterInner::<K, P, V>::new_with_start_bound(
-                root_node,
-                start_bound,
-            )),
+            inner: Box::new(children),
             _marker: Default::default(),
         }
     }

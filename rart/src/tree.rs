@@ -441,7 +441,7 @@ where
     ) -> Option<(KeyType, &'a ValueType)> {
         let mut cur_node = cur_node;
         let mut cur_key = KeyType::new_from_partial(&cur_node.prefix);
-        let mut best_match = cur_node.value().map(|value| (cur_key.clone(), value));
+        let mut best_match = None;
         let mut depth = 0;
 
         loop {
