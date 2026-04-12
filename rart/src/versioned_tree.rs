@@ -77,13 +77,14 @@ where
 /// A versioned node that can be shared between multiple tree versions.
 pub struct VersionedNode<P: Partial, V> {
     pub(crate) prefix: P,
+    pub(crate) value: Option<V>,
     pub(crate) content: VersionedContent<P, V>,
     pub(crate) version: u64,
 }
 
 /// Content of a versioned node, using Arc for child sharing.
 pub(crate) enum VersionedContent<P: Partial, V> {
-    Leaf(V),
+    Empty,
     Node4(SortedKeyedMapping<Arc<VersionedNode<P, V>>, 4>),
     Node16(SortedKeyedMapping<Arc<VersionedNode<P, V>>, 16>),
     Node48(IndexedMapping<Arc<VersionedNode<P, V>>, 48, Bitset64<1>>),
@@ -217,7 +218,7 @@ where
         self.version += 1;
 
         let Some(root) = &self.root else {
-            self.root = Some(Arc::new(VersionedNode::new_leaf(
+                self.root = Some(Arc::new(VersionedNode::new_leaf(
                 key.to_partial(0),
                 value,
                 self.version,
@@ -355,23 +356,36 @@ where
 
         // Special case: root is a leaf
         if root.is_leaf() {
+            if root.prefix.len() != key.length_at(0) {
+                return None;
+            }
+
             match Arc::try_unwrap(self.root.take().unwrap()) {
-                Ok(owned_root) => match owned_root.content {
-                    VersionedContent::Leaf(v) => return Some(v),
-                    _ => unreachable!(),
-                },
+                Ok(mut owned_root) => {
+                    return owned_root.value.take();
+                }
                 Err(shared_root) => {
                     // Root is shared, clone the value
-                    match &shared_root.content {
-                        VersionedContent::Leaf(v) => {
-                            let cloned_value = v.clone();
-                            self.root = None;
-                            return Some(cloned_value);
-                        }
-                        _ => unreachable!(),
-                    }
+                    let cloned_value = shared_root.value().cloned();
+                    self.root = None;
+                    return cloned_value;
                 }
             }
+        }
+
+        if root.prefix.len() == key.length_at(0) {
+            let new_root = Self::ensure_cow_node(Arc::clone(root), self.version);
+            let mut new_root = match Arc::try_unwrap(new_root) {
+                Ok(owned) => owned,
+                Err(_) => panic!("ensure_cow_node should have given us exclusive ownership"),
+            };
+            let removed = new_root.value.take();
+            if new_root.num_children() == 0 && new_root.value.is_none() {
+                self.root = None;
+            } else {
+                self.root = Some(Arc::new(new_root));
+            }
+            return removed;
         }
 
         let (new_root, removed_value) =
@@ -379,7 +393,8 @@ where
 
         // Update root, handling the case where it might become empty
         if let Some(root_node) = new_root {
-            if root_node.is_inner() && root_node.num_children() == 0 {
+            if root_node.is_inner() && root_node.num_children() == 0 && root_node.value().is_none()
+            {
                 self.root = None;
             } else {
                 self.root = Some(root_node);
@@ -452,15 +467,21 @@ where
         match Arc::try_unwrap(node) {
             Ok(owned_node) => {
                 // Fast path: we have unique ownership, convert in-place
-                let (unversioned_value, unversioned_content) = match owned_node.content {
-                    VersionedContent::Leaf(value) => (Some(value), Content::Empty),
+                let VersionedNode {
+                    prefix,
+                    value,
+                    content,
+                    version: _,
+                } = owned_node;
+                let unversioned_content = match content {
+                    VersionedContent::Empty => Content::Empty,
                     VersionedContent::Node4(km) => {
                         let mut new_km = SortedKeyedMapping::new();
                         for (key, child) in km.into_iter() {
                             let converted_child = Self::convert_to_unversioned_node(child);
                             new_km.add_child(key, converted_child);
                         }
-                        (None, Content::Node4(new_km))
+                        Content::Node4(new_km)
                     }
                     VersionedContent::Node16(km) => {
                         let mut new_km = SortedKeyedMapping::new();
@@ -468,7 +489,7 @@ where
                             let converted_child = Self::convert_to_unversioned_node(child);
                             new_km.add_child(key, converted_child);
                         }
-                        (None, Content::Node16(new_km))
+                        Content::Node16(new_km)
                     }
                     VersionedContent::Node48(km) => {
                         let mut new_km = IndexedMapping::new();
@@ -476,7 +497,7 @@ where
                             let converted_child = Self::convert_to_unversioned_node(child);
                             new_km.add_child(key, converted_child);
                         }
-                        (None, Content::Node48(new_km))
+                        Content::Node48(new_km)
                     }
                     VersionedContent::Node256(km) => {
                         let mut new_km = DirectMapping::new();
@@ -484,20 +505,20 @@ where
                             let converted_child = Self::convert_to_unversioned_node(child);
                             new_km.add_child(key, converted_child);
                         }
-                        (None, Content::Node256(new_km))
+                        Content::Node256(new_km)
                     }
                 };
 
                 DefaultNode {
-                    prefix: owned_node.prefix,
-                    value: unversioned_value,
+                    prefix,
+                    value,
                     content: unversioned_content,
                 }
             }
             Err(shared_node) => {
                 // Slow path: node is shared, must clone
-                let (unversioned_value, unversioned_content) = match &shared_node.content {
-                    VersionedContent::Leaf(value) => (Some(value.clone()), Content::Empty),
+                let unversioned_content = match &shared_node.content {
+                    VersionedContent::Empty => Content::Empty,
                     VersionedContent::Node4(km) => {
                         let mut new_km = SortedKeyedMapping::new();
                         for (key, child) in km.iter() {
@@ -505,7 +526,7 @@ where
                                 Self::convert_to_unversioned_node(Arc::clone(child));
                             new_km.add_child(key, converted_child);
                         }
-                        (None, Content::Node4(new_km))
+                        Content::Node4(new_km)
                     }
                     VersionedContent::Node16(km) => {
                         let mut new_km = SortedKeyedMapping::new();
@@ -514,7 +535,7 @@ where
                                 Self::convert_to_unversioned_node(Arc::clone(child));
                             new_km.add_child(key, converted_child);
                         }
-                        (None, Content::Node16(new_km))
+                        Content::Node16(new_km)
                     }
                     VersionedContent::Node48(km) => {
                         let mut new_km = IndexedMapping::new();
@@ -523,7 +544,7 @@ where
                                 Self::convert_to_unversioned_node(Arc::clone(child));
                             new_km.add_child(key, converted_child);
                         }
-                        (None, Content::Node48(new_km))
+                        Content::Node48(new_km)
                     }
                     VersionedContent::Node256(km) => {
                         let mut new_km = DirectMapping::new();
@@ -532,13 +553,13 @@ where
                                 Self::convert_to_unversioned_node(Arc::clone(child));
                             new_km.add_child(key, converted_child);
                         }
-                        (None, Content::Node256(new_km))
+                        Content::Node256(new_km)
                     }
                 };
 
                 DefaultNode {
                     prefix: shared_node.prefix.clone(),
-                    value: unversioned_value,
+                    value: shared_node.value.clone(),
                     content: unversioned_content,
                 }
             }
@@ -551,7 +572,8 @@ impl<P: Partial + Clone, V> VersionedNode<P, V> {
     pub fn new_leaf(prefix: P, value: V, version: u64) -> Self {
         Self {
             prefix,
-            content: VersionedContent::Leaf(value),
+            value: Some(value),
+            content: VersionedContent::Empty,
             version,
         }
     }
@@ -560,6 +582,7 @@ impl<P: Partial + Clone, V> VersionedNode<P, V> {
     pub fn new_inner(prefix: P, version: u64) -> Self {
         Self {
             prefix,
+            value: None,
             content: VersionedContent::Node4(SortedKeyedMapping::new()),
             version,
         }
@@ -567,7 +590,7 @@ impl<P: Partial + Clone, V> VersionedNode<P, V> {
 
     /// Check if this is a leaf node.
     pub fn is_leaf(&self) -> bool {
-        matches!(&self.content, VersionedContent::Leaf(_))
+        matches!(&self.content, VersionedContent::Empty)
     }
 
     /// Check if this is an inner node.
@@ -577,10 +600,7 @@ impl<P: Partial + Clone, V> VersionedNode<P, V> {
 
     /// Get the value if this is a leaf node.
     pub fn value(&self) -> Option<&V> {
-        match &self.content {
-            VersionedContent::Leaf(value) => Some(value),
-            _ => None,
-        }
+        self.value.as_ref()
     }
 
     /// Seek a child by key.
@@ -590,7 +610,7 @@ impl<P: Partial + Clone, V> VersionedNode<P, V> {
             VersionedContent::Node16(km) => km.seek_child(key),
             VersionedContent::Node48(km) => km.seek_child(key),
             VersionedContent::Node256(km) => km.seek_child(key),
-            VersionedContent::Leaf(_) => None,
+            VersionedContent::Empty => None,
         }
     }
 
@@ -601,7 +621,7 @@ impl<P: Partial + Clone, V> VersionedNode<P, V> {
             VersionedContent::Node16(km) => km.num_children(),
             VersionedContent::Node48(km) => km.num_children(),
             VersionedContent::Node256(km) => km.num_children(),
-            VersionedContent::Leaf(_) => 0,
+            VersionedContent::Empty => 0,
         }
     }
 
@@ -612,7 +632,7 @@ impl<P: Partial + Clone, V> VersionedNode<P, V> {
             VersionedContent::Node16(km) => km.num_children() >= 16,
             VersionedContent::Node48(km) => km.num_children() >= 48,
             VersionedContent::Node256(_) => false, // Node256 never grows
-            VersionedContent::Leaf(_) => false,
+            VersionedContent::Empty => false,
         }
     }
 
@@ -623,6 +643,7 @@ impl<P: Partial + Clone, V> VersionedNode<P, V> {
     {
         Self {
             prefix: self.prefix.clone(),
+            value: self.value.clone(),
             content: match &self.content {
                 VersionedContent::Node4(km) => {
                     // Grow Node4 to Node16
@@ -651,7 +672,7 @@ impl<P: Partial + Clone, V> VersionedNode<P, V> {
                 VersionedContent::Node256(_) => {
                     panic!("Node256 cannot grow further")
                 }
-                VersionedContent::Leaf(_) => {
+                VersionedContent::Empty => {
                     panic!("Leaf nodes cannot grow")
                 }
             },
@@ -666,8 +687,9 @@ impl<P: Partial + Clone, V> VersionedNode<P, V> {
     {
         Self {
             prefix: self.prefix.clone(),
+            value: self.value.clone(),
             content: match &self.content {
-                VersionedContent::Leaf(v) => VersionedContent::Leaf(v.clone()),
+                VersionedContent::Empty => VersionedContent::Empty,
                 VersionedContent::Node4(km) => {
                     // Manually clone Node4 mapping
                     let mut new_km = SortedKeyedMapping::new();
@@ -702,6 +724,37 @@ impl<P: Partial + Clone, V> VersionedNode<P, V> {
                 }
             },
             version: new_version,
+        }
+    }
+
+    fn add_child(&mut self, key: u8, child: Arc<VersionedNode<P, V>>)
+    where
+        V: Clone,
+    {
+        if matches!(self.content, VersionedContent::Empty) {
+            self.content = VersionedContent::Node4(SortedKeyedMapping::new());
+        }
+
+        if self.is_full() {
+            *self = self.grow(self.version);
+        }
+
+        match &mut self.content {
+            VersionedContent::Node4(km) => km.add_child(key, child),
+            VersionedContent::Node16(km) => km.add_child(key, child),
+            VersionedContent::Node48(km) => km.add_child(key, child),
+            VersionedContent::Node256(km) => km.add_child(key, child),
+            VersionedContent::Empty => unreachable!("empty nodes are promoted before adding children"),
+        }
+    }
+
+    fn delete_child(&mut self, key: u8) -> Option<Arc<VersionedNode<P, V>>> {
+        match &mut self.content {
+            VersionedContent::Node4(km) => km.delete_child(key),
+            VersionedContent::Node16(km) => km.delete_child(key),
+            VersionedContent::Node48(km) => km.delete_child(key),
+            VersionedContent::Node256(km) => km.delete_child(key),
+            VersionedContent::Empty => None,
         }
     }
 }
@@ -776,37 +829,34 @@ where
         let is_prefix_match =
             min(cur_node.prefix.len(), key.length_at(depth)) == longest_common_prefix;
 
-        // Case 1: Exact match, replace existing leaf value
-        if is_prefix_match && cur_node.prefix.len() == key.length_at(depth) && cur_node.is_leaf() {
-            // This is a replacement - capture old value if requested
-            let new_node = match Arc::try_unwrap(cur_node) {
-                Ok(owned_node) => {
-                    // We have exclusive ownership, can extract the old value without cloning
-                    if let (Some(old_value_out), VersionedContent::Leaf(old_val)) =
-                        (old_value_out, owned_node.content)
-                    {
-                        *old_value_out = Some(old_val);
-                    }
-                    Arc::new(VersionedNode::new_leaf(owned_node.prefix, value, version))
-                }
-                Err(shared_node) => {
-                    // Node is shared, clone the old value if requested
-                    if let (Some(old_value_out), VersionedContent::Leaf(old_val)) =
-                        (old_value_out, &shared_node.content)
-                    {
-                        *old_value_out = Some(old_val.clone());
-                    }
-                    Arc::new(VersionedNode::new_leaf(
-                        shared_node.prefix.clone(),
-                        value,
-                        version,
-                    ))
-                }
+        if is_prefix_match && cur_node.prefix.len() == key.length_at(depth) {
+            let new_node = Self::ensure_cow_node(cur_node, version);
+            let mut new_node = match Arc::try_unwrap(new_node) {
+                Ok(owned) => owned,
+                Err(_) => panic!("ensure_cow_node should have given us exclusive ownership"),
             };
-            return (new_node, true);
+            let old_value = new_node.value.replace(value);
+            let was_replaced = old_value.is_some();
+            if let (Some(old_value_out), Some(old_value)) = (old_value_out, old_value) {
+                *old_value_out = Some(old_value);
+            }
+            return (Arc::new(new_node), was_replaced);
         }
-        // Case 2: Prefix mismatch, need to split the node
-        else if !is_prefix_match {
+
+        if is_prefix_match && cur_node.prefix.len() > key.length_at(depth) {
+            let mut existing_node = cur_node.cow_clone_inner(version);
+            let old_prefix = existing_node.prefix.clone();
+            existing_node.prefix = old_prefix.partial_after(longest_common_prefix);
+
+            let mut new_parent =
+                VersionedNode::new_inner(old_prefix.partial_before(longest_common_prefix), version);
+            new_parent.value = Some(value);
+            let edge = old_prefix.at(longest_common_prefix);
+            new_parent.add_child(edge, Arc::new(existing_node));
+            return (Arc::new(new_parent), false);
+        }
+
+        if !is_prefix_match {
             let mut new_inner = VersionedNode::new_inner(
                 cur_node.prefix.partial_before(longest_common_prefix),
                 version,
@@ -839,6 +889,22 @@ where
             return (Arc::new(new_inner), false);
         }
 
+        if cur_node.is_leaf() {
+            let edge = key.at(depth + longest_common_prefix);
+            let new_leaf = Arc::new(VersionedNode::new_leaf(
+                key.to_partial(depth + longest_common_prefix),
+                value,
+                version,
+            ));
+            let new_node = Self::ensure_cow_node(cur_node, version);
+            let mut new_node = match Arc::try_unwrap(new_node) {
+                Ok(owned) => owned,
+                Err(_) => panic!("ensure_cow_node should have given us exclusive ownership"),
+            };
+            new_node.add_child(edge, new_leaf);
+            return (Arc::new(new_node), false);
+        }
+
         // Case 3: Need to recurse deeper
         let k = key.at(depth + cur_node.prefix.len());
         let prefix_len = cur_node.prefix.len();
@@ -864,25 +930,8 @@ where
                 Ok(owned) => owned,
                 Err(_) => panic!("ensure_cow_node should have given us exclusive ownership"),
             };
-            match &mut new_node_mut.content {
-                VersionedContent::Node4(km_mut) => {
-                    km_mut.delete_child(k);
-                    km_mut.add_child(k, new_child);
-                }
-                VersionedContent::Node16(km_mut) => {
-                    km_mut.delete_child(k);
-                    km_mut.add_child(k, new_child);
-                }
-                VersionedContent::Node48(km_mut) => {
-                    km_mut.delete_child(k);
-                    km_mut.add_child(k, new_child);
-                }
-                VersionedContent::Node256(km_mut) => {
-                    km_mut.delete_child(k);
-                    km_mut.add_child(k, new_child);
-                }
-                VersionedContent::Leaf(_) => unreachable!("Inner node expected"),
-            }
+            new_node_mut.delete_child(k);
+            new_node_mut.add_child(k, new_child);
 
             (Arc::new(new_node_mut), was_replaced)
         } else {
@@ -895,32 +944,12 @@ where
 
             let mut new_node_mut = match Arc::try_unwrap(new_node) {
                 Ok(owned) => {
-                    if owned.is_full() {
-                        // Node is full, grow it first
-                        owned.grow(version)
-                    } else {
-                        // Node has space, use it directly
-                        owned
-                    }
+                    owned
                 }
                 Err(_) => panic!("ensure_cow_node should have given us exclusive ownership"),
             };
 
-            match &mut new_node_mut.content {
-                VersionedContent::Node4(km_mut) => {
-                    km_mut.add_child(k, new_leaf);
-                }
-                VersionedContent::Node16(km_mut) => {
-                    km_mut.add_child(k, new_leaf);
-                }
-                VersionedContent::Node48(km_mut) => {
-                    km_mut.add_child(k, new_leaf);
-                }
-                VersionedContent::Node256(km_mut) => {
-                    km_mut.add_child(k, new_leaf);
-                }
-                VersionedContent::Leaf(_) => unreachable!("Inner node expected"),
-            }
+            new_node_mut.add_child(k, new_leaf);
 
             (Arc::new(new_node_mut), false)
         }
@@ -940,17 +969,26 @@ where
             return None;
         }
 
-        // If this is a leaf and matches completely, remove it
-        if cur_node.is_leaf() {
-            if cur_node.prefix.len() == key.length_at(depth) {
-                let removed_value = match &cur_node.content {
-                    VersionedContent::Leaf(v) => v.clone(),
-                    _ => unreachable!(),
-                };
-                return Some((None, removed_value)); // Remove this node entirely
-            } else {
-                return None; // Not a complete match
+        if cur_node.prefix.len() == key.length_at(depth) {
+            if cur_node.is_leaf() {
+                let removed_value = cur_node.value()?.clone();
+                return Some((None, removed_value));
             }
+
+            let new_node = Self::ensure_cow_node(cur_node, version);
+            let mut new_node = match Arc::try_unwrap(new_node) {
+                Ok(owned) => owned,
+                Err(_) => panic!("ensure_cow_node should have given us exclusive ownership"),
+            };
+            let removed_value = new_node.value.take()?;
+            if new_node.num_children() == 0 && new_node.value.is_none() {
+                return Some((None, removed_value));
+            }
+            return Some((Some(Arc::new(new_node)), removed_value));
+        }
+
+        if cur_node.is_leaf() {
+            return None;
         }
 
         // This is an inner node, recurse to find child
@@ -974,32 +1012,13 @@ where
             Err(_) => panic!("ensure_cow_node should have given us exclusive ownership"),
         };
 
-        match &mut new_node_mut.content {
-            VersionedContent::Node4(km) => {
-                km.delete_child(k);
-                if let Some(new_child) = new_child_opt {
-                    km.add_child(k, new_child);
-                }
-            }
-            VersionedContent::Node16(km) => {
-                km.delete_child(k);
-                if let Some(new_child) = new_child_opt {
-                    km.add_child(k, new_child);
-                }
-            }
-            VersionedContent::Node48(km) => {
-                km.delete_child(k);
-                if let Some(new_child) = new_child_opt {
-                    km.add_child(k, new_child);
-                }
-            }
-            VersionedContent::Node256(km) => {
-                km.delete_child(k);
-                if let Some(new_child) = new_child_opt {
-                    km.add_child(k, new_child);
-                }
-            }
-            VersionedContent::Leaf(_) => unreachable!("Inner node expected"),
+        new_node_mut.delete_child(k);
+        if let Some(new_child) = new_child_opt {
+            new_node_mut.add_child(k, new_child);
+        }
+
+        if new_node_mut.num_children() == 0 && new_node_mut.value.is_none() {
+            return Some((None, removed_value));
         }
 
         Some((Some(Arc::new(new_node_mut)), removed_value))
@@ -1649,6 +1668,26 @@ mod tests {
     }
 
     #[test]
+    fn test_raw_prefix_keys_are_supported() {
+        let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<8>, i32>::new();
+
+        tree.insert_k(&ArrayKey::new_from_slice(b"d"), 1);
+        tree.insert_k(&ArrayKey::new_from_slice(b"da"), 2);
+
+        assert_eq!(tree.get_k(&ArrayKey::new_from_slice(b"d")), Some(&1));
+        assert_eq!(tree.get_k(&ArrayKey::new_from_slice(b"da")), Some(&2));
+    }
+
+    #[test]
+    fn test_remove_longer_key_does_not_delete_leaf_root_prefix() {
+        let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<8>, i32>::new();
+        tree.insert_k(&ArrayKey::new_from_slice(b"d"), 1);
+
+        assert_eq!(tree.remove_k(&ArrayKey::new_from_slice(b"da")), None);
+        assert_eq!(tree.get_k(&ArrayKey::new_from_slice(b"d")), Some(&1));
+    }
+
+    #[test]
     fn test_insert_with_snapshots() {
         // Test insert() behavior when nodes are shared (with snapshots)
         let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new();
@@ -1680,6 +1719,20 @@ mod tests {
 
         // Snapshot should still have its original value
         assert_eq!(snapshot.get("key1"), Some(&100));
+    }
+
+    #[test]
+    fn test_prefix_keys_with_snapshots_preserve_isolation() {
+        let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<8>, i32>::new();
+        tree.insert_k(&ArrayKey::new_from_slice(b"d"), 1);
+
+        let snapshot = tree.snapshot();
+        tree.insert_k(&ArrayKey::new_from_slice(b"da"), 2);
+
+        assert_eq!(tree.get_k(&ArrayKey::new_from_slice(b"d")), Some(&1));
+        assert_eq!(tree.get_k(&ArrayKey::new_from_slice(b"da")), Some(&2));
+        assert_eq!(snapshot.get_k(&ArrayKey::new_from_slice(b"d")), Some(&1));
+        assert_eq!(snapshot.get_k(&ArrayKey::new_from_slice(b"da")), None);
     }
 
     #[test]
