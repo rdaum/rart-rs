@@ -815,22 +815,18 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet, btree_map};
+    use std::collections::BTreeMap;
     use std::fmt::Debug;
+    use std::ops::Bound::{Excluded, Included, Unbounded};
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use rand::SeedableRng;
-    use rand::rngs::StdRng;
-    use rand::seq::SliceRandom;
-    use rand::{Rng, rng};
+    use proptest::prelude::*;
 
     use crate::keys::KeyTrait;
     use crate::keys::array_key::ArrayKey;
     use crate::keys::vector_key::VectorKey;
     use crate::partials::array_partial::ArrPartial;
-    use crate::stats::TreeStatsTrait;
-    use crate::tree;
     use crate::tree::AdaptiveRadixTree;
 
     static PANIC_ON_FOUR_CMP: AtomicBool = AtomicBool::new(false);
@@ -931,6 +927,342 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Debug)]
+    enum TreeOp {
+        Get { key: u8 },
+        Insert { key: u8, value: u16 },
+        Update { key: u8, value: u16 },
+        Remove { key: u8 },
+    }
+
+    fn tree_op_strategy() -> impl Strategy<Value = TreeOp> {
+        prop_oneof![
+            any::<u8>().prop_map(|key| TreeOp::Get { key }),
+            (any::<u8>(), any::<u16>()).prop_map(|(key, value)| TreeOp::Insert { key, value }),
+            (any::<u8>(), any::<u16>()).prop_map(|(key, value)| TreeOp::Update { key, value }),
+            any::<u8>().prop_map(|key| TreeOp::Remove { key }),
+        ]
+    }
+
+    #[derive(Clone, Debug)]
+    enum RangeQuery {
+        All,
+        From {
+            start: u8,
+            inclusive: bool,
+        },
+        To {
+            end: u8,
+            inclusive: bool,
+        },
+        Between {
+            start: u8,
+            end: u8,
+            start_inclusive: bool,
+            end_inclusive: bool,
+        },
+    }
+
+    fn range_query_strategy() -> impl Strategy<Value = RangeQuery> {
+        prop_oneof![
+            Just(RangeQuery::All),
+            (any::<u8>(), any::<bool>())
+                .prop_map(|(start, inclusive)| RangeQuery::From { start, inclusive }),
+            (any::<u8>(), any::<bool>())
+                .prop_map(|(end, inclusive)| RangeQuery::To { end, inclusive }),
+            (any::<u8>(), any::<u8>(), any::<bool>(), any::<bool>()).prop_map(
+                |(a, b, start_inclusive, end_inclusive)| {
+                    let (start, end) = if a <= b { (a, b) } else { (b, a) };
+                    let (start_inclusive, end_inclusive) = if start == end {
+                        (true, true)
+                    } else {
+                        (start_inclusive, end_inclusive)
+                    };
+                    RangeQuery::Between {
+                        start,
+                        end,
+                        start_inclusive,
+                        end_inclusive,
+                    }
+                }
+            ),
+        ]
+    }
+
+    fn ascii_key_strategy() -> impl Strategy<Value = Vec<u8>> {
+        proptest::collection::vec(b'a'..=b'd', 1..=6)
+    }
+
+    fn trim_array_key_bytes(bytes: &[u8]) -> Vec<u8> {
+        let end = bytes
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(bytes.len());
+        bytes[..end].to_vec()
+    }
+
+    fn collect_art_u8_items(tree: &AdaptiveRadixTree<ArrayKey<16>, u16>) -> Vec<(u8, u16)> {
+        tree.iter()
+            .map(|(key, value)| (key.to_be_u64() as u8, *value))
+            .collect()
+    }
+
+    fn collect_art_range_u8_items(
+        tree: &AdaptiveRadixTree<ArrayKey<16>, u16>,
+        query: &RangeQuery,
+    ) -> Vec<(u8, u16)> {
+        match *query {
+            RangeQuery::All => tree
+                .range(..)
+                .map(|(key, value)| (key.to_be_u64() as u8, *value))
+                .collect(),
+            RangeQuery::From { start, inclusive } => {
+                let start_key: ArrayKey<16> = start.into();
+                if inclusive {
+                    tree.range((Included(start_key), Unbounded))
+                } else {
+                    tree.range((Excluded(start_key), Unbounded))
+                }
+                .map(|(key, value)| (key.to_be_u64() as u8, *value))
+                .collect()
+            }
+            RangeQuery::To { end, inclusive } => {
+                let end_key: ArrayKey<16> = end.into();
+                if inclusive {
+                    tree.range((Unbounded, Included(end_key)))
+                } else {
+                    tree.range((Unbounded, Excluded(end_key)))
+                }
+                .map(|(key, value)| (key.to_be_u64() as u8, *value))
+                .collect()
+            }
+            RangeQuery::Between {
+                start,
+                end,
+                start_inclusive,
+                end_inclusive,
+            } => {
+                let start_key: ArrayKey<16> = start.into();
+                let end_key: ArrayKey<16> = end.into();
+                let start_bound = if start_inclusive {
+                    Included(start_key)
+                } else {
+                    Excluded(start_key)
+                };
+                let end_bound = if end_inclusive {
+                    Included(end_key)
+                } else {
+                    Excluded(end_key)
+                };
+                tree.range((start_bound, end_bound))
+                    .map(|(key, value)| (key.to_be_u64() as u8, *value))
+                    .collect()
+            }
+        }
+    }
+
+    fn collect_btree_range_u8_items(map: &BTreeMap<u8, u16>, query: &RangeQuery) -> Vec<(u8, u16)> {
+        match *query {
+            RangeQuery::All => map.range(..).map(|(key, value)| (*key, *value)).collect(),
+            RangeQuery::From { start, inclusive } => if inclusive {
+                map.range((Included(start), Unbounded))
+            } else {
+                map.range((Excluded(start), Unbounded))
+            }
+            .map(|(key, value)| (*key, *value))
+            .collect(),
+            RangeQuery::To { end, inclusive } => if inclusive {
+                map.range((Unbounded, Included(end)))
+            } else {
+                map.range((Unbounded, Excluded(end)))
+            }
+            .map(|(key, value)| (*key, *value))
+            .collect(),
+            RangeQuery::Between {
+                start,
+                end,
+                start_inclusive,
+                end_inclusive,
+            } => {
+                let start_bound = if start_inclusive {
+                    Included(start)
+                } else {
+                    Excluded(start)
+                };
+                let end_bound = if end_inclusive {
+                    Included(end)
+                } else {
+                    Excluded(end)
+                };
+                map.range((start_bound, end_bound))
+                    .map(|(key, value)| (*key, *value))
+                    .collect()
+            }
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn prop_map_operations_match_btreemap(
+            ops in proptest::collection::vec(tree_op_strategy(), 0..128)
+        ) {
+            let mut tree = AdaptiveRadixTree::<ArrayKey<16>, u16>::new();
+            let mut btree = BTreeMap::<u8, u16>::new();
+
+            for op in ops {
+                match op {
+                    TreeOp::Get { key } => {
+                        prop_assert_eq!(tree.get(key).copied(), btree.get(&key).copied());
+                    }
+                    TreeOp::Insert { key, value } => {
+                        let art_old = tree.insert(key, value);
+                        let btree_old = btree.insert(key, value);
+                        prop_assert_eq!(art_old, btree_old);
+                        prop_assert_eq!(tree.get(key).copied(), btree.get(&key).copied());
+                    }
+                    TreeOp::Update { key, value } => {
+                        let art_present = if let Some(slot) = tree.get_mut(key) {
+                            *slot = value;
+                            true
+                        } else {
+                            false
+                        };
+                        let btree_present = if let Some(slot) = btree.get_mut(&key) {
+                            *slot = value;
+                            true
+                        } else {
+                            false
+                        };
+                        prop_assert_eq!(art_present, btree_present);
+                        prop_assert_eq!(tree.get(key).copied(), btree.get(&key).copied());
+                    }
+                    TreeOp::Remove { key } => {
+                        let art_removed = tree.remove(key);
+                        let btree_removed = btree.remove(&key);
+                        prop_assert_eq!(art_removed, btree_removed);
+                        prop_assert_eq!(tree.get(key).copied(), btree.get(&key).copied());
+                    }
+                }
+            }
+
+            let art_items = collect_art_u8_items(&tree);
+            let btree_items: Vec<_> = btree.iter().map(|(key, value)| (*key, *value)).collect();
+            prop_assert_eq!(art_items, btree_items);
+        }
+
+        #[test]
+        fn prop_range_queries_match_btreemap(
+            entries in proptest::collection::vec((any::<u8>(), any::<u16>()), 0..96),
+            queries in proptest::collection::vec(range_query_strategy(), 0..32)
+        ) {
+            let mut tree = AdaptiveRadixTree::<ArrayKey<16>, u16>::new();
+            let mut btree = BTreeMap::<u8, u16>::new();
+
+            for (key, value) in entries {
+                tree.insert(key, value);
+                btree.insert(key, value);
+            }
+
+            for query in &queries {
+                let art_items = collect_art_range_u8_items(&tree, query);
+                let btree_items = collect_btree_range_u8_items(&btree, query);
+                prop_assert_eq!(art_items, btree_items);
+            }
+        }
+
+        #[test]
+        fn prop_prefix_queries_match_reference_model(
+            entries in proptest::collection::vec((ascii_key_strategy(), any::<u8>()), 0..64),
+            probes in proptest::collection::vec(ascii_key_strategy(), 0..32)
+        ) {
+            let mut tree = AdaptiveRadixTree::<ArrayKey<8>, u8>::new();
+            let mut map = BTreeMap::<Vec<u8>, u8>::new();
+
+            for (key, value) in entries {
+                tree.insert_k(&ArrayKey::<8>::new_from_slice(&key), value);
+                map.insert(key, value);
+            }
+
+            for probe in probes {
+                let prefix = ArrayKey::<8>::new_from_slice(&probe);
+                let got_prefix: Vec<_> = tree
+                    .prefix_iter_k(&prefix)
+                    .map(|(key, value)| (trim_array_key_bytes(key.as_ref()), *value))
+                    .collect();
+                let expected_prefix: Vec<_> = map
+                    .iter()
+                    .filter(|(key, _)| key.starts_with(&probe))
+                    .map(|(key, value)| (key.clone(), *value))
+                    .collect();
+                prop_assert_eq!(got_prefix, expected_prefix);
+
+                let got_longest = tree
+                    .longest_prefix_match_k(&prefix)
+                    .map(|(key, value)| (trim_array_key_bytes(key.as_ref()), *value));
+                let expected_longest = map
+                    .iter()
+                    .filter(|(key, _)| probe.starts_with(key.as_slice()))
+                    .max_by_key(|(key, _)| key.len())
+                    .map(|(key, value)| (key.clone(), *value));
+                prop_assert_eq!(got_longest, expected_longest);
+            }
+        }
+
+        #[test]
+        fn prop_intersection_matches_reference_model(
+            left_entries in proptest::collection::vec((ascii_key_strategy(), any::<u8>()), 0..64),
+            right_entries in proptest::collection::vec((ascii_key_strategy(), any::<u8>()), 0..64)
+        ) {
+            let mut left = AdaptiveRadixTree::<ArrayKey<8>, u8>::new();
+            let mut right = AdaptiveRadixTree::<ArrayKey<8>, u8>::new();
+            let mut left_map = BTreeMap::<Vec<u8>, u8>::new();
+            let mut right_map = BTreeMap::<Vec<u8>, u8>::new();
+
+            for (key, value) in left_entries {
+                left.insert_k(&ArrayKey::<8>::new_from_slice(&key), value);
+                left_map.insert(key, value);
+            }
+
+            for (key, value) in right_entries {
+                right.insert_k(&ArrayKey::<8>::new_from_slice(&key), value);
+                right_map.insert(key, value);
+            }
+
+            let expected: Vec<_> = left_map
+                .iter()
+                .filter_map(|(key, left_value)| {
+                    right_map
+                        .get(key)
+                        .map(|right_value| (key.clone(), *left_value, *right_value))
+                })
+                .collect();
+            let expected_count = expected.len();
+
+            let mut got = Vec::new();
+            left.intersect_with(&right, |key, left_value, right_value| {
+                got.push((trim_array_key_bytes(key.as_ref()), *left_value, *right_value));
+            });
+            got.sort();
+
+            let mut got_values = Vec::new();
+            left.intersect_values_with(&right, |left_value, right_value| {
+                got_values.push((*left_value, *right_value));
+            });
+            got_values.sort();
+
+            let mut expected_values: Vec<_> = expected
+                .iter()
+                .map(|(_, left_value, right_value)| (*left_value, *right_value))
+                .collect();
+            expected_values.sort();
+
+            prop_assert_eq!(got, expected);
+            prop_assert_eq!(got_values, expected_values);
+            prop_assert_eq!(left.intersect_count(&right), expected_count);
+        }
+
+    }
+
     #[test]
     fn test_root_set_get() {
         let mut q = AdaptiveRadixTree::<ArrayKey<16>, i32>::new();
@@ -973,116 +1305,6 @@ mod tests {
         assert_eq!(q.get_k(&666i32.into()), Some(&2));
         q.insert_k(&1i32.into(), 1);
         assert_eq!(q.get_k(&1i32.into()), Some(&1));
-    }
-
-    fn gen_random_string_keys<const S: usize>(
-        l1_prefix: usize,
-        l2_prefix: usize,
-        suffix: usize,
-    ) -> Vec<(ArrayKey<S>, String)> {
-        let mut keys = Vec::new();
-        let chars: Vec<char> = ('a'..='z').collect();
-        for i in 0..chars.len() {
-            let level1_prefix = chars[i].to_string().repeat(l1_prefix);
-            for i in 0..chars.len() {
-                let level2_prefix = chars[i].to_string().repeat(l2_prefix);
-                let key_prefix = level1_prefix.clone() + &level2_prefix;
-                for _ in 0..=u8::MAX {
-                    let suffix: String = (0..suffix)
-                        .map(|_| chars[rng().random_range(0..chars.len())])
-                        .collect();
-                    let string = key_prefix.clone() + &suffix;
-                    let k = string.clone().into();
-                    keys.push((k, string));
-                }
-            }
-        }
-
-        keys.shuffle(&mut rng());
-        keys
-    }
-
-    #[test]
-    fn test_bulk_random_string_query() {
-        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, String>::new();
-        let keys = gen_random_string_keys(3, 2, 3);
-        let mut num_inserted = 0;
-        for key in keys.iter() {
-            if tree.insert_k(&key.0, key.1.clone()).is_none() {
-                num_inserted += 1;
-                assert!(tree.get_k(&key.0).is_some());
-            }
-        }
-        let mut rng = rng();
-        for _i in 0..5_000_000 {
-            let entry = &keys[rng.random_range(0..keys.len())];
-            let val = tree.get_k(&entry.0);
-            debug_assert!(val.is_some());
-            debug_assert_eq!(*val.unwrap(), entry.1);
-        }
-
-        let stats = tree.get_tree_stats();
-        debug_assert_eq!(stats.num_values, num_inserted);
-    }
-
-    #[test]
-    fn test_random_numeric_insert_get() {
-        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, u64>::new();
-        let count = 9_000_000;
-        let mut rng = rng();
-        let mut keys_inserted = vec![];
-        for i in 0..count {
-            let value = i;
-            let rnd_key = rng.random_range(0..count);
-            if tree.get(rnd_key).is_none() && tree.insert(rnd_key, value).is_none() {
-                let result = tree.get(rnd_key);
-                assert!(result.is_some());
-                assert_eq!(*result.unwrap(), value);
-                keys_inserted.push((rnd_key, value));
-            }
-        }
-
-        let stats = tree.get_tree_stats();
-        debug_assert_eq!(stats.num_values, keys_inserted.len());
-
-        for (key, value) in &keys_inserted {
-            let result = tree.get(key);
-            debug_assert!(result.is_some(),);
-            debug_assert_eq!(*result.unwrap(), *value,);
-        }
-    }
-
-    #[test]
-    fn test_iter() {
-        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, u64>::new();
-        let count = 100000;
-        let mut rng = rng();
-        let mut keys_inserted = BTreeSet::new();
-        for i in 0..count {
-            let _value = i;
-            let rnd_val = rng.random_range(0..count);
-            let rnd_key: ArrayKey<16> = rnd_val.into();
-            if tree.get_k(&rnd_key).is_none() && tree.insert_k(&rnd_key, rnd_val).is_none() {
-                let result = tree.get_k(&rnd_key);
-                assert!(result.is_some());
-                assert_eq!(*result.unwrap(), rnd_val);
-                keys_inserted.insert((rnd_val, rnd_val));
-            }
-        }
-
-        // Iteration of keys_inserted and tree should be *roughly* the same, but the iteration order
-        // within a KeyedMapping is not guaranteed to be lexicographical, so we can't compare
-        // directly.
-        let mut tree_iter = tree.iter();
-        let keys_inserted_iter = keys_inserted.iter();
-        for btree_entry in keys_inserted_iter {
-            let art_entry = tree_iter.next();
-            debug_assert!(art_entry.is_some());
-            let art_entry = art_entry.unwrap();
-            debug_assert_eq!(*art_entry.1, btree_entry.1);
-            let art_key = art_entry.0.to_be_u64();
-            debug_assert_eq!(art_key, btree_entry.0);
-        }
     }
 
     #[test]
@@ -1338,96 +1560,6 @@ mod tests {
     }
 
     #[test]
-    fn test_delete() {
-        // Insert a bunch of random keys and values into both a btree and our tree, then iterate
-        // over the btree and delete the keys from our tree. Then, iterate over our tree and make
-        // sure it's empty.
-        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, u64>::new();
-        let mut btree = BTreeMap::new();
-        let count = 5_000;
-        let mut rng = rng();
-        for i in 0..count {
-            let _value = i;
-            let rnd_val = rng.random_range(0..u64::MAX);
-            let rnd_key: ArrayKey<16> = rnd_val.into();
-            tree.insert_k(&rnd_key, rnd_val);
-            btree.insert(rnd_val, rnd_val);
-        }
-
-        for (key, value) in btree.iter() {
-            let key: ArrayKey<16> = (*key).into();
-            let get_result = tree.get_k(&key);
-            debug_assert_eq!(
-                get_result.cloned(),
-                Some(*value),
-                "Key with prefix {:?} not found in tree; it should be",
-                key.to_partial(0).to_slice()
-            );
-            let result = tree.remove_k(&key);
-            debug_assert_eq!(result, Some(*value));
-        }
-    }
-    // Compare the results of a range query on an AdaptiveRadixTree and a BTreeMap, because we can
-    // safely assume the latter exhibits correct behavior.
-    fn test_range_matches<'a, KeyType: KeyTrait, ValueType: PartialEq + Debug + 'a>(
-        art_range: tree::Range<'a, KeyType, ValueType>,
-        btree_range: btree_map::Range<'a, u64, ValueType>,
-    ) {
-        // collect both into vectors then compare
-        let art_values = art_range.map(|(_, v)| v).collect::<Vec<_>>();
-        let btree_values = btree_range.map(|(_, v)| v).collect::<Vec<_>>();
-        debug_assert_eq!(art_values.len(), btree_values.len());
-        debug_assert_eq!(art_values, btree_values);
-    }
-
-    #[test]
-    fn test_range() {
-        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, u64>::new();
-        let count = 10000;
-        let mut rng = rng();
-        let mut keys_inserted = BTreeMap::new();
-        for i in 0..count {
-            let _value = i;
-            let rnd_val = rng.random_range(0..count);
-            let rnd_key: ArrayKey<16> = rnd_val.into();
-            if tree.get_k(&rnd_key).is_none() && tree.insert_k(&rnd_key, rnd_val).is_none() {
-                let result = tree.get_k(&rnd_key);
-                assert!(result.is_some());
-                assert_eq!(*result.unwrap(), rnd_val);
-                keys_inserted.insert(rnd_val, rnd_val);
-            }
-        }
-
-        // Test for range with unbounded start and exclusive end
-        let end_key: ArrayKey<16> = 100u64.into();
-        let t_r = tree.range(..end_key);
-        let k_r = keys_inserted.range(..100);
-        test_range_matches(t_r, k_r);
-
-        // Test for range with unbounded start and inclusive end.
-        let t_r = tree.range(..=end_key);
-        let k_r = keys_inserted.range(..=100);
-        test_range_matches(t_r, k_r);
-
-        // Test for range with unbounded end and exclusive start
-        let start_key: ArrayKey<16> = 100u64.into();
-        let t_r = tree.range(start_key..);
-        let k_r = keys_inserted.range(100..);
-        test_range_matches(t_r, k_r);
-
-        // Test for range with bounded start and end (exclusive)
-        let end_key: ArrayKey<16> = 1000u64.into();
-        let t_r = tree.range(start_key..end_key);
-        let k_r = keys_inserted.range(100..1000);
-        test_range_matches(t_r, k_r);
-
-        // Test for range with bounded start and end (inclusive)
-        let t_r = tree.range(start_key..=end_key);
-        let k_r = keys_inserted.range(100..=1000);
-        test_range_matches(t_r, k_r);
-    }
-
-    #[test]
     fn test_range_stops_after_first_out_of_bounds_regression() {
         let _guard = PANIC_TEST_LOCK.lock().unwrap();
         PANIC_ON_FOUR_CMP.store(false, Ordering::Relaxed);
@@ -1466,29 +1598,6 @@ mod tests {
 
         let expected: Vec<u64> = (12..=25).collect();
         assert_eq!(collected, expected);
-    }
-
-    #[test]
-    fn test_range_start_sequence_matches_btreemap_seeded() {
-        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, u64>::new();
-        let mut btree = BTreeMap::new();
-        let mut rng = StdRng::seed_from_u64(0x5eed_5eed_dead_beef);
-        const COUNT: usize = 20_000;
-        const SPACE: u64 = 80_000;
-
-        for _ in 0..COUNT {
-            let k = rng.random_range(0..SPACE);
-            tree.insert_k(&ArrayKey::<16>::from(k), k * 3 + 7);
-            btree.insert(k, k * 3 + 7);
-        }
-
-        let start_raw = rng.random_range(0..SPACE);
-        let start_key: ArrayKey<16> = start_raw.into();
-
-        let art_values: Vec<u64> = tree.range(start_key..).map(|(_, v)| *v).collect();
-        let btree_values: Vec<u64> = btree.range(start_raw..).map(|(_, v)| *v).collect();
-
-        assert_eq!(art_values, btree_values);
     }
 
     #[test]

@@ -1008,6 +1008,133 @@ where
 mod tests {
     use super::*;
     use crate::keys::array_key::ArrayKey;
+    use proptest::prelude::*;
+
+    #[derive(Clone, Debug)]
+    enum VersionedOp {
+        Get {
+            key: u8,
+        },
+        Insert {
+            key: u8,
+            value: u16,
+        },
+        Remove {
+            key: u8,
+        },
+        Snapshot,
+        SnapshotInsert {
+            snapshot_idx: u8,
+            key: u8,
+            value: u16,
+        },
+        SnapshotRemove {
+            snapshot_idx: u8,
+            key: u8,
+        },
+    }
+
+    fn versioned_op_strategy() -> impl Strategy<Value = VersionedOp> {
+        prop_oneof![
+            any::<u8>().prop_map(|key| VersionedOp::Get { key }),
+            (any::<u8>(), any::<u16>()).prop_map(|(key, value)| VersionedOp::Insert { key, value }),
+            any::<u8>().prop_map(|key| VersionedOp::Remove { key }),
+            Just(VersionedOp::Snapshot),
+            (any::<u8>(), any::<u8>(), any::<u16>()).prop_map(|(snapshot_idx, key, value)| {
+                VersionedOp::SnapshotInsert {
+                    snapshot_idx,
+                    key,
+                    value,
+                }
+            }),
+            (any::<u8>(), any::<u8>())
+                .prop_map(|(snapshot_idx, key)| VersionedOp::SnapshotRemove { snapshot_idx, key }),
+        ]
+    }
+
+    fn assert_versioned_tree_matches_map(
+        tree: &VersionedAdaptiveRadixTree<ArrayKey<16>, u16>,
+        map: &std::collections::BTreeMap<u8, u16>,
+    ) {
+        for key in 0u8..=u8::MAX {
+            assert_eq!(
+                tree.get(key).copied(),
+                map.get(&key).copied(),
+                "mismatch at key {key}"
+            );
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn prop_snapshot_operations_match_reference_model(
+            ops in proptest::collection::vec(versioned_op_strategy(), 0..96)
+        ) {
+            let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, u16>::new();
+            let mut map = std::collections::BTreeMap::<u8, u16>::new();
+            let mut snapshots = Vec::new();
+            let mut snapshot_maps = Vec::new();
+
+            for op in ops {
+                match op {
+                    VersionedOp::Get { key } => {
+                        prop_assert_eq!(tree.get(key).copied(), map.get(&key).copied());
+                    }
+                    VersionedOp::Insert { key, value } => {
+                        let expected_replaced = map.insert(key, value).is_some();
+                        let actual_replaced = tree.insert(key, value);
+                        prop_assert_eq!(actual_replaced, expected_replaced);
+                        prop_assert_eq!(tree.get(key).copied(), map.get(&key).copied());
+                    }
+                    VersionedOp::Remove { key } => {
+                        let expected_removed = map.remove(&key);
+                        let actual_removed = tree.remove(key);
+                        prop_assert_eq!(actual_removed, expected_removed);
+                        prop_assert_eq!(tree.get(key).copied(), map.get(&key).copied());
+                    }
+                    VersionedOp::Snapshot => {
+                        snapshots.push(tree.snapshot());
+                        snapshot_maps.push(map.clone());
+                    }
+                    VersionedOp::SnapshotInsert {
+                        snapshot_idx,
+                        key,
+                        value,
+                    } => {
+                        if !snapshots.is_empty() {
+                            let idx = snapshot_idx as usize % snapshots.len();
+                            let expected_replaced = snapshot_maps[idx].insert(key, value).is_some();
+                            let actual_replaced = snapshots[idx].insert(key, value);
+                            prop_assert_eq!(actual_replaced, expected_replaced);
+                            prop_assert_eq!(
+                                snapshots[idx].get(key).copied(),
+                                snapshot_maps[idx].get(&key).copied()
+                            );
+                            prop_assert_eq!(tree.get(key).copied(), map.get(&key).copied());
+                        }
+                    }
+                    VersionedOp::SnapshotRemove { snapshot_idx, key } => {
+                        if !snapshots.is_empty() {
+                            let idx = snapshot_idx as usize % snapshots.len();
+                            let expected_removed = snapshot_maps[idx].remove(&key);
+                            let actual_removed = snapshots[idx].remove(key);
+                            prop_assert_eq!(actual_removed, expected_removed);
+                            prop_assert_eq!(
+                                snapshots[idx].get(key).copied(),
+                                snapshot_maps[idx].get(&key).copied()
+                            );
+                            prop_assert_eq!(tree.get(key).copied(), map.get(&key).copied());
+                        }
+                    }
+                }
+            }
+
+            assert_versioned_tree_matches_map(&tree, &map);
+            for (snapshot, snapshot_map) in snapshots.iter().zip(snapshot_maps.iter()) {
+                assert_versioned_tree_matches_map(snapshot, snapshot_map);
+            }
+        }
+    }
 
     #[test]
     fn test_basic_snapshot() {
@@ -1084,23 +1211,6 @@ mod tests {
             let key = format!("key{i:02}");
             assert_eq!(snapshot.get(&key), Some(&i));
         }
-    }
-
-    #[test]
-    fn test_tree_structure_debugging() {
-        use crate::tree::AdaptiveRadixTree;
-
-        // Test what the regular tree does with the same keys
-        let mut regular_tree = AdaptiveRadixTree::<ArrayKey<16>, usize>::new();
-        regular_tree.insert(0, 12345);
-        regular_tree.insert(4573127, 67890);
-
-        // Try remove on regular tree
-        let regular_remove_result = regular_tree.remove(0);
-
-        // The regular tree should work, versioned should not (for now)
-        assert_eq!(regular_remove_result, Some(12345));
-        // TODO: Make versioned tree work the same way
     }
 
     #[test]

@@ -15,6 +15,7 @@ description = "High-performance Adaptive Radix Tree implementation with SIMD opt
 blart.workspace = true
 criterion.workspace = true
 im.workspace = true
+proptest.workspace = true
 rand.workspace = true
 shuttle.workspace = true
 
