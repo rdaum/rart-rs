@@ -217,12 +217,10 @@ impl<'a, K: KeyTrait<PartialType = P> + 'a, P: Partial + 'a, V> Iter<'a, K, P, V
 
         if root_node.is_leaf() {
             return Self {
-                inner: Box::new(
-                    std::iter::once((
-                        root_key,
-                        root_value.expect("corruption: missing data at leaf node during iteration"),
-                    )),
-                ),
+                inner: Box::new(std::iter::once((
+                    root_key,
+                    root_value.expect("corruption: missing data at leaf node during iteration"),
+                ))),
                 _marker: Default::default(),
             };
         }
@@ -243,12 +241,10 @@ impl<'a, K: KeyTrait<PartialType = P> + 'a, P: Partial + 'a, V> Iter<'a, K, P, V
 
         if root_node.is_leaf() {
             return Self {
-                inner: Box::new(
-                    std::iter::once((
-                        root_key,
-                        root_value.expect("corruption: missing data at leaf node during iteration"),
-                    )),
-                ),
+                inner: Box::new(std::iter::once((
+                    root_key,
+                    root_value.expect("corruption: missing data at leaf node during iteration"),
+                ))),
                 _marker: Default::default(),
             };
         }
@@ -288,14 +284,10 @@ impl<'a, K: KeyTrait<PartialType = P> + 'a, P: Partial + 'a, V> Iter<'a, K, P, V
         if root_node.is_leaf() {
             if satisfies_start {
                 return Self {
-                    inner: Box::new(
-                        std::iter::once((
-                            root_key,
-                            root_value.expect(
-                                "corruption: missing data at leaf node during iteration",
-                            ),
-                        )),
-                    ),
+                    inner: Box::new(std::iter::once((
+                        root_key,
+                        root_value.expect("corruption: missing data at leaf node during iteration"),
+                    ))),
                     _marker: Default::default(),
                 };
             }
@@ -306,10 +298,7 @@ impl<'a, K: KeyTrait<PartialType = P> + 'a, P: Partial + 'a, V> Iter<'a, K, P, V
             };
         }
 
-        let children = IterInner::<K, P, V>::new_with_start_bound(
-            root_node,
-            start_bound.clone(),
-        );
+        let children = IterInner::<K, P, V>::new_with_start_bound(root_node, start_bound.clone());
         if satisfies_start {
             return Self::from_root_and_children(root_key, root_value, children);
         }

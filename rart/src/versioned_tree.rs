@@ -218,7 +218,7 @@ where
         self.version += 1;
 
         let Some(root) = &self.root else {
-                self.root = Some(Arc::new(VersionedNode::new_leaf(
+            self.root = Some(Arc::new(VersionedNode::new_leaf(
                 key.to_partial(0),
                 value,
                 self.version,
@@ -744,7 +744,9 @@ impl<P: Partial + Clone, V> VersionedNode<P, V> {
             VersionedContent::Node16(km) => km.add_child(key, child),
             VersionedContent::Node48(km) => km.add_child(key, child),
             VersionedContent::Node256(km) => km.add_child(key, child),
-            VersionedContent::Empty => unreachable!("empty nodes are promoted before adding children"),
+            VersionedContent::Empty => {
+                unreachable!("empty nodes are promoted before adding children")
+            }
         }
     }
 
@@ -943,9 +945,7 @@ where
             ));
 
             let mut new_node_mut = match Arc::try_unwrap(new_node) {
-                Ok(owned) => {
-                    owned
-                }
+                Ok(owned) => owned,
                 Err(_) => panic!("ensure_cow_node should have given us exclusive ownership"),
             };
 
