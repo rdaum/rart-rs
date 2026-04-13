@@ -873,6 +873,17 @@ mod tests {
     use crate::partials::array_partial::ArrPartial;
     use crate::tree::AdaptiveRadixTree;
 
+    #[test]
+    fn values_iter_includes_root_value() {
+        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+        tree.insert("a", 1);
+        tree.insert("ab", 2);
+        tree.insert("abc", 3);
+
+        let values: Vec<_> = tree.values_iter().copied().collect();
+        assert_eq!(values, vec![1, 2, 3]);
+    }
+
     static PANIC_ON_FOUR_CMP: AtomicBool = AtomicBool::new(false);
     static PANIC_ON_BELOW_M_CMP: AtomicBool = AtomicBool::new(false);
     static PANIC_TEST_LOCK: Mutex<()> = Mutex::new(());

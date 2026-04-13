@@ -383,6 +383,7 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> Iterator for IterInne
 /// This iterator skips key reconstruction entirely, only yielding values.
 /// It's useful for measuring the overhead of key reconstruction in iteration.
 pub struct ValuesIter<'a, P: Partial + 'a, V> {
+    root_value: Option<&'a V>,
     node_iter_stack: Vec<NodeIter<'a, P, V>>,
 }
 
@@ -390,12 +391,13 @@ impl<'a, P: Partial + 'a, V> ValuesIter<'a, P, V> {
     pub(crate) fn new(node: Option<&'a DefaultNode<P, V>>) -> Self {
         let Some(root_node) = node else {
             return Self {
+                root_value: None,
                 node_iter_stack: Vec::new(),
             };
         };
 
-        // If root is a leaf, we handle it in the iterator
         Self {
+            root_value: root_node.value(),
             node_iter_stack: vec![root_node.iter()],
         }
     }
@@ -405,6 +407,10 @@ impl<'a, P: Partial + 'a, V> Iterator for ValuesIter<'a, P, V> {
     type Item = &'a V;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if let Some(value) = self.root_value.take() {
+            return Some(value);
+        }
+
         loop {
             // Get working node iterator off the stack. If there is none, we're done.
             let last_iter = self.node_iter_stack.last_mut()?;
