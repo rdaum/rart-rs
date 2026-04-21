@@ -13,7 +13,7 @@ edition = "2024"
 homepage = "https://github.com/rdaum/rart-rs"
 license = "Apache-2.0"
 repository = "https://github.com/rdaum/rart-rs"
-rust-version = "1.85"
+rust-version = "1.86"
 
 [workspace.dependencies]
 # Core dependencies
@@ -24,6 +24,7 @@ simdeez = "2.0.0"
 blart = "0.4"
 criterion = { version = "0.8", features = ["html_reports"] }
 im = "15.1"
+micromeasure = "0.6"
 proptest = "1.6"
 rand = "0.9"
 shuttle = "0.8"

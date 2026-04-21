@@ -15,6 +15,7 @@ description = "High-performance Adaptive Radix Tree implementation with SIMD opt
 blart.workspace = true
 criterion.workspace = true
 im.workspace = true
+micromeasure.workspace = true
 proptest.workspace = true
 rand.workspace = true
 shuttle.workspace = true
@@ -41,6 +42,10 @@ harness = false
 
 [[bench]]
 name = "versioned_tree_bench"
+harness = false
+
+[[bench]]
+name = "versioned_tree_microbenches"
 harness = false
 
 [[bench]]
