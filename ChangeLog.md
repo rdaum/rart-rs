@@ -4,17 +4,35 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Prefix-oriented APIs on `AdaptiveRadixTree`:
+  - `longest_prefix_match` / `longest_prefix_match_k`
+  - `prefix_iter` / `prefix_iter_k`
+- ART-native tree intersection/join APIs on `AdaptiveRadixTree`:
+  - `intersect_with`
+  - `intersect_values_with`
+  - `intersect_count`
+- Prefix and intersection benchmark coverage:
+  - `rart/benches/prefix_bench.rs`
+  - `rart/benches/intersection_join_bench.rs`
+- Regression tests for sparse-key iteration order in `DirectMapping` and `IndexedMapping`.
+- Property-style coverage for prefix-key edge cases and related regressions.
+
 ### Changed
 
 - Optimized Node48/Node256 child iteration to traverse only occupied slots while preserving sorted key order.
   - Added a set-bit iterator in `utils/bitset.rs` and switched `DirectMapping`/`IndexedMapping` iterators to use it.
   - Removed linear `0..255` probing from these hot iteration paths.
+- Added a quick/default benchmark profile with optional full-mode runs via `RART_BENCH_FULL=1`.
 
-### Added
+### Fixed
 
-- Regression tests to verify sparse-key iteration order is preserved:
-  - `mapping::direct_mapping::tests::iter_preserves_key_order_for_sparse_children`
-  - `mapping::indexed_mapping::test::iter_preserves_key_order_for_sparse_children`
+- Corrected handling of keys that are prefixes of other keys in both `AdaptiveRadixTree` and `VersionedAdaptiveRadixTree`.
+  - Insert/remove paths now preserve values stored on inner nodes.
+  - Prefix lookups and subtree iteration now correctly return entries rooted at those inner nodes.
+- Fixed `values_iter()` so it yields a value stored on the root node even when the root also has children.
+- Fixed nested snapshot reference tracking in the multithreaded versioned-tree fuzz target.
 
 ### Performance
 
