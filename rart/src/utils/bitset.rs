@@ -72,6 +72,75 @@ where
             current_word: 0,
         }
     }
+
+    #[inline]
+    fn first_empty_specialized(&self) -> Option<usize> {
+        if std::mem::size_of::<StorageType>() == 8 {
+            if STORAGE_WIDTH == 1 {
+                let word = self.bitset[0].to_u64().unwrap();
+                return (word != u64::MAX).then_some(word.trailing_ones() as usize);
+            }
+
+            if STORAGE_WIDTH == 4 {
+                let words = [
+                    self.bitset[0].to_u64().unwrap(),
+                    self.bitset[1].to_u64().unwrap(),
+                    self.bitset[2].to_u64().unwrap(),
+                    self.bitset[3].to_u64().unwrap(),
+                ];
+
+                for (idx, word) in words.into_iter().enumerate() {
+                    if word != u64::MAX {
+                        return Some((idx << 6) + word.trailing_ones() as usize);
+                    }
+                }
+                return None;
+            }
+        }
+
+        for (i, b) in self.bitset.iter().enumerate() {
+            if b.is_zero() {
+                return Some(i << Self::BIT_SHIFT);
+            }
+            if *b != StorageType::max_value() {
+                return Some((i << Self::BIT_SHIFT) + b.trailing_ones() as usize);
+            }
+        }
+        None
+    }
+
+    #[inline]
+    fn first_set_specialized(&self) -> Option<usize> {
+        if std::mem::size_of::<StorageType>() == 8 {
+            if STORAGE_WIDTH == 1 {
+                let word = self.bitset[0].to_u64().unwrap();
+                return (word != 0).then_some(word.trailing_zeros() as usize);
+            }
+
+            if STORAGE_WIDTH == 4 {
+                let words = [
+                    self.bitset[0].to_u64().unwrap(),
+                    self.bitset[1].to_u64().unwrap(),
+                    self.bitset[2].to_u64().unwrap(),
+                    self.bitset[3].to_u64().unwrap(),
+                ];
+
+                for (idx, word) in words.into_iter().enumerate() {
+                    if word != 0 {
+                        return Some((idx << 6) + word.trailing_zeros() as usize);
+                    }
+                }
+                return None;
+            }
+        }
+
+        for (i, b) in self.bitset.iter().enumerate() {
+            if !b.is_zero() {
+                return Some((i << Self::BIT_SHIFT) + b.trailing_zeros() as usize);
+            }
+        }
+        None
+    }
 }
 
 impl<StorageType, const STORAGE_WIDTH: usize> Iterator
@@ -105,24 +174,11 @@ where
     const STORAGE_WIDTH: usize = STORAGE_WIDTH;
 
     fn first_empty(&self) -> Option<usize> {
-        for (i, b) in self.bitset.iter().enumerate() {
-            if b.is_zero() {
-                return Some(i << Self::BIT_SHIFT);
-            }
-            if *b != StorageType::max_value() {
-                return Some((i << Self::BIT_SHIFT) + b.trailing_ones() as usize);
-            }
-        }
-        None
+        self.first_empty_specialized()
     }
 
     fn first_set(&self) -> Option<usize> {
-        for (i, b) in self.bitset.iter().enumerate() {
-            if !b.is_zero() {
-                return Some((i << Self::BIT_SHIFT) + b.trailing_zeros() as usize);
-            }
-        }
-        None
+        self.first_set_specialized()
     }
 
     #[inline]

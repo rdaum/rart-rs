@@ -4,10 +4,14 @@ use micromeasure::{
     BenchContext, BenchmarkRunner, BenchmarkRuntimeOptions, Throughput, benchmark_main, black_box,
 };
 
-use rart::utils::bitset::{Bitset64, BitsetTrait};
+use rart::utils::bitset::{Bitset8, Bitset16, Bitset32, Bitset64, BitsetTrait};
 
 type Bitset64x1 = Bitset64<1>;
 type Bitset64x4 = Bitset64<4>;
+type Bitset16x3 = Bitset16<3>;
+type Bitset8x6 = Bitset8<6>;
+type Bitset32x8 = Bitset32<8>;
+type Bitset16x16 = Bitset16<16>;
 
 fn full_bench_profile() -> bool {
     std::env::var("RART_BENCH_FULL").as_deref() == Ok("1")
@@ -148,17 +152,26 @@ trait IterBenchSupport: BitsetTrait {
     fn iter_sum(&self) -> usize;
 }
 
-impl IterBenchSupport for Bitset64x1 {
-    fn iter_sum(&self) -> usize {
-        self.iter().fold(0usize, |acc, pos| acc.wrapping_add(pos))
-    }
+macro_rules! impl_iter_bench_support {
+    ($($bitset:ty),* $(,)?) => {
+        $(
+            impl IterBenchSupport for $bitset {
+                fn iter_sum(&self) -> usize {
+                    self.iter().fold(0usize, |acc, pos| acc.wrapping_add(pos))
+                }
+            }
+        )*
+    };
 }
 
-impl IterBenchSupport for Bitset64x4 {
-    fn iter_sum(&self) -> usize {
-        self.iter().fold(0usize, |acc, pos| acc.wrapping_add(pos))
-    }
-}
+impl_iter_bench_support!(
+    Bitset64x1,
+    Bitset64x4,
+    Bitset16x3,
+    Bitset8x6,
+    Bitset32x8,
+    Bitset16x16,
+);
 
 fn bench_first_empty<Bitset: BitsetTrait + Default, const SET_BITS: usize>(
     ctx: &mut ReadContext<Bitset, SET_BITS>,
@@ -298,6 +311,22 @@ fn register_bitset64x1_benches(runner: &BenchmarkRunner) {
     register_case::<Bitset64x1, 64>(runner, "u64x1", "full");
 }
 
+fn register_bitset48_alternate_width_benches(runner: &BenchmarkRunner) {
+    register_case::<Bitset16x3, 0>(runner, "u16x3", "empty");
+    register_case::<Bitset16x3, 1>(runner, "u16x3", "one");
+    register_case::<Bitset16x3, 8>(runner, "u16x3", "eight");
+    register_case::<Bitset16x3, 24>(runner, "u16x3", "half");
+    register_case::<Bitset16x3, 47>(runner, "u16x3", "dense");
+    register_case::<Bitset16x3, 48>(runner, "u16x3", "full");
+
+    register_case::<Bitset8x6, 0>(runner, "u8x6", "empty");
+    register_case::<Bitset8x6, 1>(runner, "u8x6", "one");
+    register_case::<Bitset8x6, 8>(runner, "u8x6", "eight");
+    register_case::<Bitset8x6, 24>(runner, "u8x6", "half");
+    register_case::<Bitset8x6, 47>(runner, "u8x6", "dense");
+    register_case::<Bitset8x6, 48>(runner, "u8x6", "full");
+}
+
 fn register_bitset64x4_benches(runner: &BenchmarkRunner) {
     register_case::<Bitset64x4, 0>(runner, "u64x4", "empty");
     register_case::<Bitset64x4, 1>(runner, "u64x4", "one");
@@ -309,8 +338,30 @@ fn register_bitset64x4_benches(runner: &BenchmarkRunner) {
     register_case::<Bitset64x4, 256>(runner, "u64x4", "full");
 }
 
+fn register_bitset256_alternate_width_benches(runner: &BenchmarkRunner) {
+    register_case::<Bitset32x8, 0>(runner, "u32x8", "empty");
+    register_case::<Bitset32x8, 1>(runner, "u32x8", "one");
+    register_case::<Bitset32x8, 48>(runner, "u32x8", "forty_eight");
+    register_case::<Bitset32x8, 64>(runner, "u32x8", "sixty_four");
+    register_case::<Bitset32x8, 128>(runner, "u32x8", "half");
+    register_case::<Bitset32x8, 192>(runner, "u32x8", "dense");
+    register_case::<Bitset32x8, 255>(runner, "u32x8", "near_full");
+    register_case::<Bitset32x8, 256>(runner, "u32x8", "full");
+
+    register_case::<Bitset16x16, 0>(runner, "u16x16", "empty");
+    register_case::<Bitset16x16, 1>(runner, "u16x16", "one");
+    register_case::<Bitset16x16, 48>(runner, "u16x16", "forty_eight");
+    register_case::<Bitset16x16, 64>(runner, "u16x16", "sixty_four");
+    register_case::<Bitset16x16, 128>(runner, "u16x16", "half");
+    register_case::<Bitset16x16, 192>(runner, "u16x16", "dense");
+    register_case::<Bitset16x16, 255>(runner, "u16x16", "near_full");
+    register_case::<Bitset16x16, 256>(runner, "u16x16", "full");
+}
+
 benchmark_main!(|runner| {
     runner.set_runtime(runtime_options());
     register_bitset64x1_benches(runner);
+    register_bitset48_alternate_width_benches(runner);
     register_bitset64x4_benches(runner);
+    register_bitset256_alternate_width_benches(runner);
 });
