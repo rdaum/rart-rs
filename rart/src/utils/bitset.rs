@@ -156,7 +156,7 @@ where
     }
 
     fn last(&self) -> Option<usize> {
-        for (i, b) in self.bitset.iter().enumerate() {
+        for (i, b) in self.bitset.iter().enumerate().rev() {
             if !b.is_zero() {
                 return Some(
                     (i << Self::BIT_SHIFT) + (Self::STORAGE_BIT_WIDTH - 1)
@@ -319,5 +319,14 @@ mod tests {
         bs.set(127);
         let v: Vec<usize> = bs.iter().collect();
         assert_eq!(v, vec![0, 1, 2, 4, 8, 16, 32, 47, 48, 49, 127]);
+    }
+
+    #[test]
+    fn test_last_scans_from_highest_storage_word() {
+        let mut bs = super::Bitset64::<4>::new();
+        bs.set(3);
+        bs.set(130);
+        bs.set(255);
+        assert_eq!(bs.last(), Some(255));
     }
 }
