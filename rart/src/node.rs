@@ -40,10 +40,10 @@ pub struct DefaultNode<P: Partial, V> {
 
 pub(crate) enum Content<P: Partial, V> {
     Empty,
-    Node4(SortedKeyedMapping<DefaultNode<P, V>, 4>),
-    Node16(SortedKeyedMapping<DefaultNode<P, V>, 16>),
-    Node48(IndexedMapping<DefaultNode<P, V>, 48, Bitset64<1>>),
-    Node256(DirectMapping<DefaultNode<P, V>>),
+    Node4(Box<SortedKeyedMapping<DefaultNode<P, V>, 4>>),
+    Node16(Box<SortedKeyedMapping<DefaultNode<P, V>, 16>>),
+    Node48(Box<IndexedMapping<DefaultNode<P, V>, 48, Bitset64<1>>>),
+    Node256(Box<DirectMapping<DefaultNode<P, V>>>),
 }
 
 pub enum NodeIter<'a, P: Partial, V> {
@@ -80,7 +80,7 @@ impl<P: Partial, V> Node<P, V> for DefaultNode<P, V> {
 
     #[inline]
     fn new_inner(prefix: P) -> Self {
-        let nt = Content::Node4(SortedKeyedMapping::new());
+        let nt = Content::Node4(Box::new(SortedKeyedMapping::new()));
         Self {
             prefix,
             value: None,
@@ -130,7 +130,7 @@ impl<P: Partial, V> Node<P, V> for DefaultNode<P, V> {
 
     fn add_child(&mut self, key: u8, node: Self) {
         if matches!(self.content, Content::Empty) {
-            self.content = Content::Node4(SortedKeyedMapping::new());
+            self.content = Content::Node4(Box::new(SortedKeyedMapping::new()));
         }
 
         if self.is_full() {
@@ -221,7 +221,7 @@ impl<P: Partial, V> DefaultNode<P, V> {
     #[inline]
     #[allow(dead_code)]
     pub fn new_4(prefix: P) -> Self {
-        let nt = Content::Node4(SortedKeyedMapping::new());
+        let nt = Content::Node4(Box::new(SortedKeyedMapping::new()));
         Self {
             prefix,
             value: None,
@@ -232,7 +232,7 @@ impl<P: Partial, V> DefaultNode<P, V> {
     #[inline]
     #[allow(dead_code)]
     pub fn new_16(prefix: P) -> Self {
-        let nt = Content::Node16(SortedKeyedMapping::new());
+        let nt = Content::Node16(Box::new(SortedKeyedMapping::new()));
         Self {
             prefix,
             value: None,
@@ -243,7 +243,7 @@ impl<P: Partial, V> DefaultNode<P, V> {
     #[inline]
     #[allow(dead_code)]
     pub fn new_48(prefix: P) -> Self {
-        let nt = Content::Node48(IndexedMapping::new());
+        let nt = Content::Node48(Box::new(IndexedMapping::new()));
         Self {
             prefix,
             value: None,
@@ -254,7 +254,7 @@ impl<P: Partial, V> DefaultNode<P, V> {
     #[inline]
     #[allow(dead_code)]
     pub fn new_256(prefix: P) -> Self {
-        let nt = Content::Node256(DirectMapping::new());
+        let nt = Content::Node256(Box::new(DirectMapping::new()));
         Self {
             prefix,
             value: None,
@@ -290,14 +290,14 @@ impl<P: Partial, V> DefaultNode<P, V> {
                 self.prefix = self.prefix.partial_extended_with(&prefix);
             }
             Content::Node16(km) => {
-                self.content = Content::Node4(SortedKeyedMapping::from_resized(km));
+                self.content = Content::Node4(Box::new(SortedKeyedMapping::from_resized(km)));
             }
             Content::Node48(im) => {
-                let new_node = Content::Node16(SortedKeyedMapping::from_indexed(im));
+                let new_node = Content::Node16(Box::new(SortedKeyedMapping::from_indexed(im)));
                 self.content = new_node;
             }
             Content::Node256(dm) => {
-                self.content = Content::Node48(IndexedMapping::from_direct(dm));
+                self.content = Content::Node48(Box::new(IndexedMapping::from_direct(dm)));
             }
             Content::Empty => unreachable!("Should not be possible."),
         }
@@ -306,13 +306,13 @@ impl<P: Partial, V> DefaultNode<P, V> {
     fn grow(&mut self) {
         match &mut self.content {
             Content::Node4(km) => {
-                self.content = Content::Node16(SortedKeyedMapping::from_resized(km))
+                self.content = Content::Node16(Box::new(SortedKeyedMapping::from_resized(km)))
             }
             Content::Node16(km) => {
-                self.content = Content::Node48(IndexedMapping::from_sorted_keyed(km))
+                self.content = Content::Node48(Box::new(IndexedMapping::from_sorted_keyed(km)))
             }
             Content::Node48(im) => {
-                self.content = Content::Node256(DirectMapping::from_indexed(im));
+                self.content = Content::Node256(Box::new(DirectMapping::from_indexed(im)));
             }
             Content::Node256 { .. } => {
                 unreachable!("Should never grow a node256")
@@ -339,8 +339,21 @@ impl<P: Partial, V> DefaultNode<P, V> {
 
 #[cfg(test)]
 mod tests {
-    use crate::node::{DefaultNode, Node};
+    use crate::node::{Content, DefaultNode, Node};
     use crate::partials::array_partial::ArrPartial;
+    use std::mem::size_of;
+
+    #[test]
+    fn boxed_node_content_keeps_small_nodes_compact() {
+        type P = ArrPartial<16>;
+        let content_size = size_of::<Content<P, u64>>();
+        let node_size = size_of::<DefaultNode<P, u64>>();
+
+        println!("Content<P, u64> = {content_size} bytes");
+        println!("DefaultNode<P, u64> = {node_size} bytes");
+        assert!(content_size <= 2 * size_of::<usize>());
+        assert!(node_size <= 64);
+    }
 
     #[test]
     fn test_n4() {

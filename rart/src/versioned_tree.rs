@@ -85,10 +85,10 @@ pub struct VersionedNode<P: Partial, V> {
 /// Content of a versioned node, using Arc for child sharing.
 pub(crate) enum VersionedContent<P: Partial, V> {
     Empty,
-    Node4(SortedKeyedMapping<Arc<VersionedNode<P, V>>, 4>),
-    Node16(SortedKeyedMapping<Arc<VersionedNode<P, V>>, 16>),
-    Node48(IndexedMapping<Arc<VersionedNode<P, V>>, 48, Bitset64<1>>),
-    Node256(DirectMapping<Arc<VersionedNode<P, V>>>),
+    Node4(Box<SortedKeyedMapping<Arc<VersionedNode<P, V>>, 4>>),
+    Node16(Box<SortedKeyedMapping<Arc<VersionedNode<P, V>>, 16>>),
+    Node48(Box<IndexedMapping<Arc<VersionedNode<P, V>>, 48, Bitset64<1>>>),
+    Node256(Box<DirectMapping<Arc<VersionedNode<P, V>>>>),
 }
 
 impl<KeyType: KeyTrait, ValueType: Clone> Default
@@ -481,7 +481,7 @@ where
                             let converted_child = Self::convert_to_unversioned_node(child);
                             new_km.add_child(key, converted_child);
                         }
-                        Content::Node4(new_km)
+                        Content::Node4(Box::new(new_km))
                     }
                     VersionedContent::Node16(km) => {
                         let mut new_km = SortedKeyedMapping::new();
@@ -489,7 +489,7 @@ where
                             let converted_child = Self::convert_to_unversioned_node(child);
                             new_km.add_child(key, converted_child);
                         }
-                        Content::Node16(new_km)
+                        Content::Node16(Box::new(new_km))
                     }
                     VersionedContent::Node48(km) => {
                         let mut new_km = IndexedMapping::new();
@@ -497,7 +497,7 @@ where
                             let converted_child = Self::convert_to_unversioned_node(child);
                             new_km.add_child(key, converted_child);
                         }
-                        Content::Node48(new_km)
+                        Content::Node48(Box::new(new_km))
                     }
                     VersionedContent::Node256(km) => {
                         let mut new_km = DirectMapping::new();
@@ -505,7 +505,7 @@ where
                             let converted_child = Self::convert_to_unversioned_node(child);
                             new_km.add_child(key, converted_child);
                         }
-                        Content::Node256(new_km)
+                        Content::Node256(Box::new(new_km))
                     }
                 };
 
@@ -526,7 +526,7 @@ where
                                 Self::convert_to_unversioned_node(Arc::clone(child));
                             new_km.add_child(key, converted_child);
                         }
-                        Content::Node4(new_km)
+                        Content::Node4(Box::new(new_km))
                     }
                     VersionedContent::Node16(km) => {
                         let mut new_km = SortedKeyedMapping::new();
@@ -535,7 +535,7 @@ where
                                 Self::convert_to_unversioned_node(Arc::clone(child));
                             new_km.add_child(key, converted_child);
                         }
-                        Content::Node16(new_km)
+                        Content::Node16(Box::new(new_km))
                     }
                     VersionedContent::Node48(km) => {
                         let mut new_km = IndexedMapping::new();
@@ -544,7 +544,7 @@ where
                                 Self::convert_to_unversioned_node(Arc::clone(child));
                             new_km.add_child(key, converted_child);
                         }
-                        Content::Node48(new_km)
+                        Content::Node48(Box::new(new_km))
                     }
                     VersionedContent::Node256(km) => {
                         let mut new_km = DirectMapping::new();
@@ -553,7 +553,7 @@ where
                                 Self::convert_to_unversioned_node(Arc::clone(child));
                             new_km.add_child(key, converted_child);
                         }
-                        Content::Node256(new_km)
+                        Content::Node256(Box::new(new_km))
                     }
                 };
 
@@ -583,7 +583,7 @@ impl<P: Partial + Clone, V> VersionedNode<P, V> {
         Self {
             prefix,
             value: None,
-            content: VersionedContent::Node4(SortedKeyedMapping::new()),
+            content: VersionedContent::Node4(Box::new(SortedKeyedMapping::new())),
             version,
         }
     }
@@ -651,7 +651,7 @@ impl<P: Partial + Clone, V> VersionedNode<P, V> {
                     for (key, child) in km.iter() {
                         new_km.add_child(key, Arc::clone(child));
                     }
-                    VersionedContent::Node16(new_km)
+                    VersionedContent::Node16(Box::new(new_km))
                 }
                 VersionedContent::Node16(km) => {
                     // Grow Node16 to Node48
@@ -659,7 +659,7 @@ impl<P: Partial + Clone, V> VersionedNode<P, V> {
                     for (key, child) in km.iter() {
                         new_km.add_child(key, Arc::clone(child));
                     }
-                    VersionedContent::Node48(new_km)
+                    VersionedContent::Node48(Box::new(new_km))
                 }
                 VersionedContent::Node48(km) => {
                     // Grow Node48 to Node256
@@ -667,7 +667,7 @@ impl<P: Partial + Clone, V> VersionedNode<P, V> {
                     for (key, child) in km.iter() {
                         new_km.add_child(key, Arc::clone(child));
                     }
-                    VersionedContent::Node256(new_km)
+                    VersionedContent::Node256(Box::new(new_km))
                 }
                 VersionedContent::Node256(_) => {
                     panic!("Node256 cannot grow further")
@@ -696,7 +696,7 @@ impl<P: Partial + Clone, V> VersionedNode<P, V> {
                     for (key, child) in km.iter() {
                         new_km.add_child(key, Arc::clone(child));
                     }
-                    VersionedContent::Node4(new_km)
+                    VersionedContent::Node4(Box::new(new_km))
                 }
                 VersionedContent::Node16(km) => {
                     // Manually clone Node16 mapping
@@ -704,7 +704,7 @@ impl<P: Partial + Clone, V> VersionedNode<P, V> {
                     for (key, child) in km.iter() {
                         new_km.add_child(key, Arc::clone(child));
                     }
-                    VersionedContent::Node16(new_km)
+                    VersionedContent::Node16(Box::new(new_km))
                 }
                 VersionedContent::Node48(km) => {
                     // Manually clone Node48 mapping
@@ -712,7 +712,7 @@ impl<P: Partial + Clone, V> VersionedNode<P, V> {
                     for (key, child) in km.iter() {
                         new_km.add_child(key, Arc::clone(child));
                     }
-                    VersionedContent::Node48(new_km)
+                    VersionedContent::Node48(Box::new(new_km))
                 }
                 VersionedContent::Node256(km) => {
                     // Manually clone Node256 mapping
@@ -720,7 +720,7 @@ impl<P: Partial + Clone, V> VersionedNode<P, V> {
                     for (key, child) in km.iter() {
                         new_km.add_child(key, Arc::clone(child));
                     }
-                    VersionedContent::Node256(new_km)
+                    VersionedContent::Node256(Box::new(new_km))
                 }
             },
             version: new_version,
@@ -732,7 +732,7 @@ impl<P: Partial + Clone, V> VersionedNode<P, V> {
         V: Clone,
     {
         if matches!(self.content, VersionedContent::Empty) {
-            self.content = VersionedContent::Node4(SortedKeyedMapping::new());
+            self.content = VersionedContent::Node4(Box::new(SortedKeyedMapping::new()));
         }
 
         if self.is_full() {
@@ -1030,6 +1030,19 @@ mod tests {
     use super::*;
     use crate::keys::array_key::ArrayKey;
     use proptest::prelude::*;
+    use std::mem::size_of;
+
+    #[test]
+    fn boxed_versioned_content_keeps_node_header_small() {
+        type P = <ArrayKey<16> as crate::keys::KeyTrait>::PartialType;
+        let content_size = size_of::<VersionedContent<P, u64>>();
+        let node_size = size_of::<VersionedNode<P, u64>>();
+
+        println!("VersionedContent<P, u64> = {content_size} bytes");
+        println!("VersionedNode<P, u64> = {node_size} bytes");
+        assert!(content_size <= 2 * size_of::<usize>());
+        assert!(node_size <= 80);
+    }
 
     #[derive(Clone, Debug)]
     enum VersionedOp {
