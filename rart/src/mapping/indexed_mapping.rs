@@ -155,14 +155,16 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> NodeMapping<N, WIDTH>
 
     fn seek_child(&self, key: u8) -> Option<&N> {
         if let Some(pos) = self.child_ptr_indexes.get(key as usize) {
-            return self.children.get(*pos as usize);
+            // SAFETY: a live entry in the index map points at an initialized child slot.
+            return Some(unsafe { self.children.get_known_present(*pos as usize) });
         }
         None
     }
 
     fn seek_child_mut(&mut self, key: u8) -> Option<&mut N> {
         if let Some(pos) = self.child_ptr_indexes.get(key as usize) {
-            return self.children.get_mut(*pos as usize);
+            // SAFETY: a live entry in the index map points at an initialized child slot.
+            return Some(unsafe { self.children.get_known_present_mut(*pos as usize) });
         }
         None
     }
@@ -170,11 +172,12 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> NodeMapping<N, WIDTH>
     fn delete_child(&mut self, key: u8) -> Option<N> {
         let pos = self.child_ptr_indexes.erase(key as usize)?;
 
-        let old = self.children.erase(pos as usize);
+        // SAFETY: a live entry in the index map points at an initialized child slot.
+        let old = unsafe { self.children.erase_known_present(pos as usize) };
         self.num_children -= 1;
 
         // Return what we deleted.
-        old
+        Some(old)
     }
 
     fn num_children(&self) -> usize {

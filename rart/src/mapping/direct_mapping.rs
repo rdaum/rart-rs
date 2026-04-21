@@ -98,21 +98,36 @@ impl<N> NodeMapping<N, 256> for DirectMapping<N> {
 
     #[inline]
     fn seek_child(&self, key: u8) -> Option<&N> {
-        self.children.get(key as usize)
+        let pos = key as usize;
+        if self.children.check(pos) {
+            // SAFETY: the presence check above guarantees that `pos` is initialized.
+            Some(unsafe { self.children.get_known_present(pos) })
+        } else {
+            None
+        }
     }
 
     #[inline]
     fn seek_child_mut(&mut self, key: u8) -> Option<&mut N> {
-        self.children.get_mut(key as usize)
+        let pos = key as usize;
+        if self.children.check(pos) {
+            // SAFETY: the presence check above guarantees that `pos` is initialized.
+            Some(unsafe { self.children.get_known_present_mut(pos) })
+        } else {
+            None
+        }
     }
 
     #[inline]
     fn delete_child(&mut self, key: u8) -> Option<N> {
-        let n = self.children.erase(key as usize);
-        if n.is_some() {
+        let pos = key as usize;
+        if self.children.check(pos) {
             self.num_children -= 1;
+            // SAFETY: the presence check above guarantees that `pos` is initialized.
+            Some(unsafe { self.children.erase_known_present(pos) })
+        } else {
+            None
         }
-        n
     }
 
     #[inline]

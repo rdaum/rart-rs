@@ -70,7 +70,7 @@ where
         // So we need to check that the first empty bit is within the range width, or people could
         // get the idea they could append beyond our permitted range.
         let first_empty = self.bitset.first_empty()?;
-        if first_empty > RANGE_WIDTH {
+        if first_empty >= RANGE_WIDTH {
             return None;
         }
         Some(first_empty)
@@ -85,7 +85,7 @@ where
     pub fn get(&self, pos: usize) -> Option<&X> {
         debug_assert!(pos < RANGE_WIDTH);
         if self.bitset.check(pos) {
-            Some(unsafe { self.storage[pos].assume_init_ref() })
+            Some(unsafe { self.get_known_present(pos) })
         } else {
             None
         }
@@ -95,10 +95,26 @@ where
     pub fn get_mut(&mut self, pos: usize) -> Option<&mut X> {
         debug_assert!(pos < RANGE_WIDTH);
         if self.bitset.check(pos) {
-            Some(unsafe { self.storage[pos].assume_init_mut() })
+            Some(unsafe { self.get_known_present_mut(pos) })
         } else {
             None
         }
+    }
+
+    #[inline]
+    pub(crate) unsafe fn get_known_present(&self, pos: usize) -> &X {
+        debug_assert!(pos < RANGE_WIDTH);
+        debug_assert!(self.bitset.check(pos));
+        // SAFETY: callers guarantee that `pos` is in range and currently initialized.
+        unsafe { self.storage[pos].assume_init_ref() }
+    }
+
+    #[inline]
+    pub(crate) unsafe fn get_known_present_mut(&mut self, pos: usize) -> &mut X {
+        debug_assert!(pos < RANGE_WIDTH);
+        debug_assert!(self.bitset.check(pos));
+        // SAFETY: callers guarantee that `pos` is in range and currently initialized.
+        unsafe { self.storage[pos].assume_init_mut() }
     }
 
     #[inline]
@@ -128,16 +144,34 @@ where
         Some(old)
     }
 
+    #[inline]
+    pub(crate) unsafe fn erase_known_present(&mut self, pos: usize) -> X {
+        debug_assert!(pos < RANGE_WIDTH);
+        debug_assert!(self.bitset.check(pos));
+        // SAFETY: callers guarantee that `pos` is in range and currently initialized.
+        let old = unsafe { self.take_known_present(pos) };
+        self.bitset.unset(pos);
+        old
+    }
+
     // Erase without updating index, used by update and erase
     #[inline]
     fn take_internal(&mut self, pos: usize) -> Option<X> {
         debug_assert!(pos < RANGE_WIDTH);
         if self.bitset.check(pos) {
-            let old = std::mem::replace(&mut self.storage[pos], MaybeUninit::uninit());
-            Some(unsafe { old.assume_init() })
+            Some(unsafe { self.take_known_present(pos) })
         } else {
             None
         }
+    }
+
+    #[inline]
+    unsafe fn take_known_present(&mut self, pos: usize) -> X {
+        debug_assert!(pos < RANGE_WIDTH);
+        debug_assert!(self.bitset.check(pos));
+        let old = std::mem::replace(&mut self.storage[pos], MaybeUninit::uninit());
+        // SAFETY: callers guarantee that `pos` refers to an initialized slot.
+        unsafe { old.assume_init() }
     }
 
     pub fn clear(&mut self) {
@@ -228,7 +262,7 @@ where
 #[cfg(test)]
 mod test {
     use crate::utils::bitarray::BitArray;
-    use crate::utils::bitset::Bitset16;
+    use crate::utils::bitset::{Bitset16, Bitset64};
 
     #[test]
     fn u8_vector() {
@@ -251,5 +285,15 @@ mod test {
         vec.set(0, 126);
         assert_eq!(vec.get(0), Some(&126));
         assert_eq!(vec.update(0, 123), Some(126));
+    }
+
+    #[test]
+    fn first_empty_respects_range_width() {
+        let mut vec: BitArray<u8, 48, Bitset64<1>> = BitArray::new();
+        for i in 0..48 {
+            vec.set(i, i as u8);
+        }
+
+        assert_eq!(vec.first_empty(), None);
     }
 }
