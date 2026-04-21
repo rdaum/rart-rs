@@ -14,7 +14,7 @@ description = "High-performance Adaptive Radix Tree implementation with SIMD opt
 [dev-dependencies]
 blart.workspace = true
 criterion.workspace = true
-im.workspace = true
+imbl.workspace = true
 micromeasure.workspace = true
 proptest.workspace = true
 rand.workspace = true
@@ -23,10 +23,12 @@ shuttle.workspace = true
 [features]
 default = ["simd_keys"]
 simd_keys = ["dep:simdeez"]
+triomphe-arc = ["dep:triomphe"]
 
 [dependencies]
 num-traits.workspace = true
 simdeez = { workspace = true, optional = true }
+triomphe = { workspace = true, optional = true }
 
 [[bench]]
 name = "art_bench"

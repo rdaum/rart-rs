@@ -6,11 +6,18 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Optional `triomphe-arc` feature for `VersionedAdaptiveRadixTree`, allowing the versioned tree to
+  use `triomphe::Arc` instead of `std::sync::Arc`.
+
 ### Changed
 
 ### Fixed
 
 ### Performance
+
+- In local `versioned_tree_bench` runs, `triomphe-arc` improved versioned mutation and
+  snapshot-sharing workloads by roughly `2-4%` while leaving lookup and scan workloads close to
+  flat.
 
 ## [0.4.0] - 2026-04-21
 

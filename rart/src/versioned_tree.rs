@@ -4,7 +4,6 @@
 //! and mutated independently using copy-on-write node sharing for memory efficiency.
 
 use std::cmp::min;
-use std::sync::Arc;
 
 use crate::keys::KeyTrait;
 use crate::mapping::{
@@ -13,6 +12,11 @@ use crate::mapping::{
 };
 use crate::partials::Partial;
 use crate::utils::bitset::Bitset64;
+
+#[cfg(not(feature = "triomphe-arc"))]
+use std::sync::Arc;
+#[cfg(feature = "triomphe-arc")]
+use triomphe::Arc;
 
 /// Type alias for remove operation result to reduce type complexity
 type RemoveResult<P, V> = (Option<Arc<VersionedNode<P, V>>>, V);

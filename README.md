@@ -62,6 +62,7 @@ println ! ("{:?} -> {}", key.as_ref(), value);
 - Structural sharing: Unmodified subtrees shared between versions
 - Thread-safe: Snapshots can be moved across threads safely
 - Multiversion support for database and concurrent applications
+- Optional `triomphe-arc` feature for lower-overhead shared ownership in the versioned tree
 
 **Best for:** Concurrent versioned workloads, databases, multi-reader systems.
 
@@ -309,6 +310,12 @@ structural sharing:_
   sharing
 - **Sequential access**: VersionedART's prefix compression provides significant advantages
 
+Optional feature:
+
+- Enable `triomphe-arc` to replace `std::sync::Arc` with `triomphe::Arc` in the versioned tree
+- In local quick-profile `versioned_tree_bench` runs this improved mutation/snapshot-sharing
+  workloads by roughly `2-4%`, while lookup and scan workloads stayed approximately flat
+
 **Best suited for**: Read-heavy versioned workloads, database snapshots, concurrent systems
 requiring point-in-time consistency and efficient structural sharing.
 
@@ -329,6 +336,8 @@ Both implementations use several key optimizations:
 - **Arc-based sharing**: Safe structural sharing across snapshots
 - **Version tracking**: Efficient copy-on-write detection
 - **Optimized CoW**: Only copies when nodes are actually shared
+- **Optional `triomphe` backend**: `triomphe-arc` swaps the shared pointer implementation used by
+  versioned nodes
 
 ## Implementation Notes
 

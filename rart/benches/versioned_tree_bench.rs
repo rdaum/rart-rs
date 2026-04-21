@@ -1,11 +1,11 @@
 /// Comprehensive benchmarks comparing VersionedAdaptiveRadixTree against persistent data structures
-/// from the `im` crate (im::HashMap and im::OrdMap) for MVCC-style workloads.
+/// from the `im` crate (imbl::HashMap and imbl::OrdMap) for MVCC-style workloads.
 use std::time::{Duration, Instant};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use rand::{Rng, rng};
 
-use im::{HashMap as ImHashMap, OrdMap as ImOrdMap};
+use imbl::{HashMap as ImHashMap, OrdMap as ImOrdMap};
 use rart::VersionedAdaptiveRadixTree;
 use rart::keys::array_key::ArrayKey;
 

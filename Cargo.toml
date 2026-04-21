@@ -23,11 +23,12 @@ simdeez = "2.0.0"
 # Dev dependencies
 blart = "0.4"
 criterion = { version = "0.8", features = ["html_reports"] }
-im = "15.1"
+imbl = "7.0.0"
 micromeasure = "0.6"
 proptest = "1.6"
 rand = "0.9"
 shuttle = "0.8"
+triomphe = "0.1"
 
 # Fuzz dependencies
 arbitrary = { version = "1.4", features = ["derive"] }
