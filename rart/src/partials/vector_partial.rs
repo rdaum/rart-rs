@@ -2,7 +2,7 @@ use std::cmp::min;
 
 use crate::keys::KeyTrait;
 use crate::keys::vector_key::VectorKey;
-use crate::partials::Partial;
+use crate::partials::{Partial, prefix_length_bytes};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct VectorPartial {
@@ -87,26 +87,12 @@ impl Partial for VectorPartial {
         K: KeyTrait<PartialType = Self> + 'a,
     {
         let len = min(self.data.len(), key.length_at(at_depth));
-        let mut idx = 0;
-        while idx < len {
-            if self.data[idx] != key.at(idx + at_depth) {
-                break;
-            }
-            idx += 1;
-        }
-        idx
+        prefix_length_bytes(&self.data[..len], &key.as_ref()[at_depth..at_depth + len])
     }
 
     fn prefix_length_slice(&self, slice: &[u8]) -> usize {
         let len = min(self.data.len(), slice.len());
-        let mut idx = 0;
-        while idx < len {
-            if self.data[idx] != slice[idx] {
-                break;
-            }
-            idx += 1;
-        }
-        idx
+        prefix_length_bytes(&self.data[..len], &slice[..len])
     }
 
     fn to_slice(&self) -> &[u8] {

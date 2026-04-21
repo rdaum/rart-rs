@@ -43,6 +43,10 @@ name = "node_mapping_microbenches"
 harness = false
 
 [[bench]]
+name = "partial_prefix_microbenches"
+harness = false
+
+[[bench]]
 name = "versioned_tree_bench"
 harness = false
 

@@ -8,6 +8,7 @@ All notable changes to this project are documented in this file.
 
 - Optional `triomphe-arc` feature for `VersionedAdaptiveRadixTree`, allowing the versioned tree to
   use `triomphe::Arc` instead of `std::sync::Arc`.
+- Partial-prefix microbench coverage for `ArrPartial` and `VectorPartial` using `micromeasure`.
 
 ### Changed
 
@@ -18,6 +19,8 @@ All notable changes to this project are documented in this file.
 - In local `versioned_tree_bench` runs, `triomphe-arc` improved versioned mutation and
   snapshot-sharing workloads by roughly `2-4%` while leaving lookup and scan workloads close to
   flat.
+- Switched partial-prefix comparisons to a shared chunked byte matcher, substantially improving
+  long common-prefix cases in local `partial_prefix_microbenches` runs.
 
 ## [0.4.0] - 2026-04-21
 

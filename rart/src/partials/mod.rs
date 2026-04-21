@@ -27,6 +27,30 @@ use crate::keys::KeyTrait;
 pub mod array_partial;
 pub mod vector_partial;
 
+#[inline]
+pub(crate) fn prefix_length_bytes(lhs: &[u8], rhs: &[u8]) -> usize {
+    let len = lhs.len().min(rhs.len());
+    let mut idx = 0;
+
+    while idx + 8 <= len {
+        let lhs_word = u64::from_ne_bytes(lhs[idx..idx + 8].try_into().unwrap());
+        let rhs_word = u64::from_ne_bytes(rhs[idx..idx + 8].try_into().unwrap());
+        let diff = lhs_word ^ rhs_word;
+        if diff != 0 {
+            return idx + (diff.trailing_zeros() as usize / 8);
+        }
+        idx += 8;
+    }
+
+    while idx < len {
+        if lhs[idx] != rhs[idx] {
+            break;
+        }
+        idx += 1;
+    }
+    idx
+}
+
 pub trait Partial: AsRef<[u8]> {
     /// Returns a partial up to `length` bytes.
     fn partial_before(&self, length: usize) -> Self;

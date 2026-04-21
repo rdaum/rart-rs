@@ -3,7 +3,7 @@ use std::ops::Index;
 
 use crate::keys::KeyTrait;
 use crate::keys::array_key::ArrayKey;
-use crate::partials::Partial;
+use crate::partials::{Partial, prefix_length_bytes};
 
 #[derive(Clone, Debug, Eq)]
 pub struct ArrPartial<const SIZE: usize> {
@@ -117,27 +117,13 @@ impl<const SIZE: usize> Partial for ArrPartial<SIZE> {
     {
         let len = min(self.len, key.length_at(at_depth));
         let len = min(len, SIZE);
-        let mut idx = 0;
-        while idx < len {
-            if self.data[idx] != key.at(idx + at_depth) {
-                break;
-            }
-            idx += 1;
-        }
-        idx
+        prefix_length_bytes(&self.data[..len], &key.as_ref()[at_depth..at_depth + len])
     }
 
     fn prefix_length_slice(&self, slice: &[u8]) -> usize {
         let len = min(self.len, slice.len());
         let len = min(len, SIZE);
-        let mut idx = 0;
-        while idx < len {
-            if self.data[idx] != slice[idx] {
-                break;
-            }
-            idx += 1;
-        }
-        idx
+        prefix_length_bytes(&self.data[..len], &slice[..len])
     }
 
     fn to_slice(&self) -> &[u8] {
