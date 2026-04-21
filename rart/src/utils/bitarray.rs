@@ -39,9 +39,9 @@ where
     #[allow(dead_code)]
     pub fn pop(&mut self) -> Option<X> {
         let pos = self.bitset.last()?;
+        let old = unsafe { self.take_known_present(pos) };
         self.bitset.unset(pos);
-        let old = std::mem::replace(&mut self.storage[pos], MaybeUninit::uninit());
-        Some(unsafe { old.assume_init() })
+        Some(old)
     }
 
     #[allow(dead_code)]
@@ -169,9 +169,10 @@ where
     unsafe fn take_known_present(&mut self, pos: usize) -> X {
         debug_assert!(pos < RANGE_WIDTH);
         debug_assert!(self.bitset.check(pos));
-        let old = std::mem::replace(&mut self.storage[pos], MaybeUninit::uninit());
         // SAFETY: callers guarantee that `pos` refers to an initialized slot.
-        unsafe { old.assume_init() }
+        let old = unsafe { self.storage[pos].assume_init_read() };
+        self.storage[pos] = MaybeUninit::uninit();
+        old
     }
 
     pub fn clear(&mut self) {

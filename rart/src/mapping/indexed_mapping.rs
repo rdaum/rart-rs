@@ -84,8 +84,9 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> IndexedMapping<N, WIDTH, Bitset
     ) -> Self {
         let mut im: IndexedMapping<N, WIDTH, Bitset> = IndexedMapping::new();
         for i in 0..km.num_children as usize {
-            let stolen = std::mem::replace(&mut km.children[i], MaybeUninit::uninit());
-            im.add_child(km.keys[i], unsafe { stolen.assume_init() });
+            let stolen = unsafe { km.children[i].assume_init_read() };
+            km.children[i] = MaybeUninit::uninit();
+            im.add_child(km.keys[i], stolen);
         }
         km.num_children = 0;
         im

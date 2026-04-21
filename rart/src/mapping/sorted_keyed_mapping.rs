@@ -70,10 +70,11 @@ impl<N, const WIDTH: usize> Iterator for SortedKeyedMappingIntoIter<N, WIDTH> {
         }
 
         let key = self.keys[self.current];
-        let child = std::mem::replace(&mut self.children[self.current], MaybeUninit::uninit());
+        let child = unsafe { self.children[self.current].assume_init_read() };
+        self.children[self.current] = MaybeUninit::uninit();
         self.current += 1;
 
-        Some((key, unsafe { child.assume_init() }))
+        Some((key, child))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -88,9 +89,8 @@ impl<N, const WIDTH: usize> Drop for SortedKeyedMappingIntoIter<N, WIDTH> {
     fn drop(&mut self) {
         // Drop any remaining unextracted elements
         while self.current < self.num_children as usize {
-            let mut child =
-                std::mem::replace(&mut self.children[self.current], MaybeUninit::uninit());
-            unsafe { child.assume_init_drop() };
+            unsafe { self.children[self.current].assume_init_drop() };
+            self.children[self.current] = MaybeUninit::uninit();
             self.current += 1;
         }
     }
@@ -108,10 +108,11 @@ impl<N, const WIDTH: usize> SortedKeyedMapping<N, WIDTH> {
     // Return the key and value of the only child, and remove it from the mapping.
     pub fn take_value_for_leaf(&mut self) -> (u8, N) {
         debug_assert!(self.num_children == 1);
-        let value = std::mem::replace(&mut self.children[0], MaybeUninit::uninit());
+        let value = unsafe { self.children[0].assume_init_read() };
+        self.children[0] = MaybeUninit::uninit();
         let key = self.keys[0];
         self.num_children = 0;
-        (key, unsafe { value.assume_init() })
+        (key, value)
     }
 
     #[allow(dead_code)]
@@ -202,7 +203,8 @@ impl<N, const WIDTH: usize> NodeMapping<N, WIDTH> for SortedKeyedMapping<N, WIDT
             u8_keys_find_key_position_sorted::<WIDTH>(key, &self.keys, self.num_children as usize)?;
 
         // Remove the value.
-        let node = std::mem::replace(&mut self.children[idx], MaybeUninit::uninit());
+        let node = unsafe { self.children[idx].assume_init_read() };
+        self.children[idx] = MaybeUninit::uninit();
 
         // Shift keys and children to the left.
         for i in idx..(WIDTH - 1) {
@@ -217,7 +219,7 @@ impl<N, const WIDTH: usize> NodeMapping<N, WIDTH> for SortedKeyedMapping<N, WIDT
         self.num_children -= 1;
 
         // Return what we deleted.
-        Some(unsafe { node.assume_init() })
+        Some(node)
     }
     #[inline(always)]
     fn num_children(&self) -> usize {
