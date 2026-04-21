@@ -1,10 +1,12 @@
 /// Microbenches for the specific node mapping types and arrangements.
-use std::collections::HashSet;
 use std::time::Duration;
 
 use micromeasure::{
     BenchContext, BenchmarkRunner, BenchmarkRuntimeOptions, Throughput, benchmark_main, black_box,
 };
+use rand::SeedableRng;
+use rand::rngs::SmallRng;
+use rand::seq::SliceRandom;
 
 use rart::mapping::NodeMapping;
 use rart::mapping::direct_mapping::DirectMapping;
@@ -78,6 +80,50 @@ where
     fn prepare(num_chunks: usize) -> Self {
         Self {
             mapping_set: make_mapping_sets::<WIDTH, MappingType>(num_chunks, true),
+        }
+    }
+
+    fn chunk_size() -> Option<usize> {
+        Some(microbench_chunk_size())
+    }
+}
+
+struct FilledOccupancyMappingSetContext<const WIDTH: usize, const OCCUPANCY: usize, MappingType> {
+    mapping_set: Vec<(MappingType, Vec<u8>, Vec<u8>)>,
+}
+
+struct EmptyOccupancyMappingSetContext<const WIDTH: usize, const OCCUPANCY: usize, MappingType> {
+    mapping_set: Vec<(MappingType, Vec<u8>, Vec<u8>)>,
+}
+
+impl<const WIDTH: usize, const OCCUPANCY: usize, MappingType> BenchContext
+    for FilledOccupancyMappingSetContext<WIDTH, OCCUPANCY, MappingType>
+where
+    MappingType: NodeMapping<u64, WIDTH> + Default,
+{
+    fn prepare(num_chunks: usize) -> Self {
+        Self {
+            mapping_set: make_mapping_sets_with_occupancy_and_misses::<WIDTH, OCCUPANCY, MappingType>(
+                num_chunks, true,
+            ),
+        }
+    }
+
+    fn chunk_size() -> Option<usize> {
+        Some(microbench_chunk_size())
+    }
+}
+
+impl<const WIDTH: usize, const OCCUPANCY: usize, MappingType> BenchContext
+    for EmptyOccupancyMappingSetContext<WIDTH, OCCUPANCY, MappingType>
+where
+    MappingType: NodeMapping<u64, WIDTH> + Default,
+{
+    fn prepare(num_chunks: usize) -> Self {
+        Self {
+            mapping_set: make_mapping_sets_with_occupancy_and_misses::<WIDTH, OCCUPANCY, MappingType>(
+                num_chunks, false,
+            ),
         }
     }
 
@@ -172,6 +218,63 @@ fn bench_seek_child<const WIDTH: usize, MappingType>(
     }
 }
 
+fn bench_seek_child_with_occupancy<const WIDTH: usize, const OCCUPANCY: usize, MappingType>(
+    ctx: &mut FilledOccupancyMappingSetContext<WIDTH, OCCUPANCY, MappingType>,
+    chunk_size: usize,
+    _chunk_num: usize,
+) where
+    MappingType: NodeMapping<u64, WIDTH> + Default,
+{
+    for (mapping, child_set, _) in ctx.mapping_set.iter_mut().take(chunk_size) {
+        for &child in child_set.iter() {
+            black_box(mapping.seek_child(child));
+        }
+    }
+}
+
+fn bench_seek_child_miss_with_occupancy<const WIDTH: usize, const OCCUPANCY: usize, MappingType>(
+    ctx: &mut FilledOccupancyMappingSetContext<WIDTH, OCCUPANCY, MappingType>,
+    chunk_size: usize,
+    _chunk_num: usize,
+) where
+    MappingType: NodeMapping<u64, WIDTH> + Default,
+{
+    for (mapping, _, miss_keys) in ctx.mapping_set.iter_mut().take(chunk_size) {
+        for &child in miss_keys.iter() {
+            black_box(mapping.seek_child(child));
+        }
+    }
+}
+
+fn bench_add_child_with_occupancy<const WIDTH: usize, const OCCUPANCY: usize, MappingType>(
+    ctx: &mut EmptyOccupancyMappingSetContext<WIDTH, OCCUPANCY, MappingType>,
+    chunk_size: usize,
+    _chunk_num: usize,
+) where
+    MappingType: NodeMapping<u64, WIDTH> + Default,
+{
+    for (mapping, child_set, _) in ctx.mapping_set.iter_mut().take(chunk_size) {
+        for &child in child_set.iter() {
+            mapping.add_child(child, 0u64);
+        }
+        black_box(mapping);
+    }
+}
+
+fn bench_del_child_with_occupancy<const WIDTH: usize, const OCCUPANCY: usize, MappingType>(
+    ctx: &mut FilledOccupancyMappingSetContext<WIDTH, OCCUPANCY, MappingType>,
+    chunk_size: usize,
+    _chunk_num: usize,
+) where
+    MappingType: NodeMapping<u64, WIDTH> + Default,
+{
+    for (mapping, child_set, _) in ctx.mapping_set.iter_mut().take(chunk_size) {
+        for &child in child_set.iter() {
+            black_box(mapping.delete_child(child));
+        }
+    }
+}
+
 fn make_mapping_sets<const WIDTH: usize, MappingType>(
     num_chunks: usize,
     prefill: bool,
@@ -179,26 +282,79 @@ fn make_mapping_sets<const WIDTH: usize, MappingType>(
 where
     MappingType: NodeMapping<u64, WIDTH> + Default,
 {
+    make_mapping_sets_with_occupancy::<WIDTH, WIDTH, MappingType>(num_chunks, prefill)
+}
+
+fn make_mapping_sets_with_occupancy<const WIDTH: usize, const OCCUPANCY: usize, MappingType>(
+    num_chunks: usize,
+    prefill: bool,
+) -> Vec<(MappingType, Vec<u8>)>
+where
+    MappingType: NodeMapping<u64, WIDTH> + Default,
+{
+    make_mapping_sets_with_occupancy_and_misses::<WIDTH, OCCUPANCY, MappingType>(
+        num_chunks, prefill,
+    )
+    .into_iter()
+    .map(|(mapping, hits, _misses)| (mapping, hits))
+    .collect()
+}
+
+fn make_mapping_sets_with_occupancy_and_misses<
+    const WIDTH: usize,
+    const OCCUPANCY: usize,
+    MappingType,
+>(
+    num_chunks: usize,
+    prefill: bool,
+) -> Vec<(MappingType, Vec<u8>, Vec<u8>)>
+where
+    MappingType: NodeMapping<u64, WIDTH> + Default,
+{
+    debug_assert!(OCCUPANCY <= WIDTH);
     let mut mapping_set = Vec::with_capacity(num_chunks);
-    for _ in 0..num_chunks {
-        let child_set = make_child_set::<WIDTH>();
+    for chunk_idx in 0..num_chunks {
+        let child_set = make_child_set::<OCCUPANCY>(chunk_idx as u64);
+        let miss_keys = make_miss_set(&child_set, OCCUPANCY);
         let mut mapping = MappingType::default();
         if prefill {
             for &child in &child_set {
                 mapping.add_child(child, 0u64);
             }
         }
-        mapping_set.push((mapping, child_set));
+        mapping_set.push((mapping, child_set, miss_keys));
     }
     mapping_set
 }
 
-fn make_child_set<const WIDTH: usize>() -> Vec<u8> {
-    let mut child_hash_set = HashSet::with_capacity(WIDTH);
-    while child_hash_set.len() < WIDTH {
-        child_hash_set.insert(rand::random::<u8>());
+fn make_child_set<const WIDTH: usize>(seed: u64) -> Vec<u8> {
+    let mut keys: Vec<u8> = (0..=u8::MAX).collect();
+    let mut rng = SmallRng::seed_from_u64(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+    keys.shuffle(&mut rng);
+    keys.truncate(WIDTH);
+    keys
+}
+
+fn make_miss_set(present_keys: &[u8], count: usize) -> Vec<u8> {
+    let mut present = [false; 256];
+    for &key in present_keys {
+        present[key as usize] = true;
     }
-    child_hash_set.into_iter().collect()
+
+    let mut misses = Vec::with_capacity(count);
+    for key in 0..=u8::MAX {
+        if !present[key as usize] {
+            misses.push(key);
+            if misses.len() == count {
+                break;
+            }
+        }
+    }
+    misses
+}
+
+fn miss_probe_count(occupancy: usize) -> usize {
+    occupancy.min(256 - occupancy)
 }
 
 fn register_grow_node_benches(runner: &BenchmarkRunner) {
@@ -336,6 +492,151 @@ fn register_seek_child_benches(runner: &BenchmarkRunner) {
     register_seek_child_bench::<4, SortedKeyedMapping<u64, 4>>(runner, "sorted_keyed4");
 }
 
+fn register_seek_child_density_bench<const WIDTH: usize, const OCCUPANCY: usize, MappingType>(
+    runner: &BenchmarkRunner,
+    name: &'static str,
+) where
+    MappingType: NodeMapping<u64, WIDTH> + Default,
+{
+    runner.group::<FilledOccupancyMappingSetContext<WIDTH, OCCUPANCY, MappingType>>(
+        "seek_child_density",
+        |g| {
+            g.throughput(Throughput::per_operation(OCCUPANCY as u64, "probes"))
+                .bench(
+                    name,
+                    bench_seek_child_with_occupancy::<WIDTH, OCCUPANCY, MappingType>,
+                );
+        },
+    );
+}
+
+fn register_seek_child_density_miss_bench<const WIDTH: usize, const OCCUPANCY: usize, MappingType>(
+    runner: &BenchmarkRunner,
+    name: &'static str,
+) where
+    MappingType: NodeMapping<u64, WIDTH> + Default,
+{
+    runner.group::<FilledOccupancyMappingSetContext<WIDTH, OCCUPANCY, MappingType>>(
+        "seek_child_density_miss",
+        |g| {
+            g.throughput(Throughput::per_operation(
+                miss_probe_count(OCCUPANCY) as u64,
+                "probes",
+            ))
+            .bench(
+                name,
+                bench_seek_child_miss_with_occupancy::<WIDTH, OCCUPANCY, MappingType>,
+            );
+        },
+    );
+}
+
+fn register_add_child_density_bench<const WIDTH: usize, const OCCUPANCY: usize, MappingType>(
+    runner: &BenchmarkRunner,
+    name: &'static str,
+) where
+    MappingType: NodeMapping<u64, WIDTH> + Default,
+{
+    runner.group::<EmptyOccupancyMappingSetContext<WIDTH, OCCUPANCY, MappingType>>(
+        "add_child_density",
+        |g| {
+            g.throughput(Throughput::per_operation(OCCUPANCY as u64, "children"))
+                .bench(
+                    name,
+                    bench_add_child_with_occupancy::<WIDTH, OCCUPANCY, MappingType>,
+                );
+        },
+    );
+}
+
+fn register_del_child_density_bench<const WIDTH: usize, const OCCUPANCY: usize, MappingType>(
+    runner: &BenchmarkRunner,
+    name: &'static str,
+) where
+    MappingType: NodeMapping<u64, WIDTH> + Default,
+{
+    runner.group::<FilledOccupancyMappingSetContext<WIDTH, OCCUPANCY, MappingType>>(
+        "del_child_density",
+        |g| {
+            g.throughput(Throughput::per_operation(OCCUPANCY as u64, "children"))
+                .bench(
+                    name,
+                    bench_del_child_with_occupancy::<WIDTH, OCCUPANCY, MappingType>,
+                );
+        },
+    );
+}
+
+fn register_seek_child_density_benches(runner: &BenchmarkRunner) {
+    register_seek_child_density_bench::<48, 48, IndexedMapping<u64, 48, Bitset64<1>>>(
+        runner,
+        "indexed48_64x1_occ48",
+    );
+    register_seek_child_density_bench::<256, 48, DirectMapping<u64>>(runner, "direct_occ48");
+    register_seek_child_density_bench::<256, 64, DirectMapping<u64>>(runner, "direct_occ64");
+    register_seek_child_density_bench::<256, 96, DirectMapping<u64>>(runner, "direct_occ96");
+    register_seek_child_density_bench::<256, 128, DirectMapping<u64>>(runner, "direct_occ128");
+    register_seek_child_density_bench::<256, 192, DirectMapping<u64>>(runner, "direct_occ192");
+    register_seek_child_density_bench::<256, 256, DirectMapping<u64>>(runner, "direct_occ256");
+}
+
+fn register_seek_child_density_miss_benches(runner: &BenchmarkRunner) {
+    register_seek_child_density_miss_bench::<48, 48, IndexedMapping<u64, 48, Bitset64<1>>>(
+        runner,
+        "indexed48_64x1_occ48_miss",
+    );
+    register_seek_child_density_miss_bench::<256, 48, DirectMapping<u64>>(
+        runner,
+        "direct_occ48_miss",
+    );
+    register_seek_child_density_miss_bench::<256, 64, DirectMapping<u64>>(
+        runner,
+        "direct_occ64_miss",
+    );
+    register_seek_child_density_miss_bench::<256, 96, DirectMapping<u64>>(
+        runner,
+        "direct_occ96_miss",
+    );
+    register_seek_child_density_miss_bench::<256, 128, DirectMapping<u64>>(
+        runner,
+        "direct_occ128_miss",
+    );
+    register_seek_child_density_miss_bench::<256, 192, DirectMapping<u64>>(
+        runner,
+        "direct_occ192_miss",
+    );
+    register_seek_child_density_miss_bench::<256, 208, DirectMapping<u64>>(
+        runner,
+        "direct_occ208_miss",
+    );
+}
+
+fn register_add_child_density_benches(runner: &BenchmarkRunner) {
+    register_add_child_density_bench::<48, 48, IndexedMapping<u64, 48, Bitset64<1>>>(
+        runner,
+        "indexed48_64x1_occ48",
+    );
+    register_add_child_density_bench::<256, 48, DirectMapping<u64>>(runner, "direct_occ48");
+    register_add_child_density_bench::<256, 64, DirectMapping<u64>>(runner, "direct_occ64");
+    register_add_child_density_bench::<256, 96, DirectMapping<u64>>(runner, "direct_occ96");
+    register_add_child_density_bench::<256, 128, DirectMapping<u64>>(runner, "direct_occ128");
+    register_add_child_density_bench::<256, 192, DirectMapping<u64>>(runner, "direct_occ192");
+    register_add_child_density_bench::<256, 208, DirectMapping<u64>>(runner, "direct_occ208");
+}
+
+fn register_del_child_density_benches(runner: &BenchmarkRunner) {
+    register_del_child_density_bench::<48, 48, IndexedMapping<u64, 48, Bitset64<1>>>(
+        runner,
+        "indexed48_64x1_occ48",
+    );
+    register_del_child_density_bench::<256, 48, DirectMapping<u64>>(runner, "direct_occ48");
+    register_del_child_density_bench::<256, 64, DirectMapping<u64>>(runner, "direct_occ64");
+    register_del_child_density_bench::<256, 96, DirectMapping<u64>>(runner, "direct_occ96");
+    register_del_child_density_bench::<256, 128, DirectMapping<u64>>(runner, "direct_occ128");
+    register_del_child_density_bench::<256, 192, DirectMapping<u64>>(runner, "direct_occ192");
+    register_del_child_density_bench::<256, 208, DirectMapping<u64>>(runner, "direct_occ208");
+}
+
 benchmark_main!(|runner| {
     runner.set_runtime(runtime_options());
 
@@ -345,4 +646,8 @@ benchmark_main!(|runner| {
     register_add_child_benches(runner);
     register_del_child_benches(runner);
     register_seek_child_benches(runner);
+    register_seek_child_density_benches(runner);
+    register_seek_child_density_miss_benches(runner);
+    register_add_child_density_benches(runner);
+    register_del_child_density_benches(runner);
 });
