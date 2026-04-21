@@ -14,6 +14,31 @@ use rart::mapping::indexed_mapping::IndexedMapping;
 use rart::mapping::keyed_mapping::KeyedMapping;
 use rart::mapping::sorted_keyed_mapping::SortedKeyedMapping;
 use rart::utils::bitset::{Bitset8, Bitset16, Bitset32, Bitset64, BitsetTrait};
+use rart::utils::u8_keys::{
+    u8_keys_find_insert_position_sorted, u8_keys_find_key_position,
+    u8_keys_find_key_position_sorted,
+};
+
+#[cfg(feature = "simd_keys")]
+mod node4_simd_experiment {
+    use simdeez::*;
+    use simdeez::{prelude::*, simd_runtime_generate};
+
+    simd_runtime_generate!(
+        pub fn find_key_padded(key: u8, keys: &[u8; 16], active_mask: u32) -> Option<usize> {
+            let key_cmp_vec = S::Vi8::set1(key as i8);
+            let i8_keys: &[i8; 16] = unsafe { std::mem::transmute(keys) };
+            let key_vec = S::Vi8::load_from_slice(i8_keys);
+            let results = key_cmp_vec.cmp_eq(key_vec);
+            let bitfield = results.get_mask() & active_mask;
+            if bitfield != 0 {
+                Some(bitfield.trailing_zeros() as usize)
+            } else {
+                None
+            }
+        }
+    );
+}
 
 type KeyMapping32_32x1 = KeyedMapping<u64, 32, Bitset32<1>>;
 type KeyMapping32_16x2 = KeyedMapping<u64, 32, Bitset16<2>>;
@@ -23,6 +48,59 @@ type KeyMapping16_16x1 = KeyedMapping<u64, 16, Bitset16<1>>;
 type KeyMapping16_8x2 = KeyedMapping<u64, 16, Bitset8<2>>;
 
 type KeyMapping4 = KeyedMapping<u64, 4, Bitset8<1>>;
+
+struct SortedKeyProbeContext<const WIDTH: usize, const NUM_CHILDREN: usize> {
+    probes: Vec<([u8; WIDTH], u8)>,
+}
+
+struct UnsortedKeyProbeContext<const WIDTH: usize, const NUM_CHILDREN: usize, Bitset> {
+    probes: Vec<([u8; WIDTH], Bitset, u8)>,
+}
+
+struct SortedKeyInsertContext<const WIDTH: usize, const NUM_CHILDREN: usize> {
+    probes: Vec<([u8; WIDTH], u8)>,
+}
+
+struct SortedNodeSeekContext<const WIDTH: usize> {
+    probes: Vec<(SortedKeyedMapping<u64, WIDTH>, u8)>,
+}
+
+struct SortedNodeInsertContext<const WIDTH: usize> {
+    probes: Vec<(SortedKeyedMapping<u64, WIDTH>, u8)>,
+}
+
+struct SortedKeyMissProbeContext<const WIDTH: usize, const NUM_CHILDREN: usize> {
+    probes: Vec<([u8; WIDTH], u8)>,
+}
+
+struct SortedKeyEdgeProbeContext<const WIDTH: usize, const NUM_CHILDREN: usize, const INDEX: usize>
+{
+    probes: Vec<([u8; WIDTH], u8)>,
+}
+
+struct SortedNodeSeekMissContext<const WIDTH: usize> {
+    probes: Vec<(SortedKeyedMapping<u64, WIDTH>, u8)>,
+}
+
+struct SortedNodeSeekEdgeContext<const WIDTH: usize, const INDEX: usize> {
+    probes: Vec<(SortedKeyedMapping<u64, WIDTH>, u8)>,
+}
+
+struct SortedKeyMixedProbeContext<
+    const WIDTH: usize,
+    const NUM_CHILDREN: usize,
+    const MISS_INTERVAL: usize,
+> {
+    probes: Vec<([u8; WIDTH], Vec<u8>)>,
+}
+
+struct SortedNodeSeekMixedContext<const WIDTH: usize, const MISS_INTERVAL: usize> {
+    probes: Vec<(SortedKeyedMapping<u64, WIDTH>, Vec<u8>)>,
+}
+
+struct Node4SearchExperimentContext {
+    probes: Vec<([u8; 16], Vec<u8>)>,
+}
 
 fn full_bench_profile() -> bool {
     std::env::var("RART_BENCH_FULL").as_deref() == Ok("1")
@@ -124,6 +202,168 @@ where
             mapping_set: make_mapping_sets_with_occupancy_and_misses::<WIDTH, OCCUPANCY, MappingType>(
                 num_chunks, false,
             ),
+        }
+    }
+
+    fn chunk_size() -> Option<usize> {
+        Some(microbench_chunk_size())
+    }
+}
+
+impl<const WIDTH: usize, const NUM_CHILDREN: usize> BenchContext
+    for SortedKeyProbeContext<WIDTH, NUM_CHILDREN>
+{
+    fn prepare(num_chunks: usize) -> Self {
+        Self {
+            probes: make_sorted_key_probes::<WIDTH, NUM_CHILDREN>(num_chunks),
+        }
+    }
+
+    fn chunk_size() -> Option<usize> {
+        Some(microbench_chunk_size())
+    }
+}
+
+impl<const WIDTH: usize, const NUM_CHILDREN: usize, Bitset> BenchContext
+    for UnsortedKeyProbeContext<WIDTH, NUM_CHILDREN, Bitset>
+where
+    Bitset: BitsetTrait + Default,
+{
+    fn prepare(num_chunks: usize) -> Self {
+        Self {
+            probes: make_unsorted_key_probes::<WIDTH, NUM_CHILDREN, Bitset>(num_chunks),
+        }
+    }
+
+    fn chunk_size() -> Option<usize> {
+        Some(microbench_chunk_size())
+    }
+}
+
+impl<const WIDTH: usize, const NUM_CHILDREN: usize> BenchContext
+    for SortedKeyInsertContext<WIDTH, NUM_CHILDREN>
+{
+    fn prepare(num_chunks: usize) -> Self {
+        Self {
+            probes: make_sorted_insert_probes::<WIDTH, NUM_CHILDREN>(num_chunks),
+        }
+    }
+
+    fn chunk_size() -> Option<usize> {
+        Some(microbench_chunk_size())
+    }
+}
+
+impl<const WIDTH: usize> BenchContext for SortedNodeSeekContext<WIDTH> {
+    fn prepare(num_chunks: usize) -> Self {
+        Self {
+            probes: make_sorted_node_seek_probes::<WIDTH>(num_chunks),
+        }
+    }
+
+    fn chunk_size() -> Option<usize> {
+        Some(microbench_chunk_size())
+    }
+}
+
+impl<const WIDTH: usize> BenchContext for SortedNodeInsertContext<WIDTH> {
+    fn prepare(num_chunks: usize) -> Self {
+        Self {
+            probes: make_sorted_node_insert_probes::<WIDTH>(num_chunks),
+        }
+    }
+
+    fn chunk_size() -> Option<usize> {
+        Some(microbench_chunk_size())
+    }
+}
+
+impl<const WIDTH: usize, const NUM_CHILDREN: usize> BenchContext
+    for SortedKeyMissProbeContext<WIDTH, NUM_CHILDREN>
+{
+    fn prepare(num_chunks: usize) -> Self {
+        Self {
+            probes: make_sorted_key_miss_probes::<WIDTH, NUM_CHILDREN>(num_chunks),
+        }
+    }
+
+    fn chunk_size() -> Option<usize> {
+        Some(microbench_chunk_size())
+    }
+}
+
+impl<const WIDTH: usize, const NUM_CHILDREN: usize, const INDEX: usize> BenchContext
+    for SortedKeyEdgeProbeContext<WIDTH, NUM_CHILDREN, INDEX>
+{
+    fn prepare(num_chunks: usize) -> Self {
+        Self {
+            probes: make_sorted_key_edge_probes::<WIDTH, NUM_CHILDREN, INDEX>(num_chunks),
+        }
+    }
+
+    fn chunk_size() -> Option<usize> {
+        Some(microbench_chunk_size())
+    }
+}
+
+impl<const WIDTH: usize> BenchContext for SortedNodeSeekMissContext<WIDTH> {
+    fn prepare(num_chunks: usize) -> Self {
+        Self {
+            probes: make_sorted_node_seek_miss_probes::<WIDTH>(num_chunks),
+        }
+    }
+
+    fn chunk_size() -> Option<usize> {
+        Some(microbench_chunk_size())
+    }
+}
+
+impl<const WIDTH: usize, const INDEX: usize> BenchContext
+    for SortedNodeSeekEdgeContext<WIDTH, INDEX>
+{
+    fn prepare(num_chunks: usize) -> Self {
+        Self {
+            probes: make_sorted_node_seek_edge_probes::<WIDTH, INDEX>(num_chunks),
+        }
+    }
+
+    fn chunk_size() -> Option<usize> {
+        Some(microbench_chunk_size())
+    }
+}
+
+impl<const WIDTH: usize, const NUM_CHILDREN: usize, const MISS_INTERVAL: usize> BenchContext
+    for SortedKeyMixedProbeContext<WIDTH, NUM_CHILDREN, MISS_INTERVAL>
+{
+    fn prepare(num_chunks: usize) -> Self {
+        Self {
+            probes: make_sorted_key_mixed_probes::<WIDTH, NUM_CHILDREN, MISS_INTERVAL>(num_chunks),
+        }
+    }
+
+    fn chunk_size() -> Option<usize> {
+        Some(microbench_chunk_size())
+    }
+}
+
+impl<const WIDTH: usize, const MISS_INTERVAL: usize> BenchContext
+    for SortedNodeSeekMixedContext<WIDTH, MISS_INTERVAL>
+{
+    fn prepare(num_chunks: usize) -> Self {
+        Self {
+            probes: make_sorted_node_seek_mixed_probes::<WIDTH, MISS_INTERVAL>(num_chunks),
+        }
+    }
+
+    fn chunk_size() -> Option<usize> {
+        Some(microbench_chunk_size())
+    }
+}
+
+impl BenchContext for Node4SearchExperimentContext {
+    fn prepare(num_chunks: usize) -> Self {
+        Self {
+            probes: make_node4_search_experiment_probes(num_chunks),
         }
     }
 
@@ -275,6 +515,204 @@ fn bench_del_child_with_occupancy<const WIDTH: usize, const OCCUPANCY: usize, Ma
     }
 }
 
+fn bench_sorted_key_seek<const WIDTH: usize, const NUM_CHILDREN: usize>(
+    ctx: &mut SortedKeyProbeContext<WIDTH, NUM_CHILDREN>,
+    chunk_size: usize,
+    _chunk_num: usize,
+) {
+    for (keys, probe) in ctx.probes.iter().take(chunk_size) {
+        black_box(u8_keys_find_key_position_sorted::<WIDTH>(
+            *probe,
+            keys,
+            NUM_CHILDREN,
+        ));
+    }
+}
+
+fn bench_unsorted_key_seek<const WIDTH: usize, const NUM_CHILDREN: usize, Bitset>(
+    ctx: &mut UnsortedKeyProbeContext<WIDTH, NUM_CHILDREN, Bitset>,
+    chunk_size: usize,
+    _chunk_num: usize,
+) where
+    Bitset: BitsetTrait + Default,
+{
+    for (keys, bitset, probe) in ctx.probes.iter().take(chunk_size) {
+        black_box(u8_keys_find_key_position::<WIDTH, Bitset>(
+            *probe, keys, bitset,
+        ));
+    }
+}
+
+fn bench_sorted_key_insert_position<const WIDTH: usize, const NUM_CHILDREN: usize>(
+    ctx: &mut SortedKeyInsertContext<WIDTH, NUM_CHILDREN>,
+    chunk_size: usize,
+    _chunk_num: usize,
+) {
+    for (keys, probe) in ctx.probes.iter().take(chunk_size) {
+        black_box(u8_keys_find_insert_position_sorted::<WIDTH>(
+            *probe,
+            keys,
+            NUM_CHILDREN,
+        ));
+    }
+}
+
+fn bench_sorted_key_seek_miss<const WIDTH: usize, const NUM_CHILDREN: usize>(
+    ctx: &mut SortedKeyMissProbeContext<WIDTH, NUM_CHILDREN>,
+    chunk_size: usize,
+    _chunk_num: usize,
+) {
+    for (keys, probe) in ctx.probes.iter().take(chunk_size) {
+        black_box(u8_keys_find_key_position_sorted::<WIDTH>(
+            *probe,
+            keys,
+            NUM_CHILDREN,
+        ));
+    }
+}
+
+fn bench_sorted_key_seek_edge<const WIDTH: usize, const NUM_CHILDREN: usize, const INDEX: usize>(
+    ctx: &mut SortedKeyEdgeProbeContext<WIDTH, NUM_CHILDREN, INDEX>,
+    chunk_size: usize,
+    _chunk_num: usize,
+) {
+    for (keys, probe) in ctx.probes.iter().take(chunk_size) {
+        black_box(u8_keys_find_key_position_sorted::<WIDTH>(
+            *probe,
+            keys,
+            NUM_CHILDREN,
+        ));
+    }
+}
+
+fn bench_sorted_node_seek<const WIDTH: usize>(
+    ctx: &mut SortedNodeSeekContext<WIDTH>,
+    chunk_size: usize,
+    _chunk_num: usize,
+) {
+    for (mapping, probe) in ctx.probes.iter().take(chunk_size) {
+        black_box(mapping.seek_child(*probe));
+    }
+}
+
+fn bench_sorted_node_seek_miss<const WIDTH: usize>(
+    ctx: &mut SortedNodeSeekMissContext<WIDTH>,
+    chunk_size: usize,
+    _chunk_num: usize,
+) {
+    for (mapping, probe) in ctx.probes.iter().take(chunk_size) {
+        black_box(mapping.seek_child(*probe));
+    }
+}
+
+fn bench_sorted_node_seek_edge<const WIDTH: usize, const INDEX: usize>(
+    ctx: &mut SortedNodeSeekEdgeContext<WIDTH, INDEX>,
+    chunk_size: usize,
+    _chunk_num: usize,
+) {
+    for (mapping, probe) in ctx.probes.iter().take(chunk_size) {
+        black_box(mapping.seek_child(*probe));
+    }
+}
+
+fn bench_sorted_key_seek_mixed<
+    const WIDTH: usize,
+    const NUM_CHILDREN: usize,
+    const MISS_INTERVAL: usize,
+>(
+    ctx: &mut SortedKeyMixedProbeContext<WIDTH, NUM_CHILDREN, MISS_INTERVAL>,
+    chunk_size: usize,
+    _chunk_num: usize,
+) {
+    for (keys, probes) in ctx.probes.iter().take(chunk_size) {
+        for &probe in probes {
+            black_box(u8_keys_find_key_position_sorted::<WIDTH>(
+                probe,
+                keys,
+                NUM_CHILDREN,
+            ));
+        }
+    }
+}
+
+fn bench_sorted_node_seek_mixed<const WIDTH: usize, const MISS_INTERVAL: usize>(
+    ctx: &mut SortedNodeSeekMixedContext<WIDTH, MISS_INTERVAL>,
+    chunk_size: usize,
+    _chunk_num: usize,
+) {
+    for (mapping, probes) in ctx.probes.iter().take(chunk_size) {
+        for &probe in probes {
+            black_box(mapping.seek_child(probe));
+        }
+    }
+}
+
+fn node4_find_key_linear(key: u8, keys: &[u8; 16]) -> Option<usize> {
+    keys[..4].iter().position(|&candidate| candidate == key)
+}
+
+fn node4_find_key_unrolled(key: u8, keys: &[u8; 16]) -> Option<usize> {
+    if keys[0] == key {
+        Some(0)
+    } else if keys[1] == key {
+        Some(1)
+    } else if keys[2] == key {
+        Some(2)
+    } else if keys[3] == key {
+        Some(3)
+    } else {
+        None
+    }
+}
+
+fn bench_node4_search_linear(
+    ctx: &mut Node4SearchExperimentContext,
+    chunk_size: usize,
+    _chunk_num: usize,
+) {
+    for (keys, probes) in ctx.probes.iter().take(chunk_size) {
+        for &probe in probes {
+            black_box(node4_find_key_linear(probe, keys));
+        }
+    }
+}
+
+fn bench_node4_search_unrolled(
+    ctx: &mut Node4SearchExperimentContext,
+    chunk_size: usize,
+    _chunk_num: usize,
+) {
+    for (keys, probes) in ctx.probes.iter().take(chunk_size) {
+        for &probe in probes {
+            black_box(node4_find_key_unrolled(probe, keys));
+        }
+    }
+}
+
+#[cfg(feature = "simd_keys")]
+fn bench_node4_search_simd_padded(
+    ctx: &mut Node4SearchExperimentContext,
+    chunk_size: usize,
+    _chunk_num: usize,
+) {
+    for (keys, probes) in ctx.probes.iter().take(chunk_size) {
+        for &probe in probes {
+            black_box(node4_simd_experiment::find_key_padded(probe, keys, 0b1111));
+        }
+    }
+}
+
+fn bench_sorted_node_insert<const WIDTH: usize>(
+    ctx: &mut SortedNodeInsertContext<WIDTH>,
+    chunk_size: usize,
+    _chunk_num: usize,
+) {
+    for (mapping, probe) in ctx.probes.iter_mut().take(chunk_size) {
+        mapping.add_child(*probe, 0);
+        black_box(mapping.num_children());
+    }
+}
+
 fn make_mapping_sets<const WIDTH: usize, MappingType>(
     num_chunks: usize,
     prefill: bool,
@@ -355,6 +793,269 @@ fn make_miss_set(present_keys: &[u8], count: usize) -> Vec<u8> {
 
 fn miss_probe_count(occupancy: usize) -> usize {
     occupancy.min(256 - occupancy)
+}
+
+fn make_sorted_keys<const WIDTH: usize, const NUM_CHILDREN: usize>(seed: u64) -> [u8; WIDTH] {
+    let mut keys = [255; WIDTH];
+    let mut child_set = make_child_set::<NUM_CHILDREN>(seed);
+    child_set.sort_unstable();
+    for (dst, src) in keys.iter_mut().zip(child_set.into_iter()) {
+        *dst = src;
+    }
+    keys
+}
+
+fn make_unsorted_keys<const WIDTH: usize, const NUM_CHILDREN: usize>(seed: u64) -> [u8; WIDTH] {
+    let mut keys = [255; WIDTH];
+    let child_set = make_child_set::<NUM_CHILDREN>(seed);
+    for (dst, src) in keys.iter_mut().zip(child_set.into_iter()) {
+        *dst = src;
+    }
+    keys
+}
+
+fn make_full_bitset<const WIDTH: usize, Bitset>() -> Bitset
+where
+    Bitset: BitsetTrait + Default,
+{
+    let mut bitset = Bitset::default();
+    for idx in 0..WIDTH {
+        bitset.set(idx);
+    }
+    bitset
+}
+
+fn present_key_at(keys: &[u8], index: usize) -> u8 {
+    keys[index]
+}
+
+fn absent_key(keys: &[u8]) -> u8 {
+    for candidate in 0..=u8::MAX {
+        if !keys.contains(&candidate) {
+            return candidate;
+        }
+    }
+    unreachable!("there is always at least one absent key for these microbenches")
+}
+
+fn make_sorted_key_probes<const WIDTH: usize, const NUM_CHILDREN: usize>(
+    num_chunks: usize,
+) -> Vec<([u8; WIDTH], u8)> {
+    let target_index = NUM_CHILDREN / 2;
+    (0..num_chunks)
+        .map(|chunk_idx| {
+            let keys = make_sorted_keys::<WIDTH, NUM_CHILDREN>(chunk_idx as u64);
+            let probe = present_key_at(&keys[..NUM_CHILDREN], target_index);
+            (keys, probe)
+        })
+        .collect()
+}
+
+fn make_sorted_key_miss_probes<const WIDTH: usize, const NUM_CHILDREN: usize>(
+    num_chunks: usize,
+) -> Vec<([u8; WIDTH], u8)> {
+    (0..num_chunks)
+        .map(|chunk_idx| {
+            let keys = make_sorted_keys::<WIDTH, NUM_CHILDREN>(chunk_idx as u64);
+            let probe = absent_key(&keys[..NUM_CHILDREN]);
+            (keys, probe)
+        })
+        .collect()
+}
+
+fn make_sorted_key_edge_probes<
+    const WIDTH: usize,
+    const NUM_CHILDREN: usize,
+    const INDEX: usize,
+>(
+    num_chunks: usize,
+) -> Vec<([u8; WIDTH], u8)> {
+    debug_assert!(INDEX < NUM_CHILDREN);
+    (0..num_chunks)
+        .map(|chunk_idx| {
+            let keys = make_sorted_keys::<WIDTH, NUM_CHILDREN>(chunk_idx as u64);
+            let probe = keys[INDEX];
+            (keys, probe)
+        })
+        .collect()
+}
+
+fn make_mixed_probe_sequence<const MISS_INTERVAL: usize>(
+    present_keys: &[u8],
+    misses: &[u8],
+) -> Vec<u8> {
+    let extra_misses = if MISS_INTERVAL == 0 {
+        0
+    } else {
+        present_keys.len().div_ceil(MISS_INTERVAL)
+    };
+    let mut probes = Vec::with_capacity(present_keys.len() + extra_misses);
+    for (idx, &key) in present_keys.iter().enumerate() {
+        probes.push(key);
+        if MISS_INTERVAL != 0 && (idx + 1) % MISS_INTERVAL == 0 {
+            probes.push(misses[idx % misses.len()]);
+        }
+    }
+    probes
+}
+
+fn make_sorted_key_mixed_probes<
+    const WIDTH: usize,
+    const NUM_CHILDREN: usize,
+    const MISS_INTERVAL: usize,
+>(
+    num_chunks: usize,
+) -> Vec<([u8; WIDTH], Vec<u8>)> {
+    (0..num_chunks)
+        .map(|chunk_idx| {
+            let keys = make_sorted_keys::<WIDTH, NUM_CHILDREN>(chunk_idx as u64);
+            let misses = make_miss_set(&keys[..NUM_CHILDREN], NUM_CHILDREN.max(1));
+            let probes = make_mixed_probe_sequence::<MISS_INTERVAL>(&keys[..NUM_CHILDREN], &misses);
+            (keys, probes)
+        })
+        .collect()
+}
+
+fn make_unsorted_key_probes<const WIDTH: usize, const NUM_CHILDREN: usize, Bitset>(
+    num_chunks: usize,
+) -> Vec<([u8; WIDTH], Bitset, u8)>
+where
+    Bitset: BitsetTrait + Default,
+{
+    let target_index = NUM_CHILDREN / 2;
+    (0..num_chunks)
+        .map(|chunk_idx| {
+            let keys = make_unsorted_keys::<WIDTH, NUM_CHILDREN>(chunk_idx as u64);
+            let probe = present_key_at(&keys[..NUM_CHILDREN], target_index);
+            let bitset = make_full_bitset::<WIDTH, Bitset>();
+            (keys, bitset, probe)
+        })
+        .collect()
+}
+
+fn make_sorted_insert_probes<const WIDTH: usize, const NUM_CHILDREN: usize>(
+    num_chunks: usize,
+) -> Vec<([u8; WIDTH], u8)> {
+    (0..num_chunks)
+        .map(|chunk_idx| {
+            let keys = make_sorted_keys::<WIDTH, NUM_CHILDREN>(chunk_idx as u64);
+            let probe = if NUM_CHILDREN == 0 {
+                0
+            } else {
+                let left = keys[(NUM_CHILDREN - 1) / 2];
+                let right = keys[NUM_CHILDREN / 2];
+                left + ((right - left) / 2).max(1)
+            };
+            (keys, probe)
+        })
+        .collect()
+}
+
+fn make_sorted_node_seek_probes<const WIDTH: usize>(
+    num_chunks: usize,
+) -> Vec<(SortedKeyedMapping<u64, WIDTH>, u8)> {
+    (0..num_chunks)
+        .map(|chunk_idx| {
+            let mut child_set = make_child_set::<WIDTH>(chunk_idx as u64);
+            child_set.sort_unstable();
+            let probe = child_set[WIDTH / 2];
+            let mut mapping = SortedKeyedMapping::default();
+            for key in child_set {
+                mapping.add_child(key, key as u64);
+            }
+            (mapping, probe)
+        })
+        .collect()
+}
+
+fn make_sorted_node_seek_miss_probes<const WIDTH: usize>(
+    num_chunks: usize,
+) -> Vec<(SortedKeyedMapping<u64, WIDTH>, u8)> {
+    (0..num_chunks)
+        .map(|chunk_idx| {
+            let mut child_set = make_child_set::<WIDTH>(chunk_idx as u64);
+            child_set.sort_unstable();
+            let probe = absent_key(&child_set);
+            let mut mapping = SortedKeyedMapping::default();
+            for key in child_set {
+                mapping.add_child(key, key as u64);
+            }
+            (mapping, probe)
+        })
+        .collect()
+}
+
+fn make_sorted_node_seek_edge_probes<const WIDTH: usize, const INDEX: usize>(
+    num_chunks: usize,
+) -> Vec<(SortedKeyedMapping<u64, WIDTH>, u8)> {
+    debug_assert!(INDEX < WIDTH);
+    (0..num_chunks)
+        .map(|chunk_idx| {
+            let mut child_set = make_child_set::<WIDTH>(chunk_idx as u64);
+            child_set.sort_unstable();
+            let probe = child_set[INDEX];
+            let mut mapping = SortedKeyedMapping::default();
+            for key in child_set {
+                mapping.add_child(key, key as u64);
+            }
+            (mapping, probe)
+        })
+        .collect()
+}
+
+fn make_sorted_node_seek_mixed_probes<const WIDTH: usize, const MISS_INTERVAL: usize>(
+    num_chunks: usize,
+) -> Vec<(SortedKeyedMapping<u64, WIDTH>, Vec<u8>)> {
+    (0..num_chunks)
+        .map(|chunk_idx| {
+            let mut child_set = make_child_set::<WIDTH>(chunk_idx as u64);
+            child_set.sort_unstable();
+            let misses = make_miss_set(&child_set, WIDTH.max(1));
+            let probes = make_mixed_probe_sequence::<MISS_INTERVAL>(&child_set, &misses);
+            let mut mapping = SortedKeyedMapping::default();
+            for key in child_set {
+                mapping.add_child(key, key as u64);
+            }
+            (mapping, probes)
+        })
+        .collect()
+}
+
+fn make_node4_search_experiment_probes(num_chunks: usize) -> Vec<([u8; 16], Vec<u8>)> {
+    (0..num_chunks)
+        .map(|chunk_idx| {
+            let mut child_set = make_child_set::<4>(chunk_idx as u64);
+            child_set.sort_unstable();
+            let misses = make_miss_set(&child_set, 4);
+            let probes = {
+                let mut probes = Vec::with_capacity(8);
+                probes.extend_from_slice(&child_set);
+                probes.extend_from_slice(&misses);
+                probes
+            };
+            let mut padded = [255; 16];
+            padded[..4].copy_from_slice(&child_set);
+            (padded, probes)
+        })
+        .collect()
+}
+
+fn make_sorted_node_insert_probes<const WIDTH: usize>(
+    num_chunks: usize,
+) -> Vec<(SortedKeyedMapping<u64, WIDTH>, u8)> {
+    let occupancy = WIDTH - 1;
+    (0..num_chunks)
+        .map(|chunk_idx| {
+            let mut child_set = make_child_set::<WIDTH>(chunk_idx as u64);
+            child_set.sort_unstable();
+            let probe = absent_key(&child_set[..occupancy]);
+            let mut mapping = SortedKeyedMapping::default();
+            for &key in &child_set[..occupancy] {
+                mapping.add_child(key, key as u64);
+            }
+            (mapping, probe)
+        })
+        .collect()
 }
 
 fn register_grow_node_benches(runner: &BenchmarkRunner) {
@@ -637,6 +1338,147 @@ fn register_del_child_density_benches(runner: &BenchmarkRunner) {
     register_del_child_density_bench::<256, 208, DirectMapping<u64>>(runner, "direct_occ208");
 }
 
+fn register_sorted_key_search_benches(runner: &BenchmarkRunner) {
+    runner.group::<SortedKeyProbeContext<4, 4>>("sorted_key_search_mid", |g| {
+        g.throughput(Throughput::ops())
+            .bench("width4", bench_sorted_key_seek::<4, 4>);
+    });
+    runner.group::<SortedKeyProbeContext<16, 16>>("sorted_key_search_mid", |g| {
+        g.throughput(Throughput::ops())
+            .bench("width16", bench_sorted_key_seek::<16, 16>);
+    });
+    runner.group::<SortedKeyProbeContext<32, 32>>("sorted_key_search_mid", |g| {
+        g.throughput(Throughput::ops())
+            .bench("width32", bench_sorted_key_seek::<32, 32>);
+    });
+}
+
+fn register_unsorted_key_search_benches(runner: &BenchmarkRunner) {
+    runner.group::<UnsortedKeyProbeContext<16, 16, Bitset16<1>>>("unsorted_key_search_mid", |g| {
+        g.throughput(Throughput::ops())
+            .bench("width16", bench_unsorted_key_seek::<16, 16, Bitset16<1>>);
+    });
+    runner.group::<UnsortedKeyProbeContext<32, 32, Bitset32<1>>>("unsorted_key_search_mid", |g| {
+        g.throughput(Throughput::ops())
+            .bench("width32", bench_unsorted_key_seek::<32, 32, Bitset32<1>>);
+    });
+}
+
+fn register_sorted_key_search_detail_benches(runner: &BenchmarkRunner) {
+    runner.group::<SortedKeyEdgeProbeContext<16, 16, 0>>("sorted_key_search_front", |g| {
+        g.throughput(Throughput::ops())
+            .bench("width16", bench_sorted_key_seek_edge::<16, 16, 0>);
+    });
+    runner.group::<SortedKeyEdgeProbeContext<16, 16, 15>>("sorted_key_search_back", |g| {
+        g.throughput(Throughput::ops())
+            .bench("width16", bench_sorted_key_seek_edge::<16, 16, 15>);
+    });
+    runner.group::<SortedKeyMissProbeContext<16, 16>>("sorted_key_search_miss", |g| {
+        g.throughput(Throughput::ops())
+            .bench("width16", bench_sorted_key_seek_miss::<16, 16>);
+    });
+    runner.group::<SortedKeyMixedProbeContext<16, 16, 0>>("sorted_key_search_mixed_hits", |g| {
+        g.throughput(Throughput::per_operation(16, "probes"))
+            .bench("width16", bench_sorted_key_seek_mixed::<16, 16, 0>);
+    });
+    runner.group::<SortedKeyMixedProbeContext<16, 16, 10>>(
+        "sorted_key_search_mixed_hits_90_miss_10",
+        |g| {
+            g.throughput(Throughput::per_operation(17, "probes"))
+                .bench("width16", bench_sorted_key_seek_mixed::<16, 16, 10>);
+        },
+    );
+    runner.group::<SortedKeyMixedProbeContext<16, 16, 2>>(
+        "sorted_key_search_mixed_hits_50_miss_50",
+        |g| {
+            g.throughput(Throughput::per_operation(24, "probes"))
+                .bench("width16", bench_sorted_key_seek_mixed::<16, 16, 2>);
+        },
+    );
+}
+
+fn register_sorted_key_insert_benches(runner: &BenchmarkRunner) {
+    runner.group::<SortedKeyInsertContext<4, 3>>("sorted_key_insert_mid", |g| {
+        g.throughput(Throughput::ops())
+            .bench("width4_num3", bench_sorted_key_insert_position::<4, 3>);
+    });
+    runner.group::<SortedKeyInsertContext<16, 15>>("sorted_key_insert_mid", |g| {
+        g.throughput(Throughput::ops())
+            .bench("width16_num15", bench_sorted_key_insert_position::<16, 15>);
+    });
+    runner.group::<SortedKeyInsertContext<32, 31>>("sorted_key_insert_mid", |g| {
+        g.throughput(Throughput::ops())
+            .bench("width32_num31", bench_sorted_key_insert_position::<32, 31>);
+    });
+}
+
+fn register_sorted_node_seek_benches(runner: &BenchmarkRunner) {
+    runner.group::<SortedNodeSeekContext<4>>("sorted_node_seek_mid", |g| {
+        g.throughput(Throughput::ops())
+            .bench("node4", bench_sorted_node_seek::<4>);
+    });
+    runner.group::<SortedNodeSeekContext<16>>("sorted_node_seek_mid", |g| {
+        g.throughput(Throughput::ops())
+            .bench("node16", bench_sorted_node_seek::<16>);
+    });
+}
+
+fn register_sorted_node_seek_detail_benches(runner: &BenchmarkRunner) {
+    runner.group::<SortedNodeSeekEdgeContext<16, 0>>("sorted_node_seek_front", |g| {
+        g.throughput(Throughput::ops())
+            .bench("node16", bench_sorted_node_seek_edge::<16, 0>);
+    });
+    runner.group::<SortedNodeSeekEdgeContext<16, 15>>("sorted_node_seek_back", |g| {
+        g.throughput(Throughput::ops())
+            .bench("node16", bench_sorted_node_seek_edge::<16, 15>);
+    });
+    runner.group::<SortedNodeSeekMissContext<16>>("sorted_node_seek_miss", |g| {
+        g.throughput(Throughput::ops())
+            .bench("node16", bench_sorted_node_seek_miss::<16>);
+    });
+    runner.group::<SortedNodeSeekMixedContext<16, 0>>("sorted_node_seek_mixed_hits", |g| {
+        g.throughput(Throughput::per_operation(16, "probes"))
+            .bench("node16", bench_sorted_node_seek_mixed::<16, 0>);
+    });
+    runner.group::<SortedNodeSeekMixedContext<16, 10>>(
+        "sorted_node_seek_mixed_hits_90_miss_10",
+        |g| {
+            g.throughput(Throughput::per_operation(17, "probes"))
+                .bench("node16", bench_sorted_node_seek_mixed::<16, 10>);
+        },
+    );
+    runner.group::<SortedNodeSeekMixedContext<16, 2>>(
+        "sorted_node_seek_mixed_hits_50_miss_50",
+        |g| {
+            g.throughput(Throughput::per_operation(24, "probes"))
+                .bench("node16", bench_sorted_node_seek_mixed::<16, 2>);
+        },
+    );
+}
+
+fn register_sorted_node_insert_benches(runner: &BenchmarkRunner) {
+    runner.group::<SortedNodeInsertContext<4>>("sorted_node_insert_mid", |g| {
+        g.throughput(Throughput::ops())
+            .bench("node4", bench_sorted_node_insert::<4>);
+    });
+    runner.group::<SortedNodeInsertContext<16>>("sorted_node_insert_mid", |g| {
+        g.throughput(Throughput::ops())
+            .bench("node16", bench_sorted_node_insert::<16>);
+    });
+}
+
+fn register_node4_search_experiment_benches(runner: &BenchmarkRunner) {
+    runner.group::<Node4SearchExperimentContext>("node4_search_experiments", |g| {
+        g.throughput(Throughput::per_operation(8, "probes"))
+            .bench("linear", bench_node4_search_linear);
+        g.throughput(Throughput::per_operation(8, "probes"))
+            .bench("unrolled", bench_node4_search_unrolled);
+        #[cfg(feature = "simd_keys")]
+        g.throughput(Throughput::per_operation(8, "probes"))
+            .bench("simd_padded16", bench_node4_search_simd_padded);
+    });
+}
+
 benchmark_main!(|runner| {
     runner.set_runtime(runtime_options());
 
@@ -650,4 +1492,12 @@ benchmark_main!(|runner| {
     register_seek_child_density_miss_benches(runner);
     register_add_child_density_benches(runner);
     register_del_child_density_benches(runner);
+    register_sorted_key_search_benches(runner);
+    register_unsorted_key_search_benches(runner);
+    register_sorted_key_search_detail_benches(runner);
+    register_sorted_key_insert_benches(runner);
+    register_sorted_node_seek_benches(runner);
+    register_sorted_node_seek_detail_benches(runner);
+    register_sorted_node_insert_benches(runner);
+    register_node4_search_experiment_benches(runner);
 });
