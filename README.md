@@ -9,10 +9,10 @@ support for both single-threaded and versioned concurrent data structures.
 [![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-pink)](https://github.com/sponsors/rdaum)
 
 If `rart` is useful in your work, consider sponsoring development on GitHub Sponsors.
-> [!NOTE]
-> I am also available for consulting in systems engineering, profiling and performance tuning, and
-> Rust development (10 years at Google, 25+ years in software development). If this project is
-> useful or interesting for your team, feel free to reach out.
+
+> [!NOTE] I am also available for consulting in systems engineering, profiling and performance
+> tuning, and Rust development (10 years at Google, 25+ years in software development). If this
+> project is useful or interesting for your team, feel free to reach out.
 
 ## Overview
 
@@ -194,16 +194,17 @@ Typical uses:
 
 Performance tradeoff:
 
-- Low overlap: the ART-native intersection can outperform a `BTreeMap` merge join by pruning
-  whole subtrees early
+- Low overlap: the ART-native intersection can outperform a `BTreeMap` merge join by pruning whole
+  subtrees early
 - High overlap: a `BTreeMap` merge join can still be faster
-- If you only need counts or value pairs, prefer `intersect_count` or `intersect_values_with`
-  over reconstructing keys
+- If you only need counts or value pairs, prefer `intersect_count` or `intersect_values_with` over
+  reconstructing keys
 
 ## Performance
 
-Benchmark environment: NVIDIA GB10 (NVIDIA Spark equivalent, ASUS GX10 variant), ARM Cortex-X925, Criterion.rs.
-Numbers below are from the default quick benchmark profile (`RART_BENCH_FULL` unset). For longer high-confidence runs, use `RART_BENCH_FULL=1`.
+Benchmark environment: NVIDIA GB10 (NVIDIA Spark equivalent, ASUS GX10 variant), ARM Cortex-X925,
+Criterion.rs. Numbers below are from the default quick benchmark profile (`RART_BENCH_FULL` unset).
+For longer high-confidence runs, use `RART_BENCH_FULL=1`.
 
 ### Single-threaded Performance (AdaptiveRadixTree)
 
@@ -222,8 +223,10 @@ Representative current results from the quick Criterion profile:
 - ART: ~8.2ns (slower than peers)
 - HashMap: ~0.6ns
 - BTree: ~0.9ns
-- *Note: ART is heavily optimized for ordered key probes from the caller (leveraging cache locality of prefixes). Iterating the ART itself requires reconstructing keys from compressed paths, which is more expensive than BTree leaf traversal.*
-- *ART still provides ordered key semantics (sorted traversal/range behavior), unlike `HashMap`.*
+- _Note: ART is heavily optimized for ordered key probes from the caller (leveraging cache locality
+  of prefixes). Iterating the ART itself requires reconstructing keys from compressed paths, which
+  is more expensive than BTree leaf traversal._
+- _ART still provides ordered key semantics (sorted traversal/range behavior), unlike `HashMap`._
 
 **Value-only Iteration** (`values_iter`, 32k elements):
 
@@ -231,7 +234,8 @@ Representative current results from the quick Criterion profile:
 - BLART: ~1.96ns/element
 - BTreeMap: ~0.87ns/element
 - HashMap: ~0.63ns/element
-- *`values_iter` avoids key reconstruction and is ~4x faster than ART full iteration in this run (~8.2ns/element).*
+- _`values_iter` avoids key reconstruction and is ~4x faster than ART full iteration in this run
+  (~8.2ns/element)._
 
 **Prefix-specific Operations** (`prefix_bench`, quick profile):
 
@@ -239,13 +243,15 @@ Representative current results from the quick Criterion profile:
 - ART: ~3.45ms total (~9.5M probes/sec)
 - BTreeMap baseline: ~6.73ms total (~4.9M probes/sec)
 - HashMap baseline: ~1.31ms total (~25.1M probes/sec)
-- *HashMap baseline uses repeated exact lookups on shorter prefixes; this is fast but does not provide ordered subtree traversal.*
+- _HashMap baseline uses repeated exact lookups on shorter prefixes; this is fast but does not
+  provide ordered subtree traversal._
 
 - `prefix_iter` (narrow prefixes, 32k tree, 1024 queries):
 - ART: ~852µs total (~1.20M queries/sec)
 - BTreeMap baseline: ~122µs total (~8.4M queries/sec)
 - HashMap baseline: ~100ms total (~10K queries/sec)
-- *ART is much faster than hash-scan for prefix enumeration, while BTree range iteration is still faster in this benchmark.*
+- _ART is much faster than hash-scan for prefix enumeration, while BTree range iteration is still
+  faster in this benchmark._
 
 **Tree Intersection / Join** (`intersection_join_bench`, quick profile):
 
