@@ -193,6 +193,19 @@ Typical uses:
 - Counting overlap between sparse keysets
 - Intersecting filtered working sets before more expensive processing
 
+### Lending traversal APIs
+
+For perf-sensitive traversal, prefer the lending callback APIs over materializing owned keys:
+
+- `for_each_view`
+- `prefix_for_each_view` / `prefix_for_each_view_k`
+- `for_each_range_view`
+- `with_longest_prefix_match_view` / `with_longest_prefix_match_view_k`
+- `intersect_lending_with`
+
+These expose a `LendingKeyView` tied to the callback invocation, so the tree
+can reuse traversal scratch state instead of rebuilding or cloning per-item key views.
+
 Performance tradeoff:
 
 - Low overlap: the ART-native intersection can outperform a `BTreeMap` merge join by pruning whole
@@ -228,6 +241,15 @@ Representative current results from the quick Criterion profile:
   of prefixes). Iterating the ART itself requires reconstructing keys from compressed paths, which
   is more expensive than BTree leaf traversal._
 - _ART still provides ordered key semantics (sorted traversal/range behavior), unlike `HashMap`._
+
+**Lending traversal** (`borrowed_view_bench`, quick profile):
+
+- `for_each_view`: ~6.3µs at 1k entries, ~38.5µs at 4k entries, ~227µs at 32k entries
+- `for_each_range_view`: ~4.9µs at 1k entries, ~19.1µs at 4k entries, ~150µs at 32k entries
+- `with_longest_prefix_match_view`: materially faster than owned longest-prefix-match in local runs
+- `intersect_lending_with`: materially faster than owned intersection in local runs
+- _These APIs avoid per-item key materialization and are the preferred traversal surface when the
+  caller can consume keys inside a callback._
 
 **Value-only Iteration** (`values_iter`, 32k elements):
 

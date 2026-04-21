@@ -8,6 +8,13 @@ All notable changes to this project are documented in this file.
 
 - Optional `triomphe-arc` feature for `VersionedAdaptiveRadixTree`, allowing the versioned tree to
   use `triomphe::Arc` instead of `std::sync::Arc`.
+- Lending traversal APIs on `AdaptiveRadixTree` for perf-sensitive iteration, prefix, range,
+  longest-prefix-match, and intersection paths:
+  - `for_each_view`
+  - `prefix_for_each_view` / `prefix_for_each_view_k`
+  - `for_each_range_view`
+  - `with_longest_prefix_match_view` / `with_longest_prefix_match_view_k`
+  - `intersect_lending_with`
 - Partial-prefix microbench coverage for `ArrPartial` and `VectorPartial` using `micromeasure`.
 - Focused SIMD microbench coverage for node key search paths and `SortedKeyedMapping` probe
   patterns.
@@ -22,6 +29,8 @@ All notable changes to this project are documented in this file.
   `assume_init_read()`, clarifying intent and simplifying move-out code.
 - Mapping growth and shrink conversion helpers now move children directly between layouts instead of
   rebuilding through repeated trait-level `add_child` / `delete_child` operations.
+- Replaced the earlier cloned borrowed-key traversal experiment with lending callback APIs, so
+  traversal can reuse internal key reconstruction state instead of cloning per-item segment lists.
 
 ### Fixed
 
@@ -32,6 +41,11 @@ All notable changes to this project are documented in this file.
 - In local `versioned_tree_bench` runs, `triomphe-arc` improved versioned mutation and
   snapshot-sharing workloads by roughly `2-4%` while leaving lookup and scan workloads close to
   flat.
+- In local `borrowed_view_bench` runs, the lending traversal APIs materially outperformed owned-key
+  traversal:
+  - full iteration: ~`2.6x` faster at `1024`, ~`1.7x` faster at `4096`, ~`2.6x` faster at `32768`
+  - ranged traversal: ~`1.9x` faster at `1024`, ~`1.9x` faster at `4096`, ~`2.0x` faster at `32768`
+  - start-bounded traversal: ~`3.3x` faster at `1024`, ~`3.5x` faster at `4096`, ~`3.5x` faster at `32768`
 - Switched partial-prefix comparisons to a shared chunked byte matcher, substantially improving
   long common-prefix cases in local `partial_prefix_microbenches` runs.
 - Kept SIMD-enabled key search for sorted `Node16` paths after local microbench runs showed strong

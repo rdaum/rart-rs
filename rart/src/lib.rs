@@ -75,6 +75,7 @@ pub mod tree;
 pub mod versioned_tree;
 
 // Re-export main types for convenience
+pub use iter::LendingKeyView;
 pub use keys::{KeyTrait, array_key::ArrayKey, vector_key::VectorKey};
 pub use partials::Partial;
 pub use tree::AdaptiveRadixTree;

@@ -6,7 +6,7 @@
 use std::cmp::min;
 use std::ops::RangeBounds;
 
-use crate::iter::{Iter, ValuesIter};
+use crate::iter::{Iter, LendingIterInner, LendingKeyView, ValuesIter};
 use crate::keys::KeyTrait;
 use crate::node::{DefaultNode, Node};
 use crate::partials::Partial;
@@ -78,6 +78,8 @@ where
     root: Option<DefaultNode<KeyType::PartialType, ValueType>>,
     _phantom: std::marker::PhantomData<KeyType>,
 }
+
+type PrefixSubtreeView<'a, P, V> = (&'a DefaultNode<P, V>, Vec<&'a [u8]>, usize);
 
 impl<KeyType: KeyTrait, ValueType> Default for AdaptiveRadixTree<KeyType, ValueType> {
     fn default() -> Self {
@@ -155,6 +157,30 @@ where
     #[inline]
     pub fn longest_prefix_match_k(&self, key: &KeyType) -> Option<(KeyType, &ValueType)> {
         AdaptiveRadixTree::longest_prefix_match_iterate(self.root.as_ref()?, key)
+    }
+
+    /// Invoke `on_match` with the deepest key/value pair whose key is a prefix of `key`,
+    /// using a lending borrowed key view for the matched key.
+    #[inline]
+    pub fn with_longest_prefix_match_view<Key, F>(&self, key: Key, on_match: F) -> bool
+    where
+        Key: Into<KeyType>,
+        F: for<'view> FnOnce(LendingKeyView<'_, 'view>, &ValueType),
+    {
+        self.with_longest_prefix_match_view_k(&key.into(), on_match)
+    }
+
+    /// Invoke `on_match` with the deepest key/value pair whose key is a prefix of `key`,
+    /// using a lending borrowed key view for the matched key.
+    #[inline]
+    pub fn with_longest_prefix_match_view_k<F>(&self, key: &KeyType, on_match: F) -> bool
+    where
+        F: for<'view> FnOnce(LendingKeyView<'_, 'view>, &ValueType),
+    {
+        let Some(root) = self.root.as_ref() else {
+            return false;
+        };
+        AdaptiveRadixTree::longest_prefix_match_lending(root, key, on_match)
     }
 
     /// Iterate over all entries whose keys start with `prefix`.
@@ -290,6 +316,14 @@ where
         Iter::new(self.root.as_ref())
     }
 
+    /// Visit all key-value pairs using a lending borrowed key view.
+    pub fn for_each_view<F>(&self, on_each: F)
+    where
+        F: for<'view> FnMut(LendingKeyView<'_, 'view>, &ValueType),
+    {
+        LendingIterInner::for_each(self.root.as_ref(), on_each);
+    }
+
     /// Create an iterator over only the values in the tree.
     ///
     /// This iterator skips key reconstruction entirely and only yields values.
@@ -312,6 +346,28 @@ where
 
         let mut key_buf = Vec::with_capacity(KeyType::MAXIMUM_SIZE.unwrap_or(64));
         Self::intersect_nodes(left_root, 0, right_root, 0, &mut key_buf, &mut on_match);
+    }
+
+    /// Intersect two trees using ART-native traversal and yield lending key views.
+    pub fn intersect_lending_with<'a, F>(&'a self, other: &'a Self, mut on_match: F)
+    where
+        F: for<'view> FnMut(LendingKeyView<'a, 'view>, &'a ValueType, &'a ValueType),
+    {
+        let (Some(left_root), Some(right_root)) = (self.root.as_ref(), other.root.as_ref()) else {
+            return;
+        };
+
+        let mut segments = Vec::new();
+        let mut key_len = 0usize;
+        Self::intersect_nodes_lending(
+            left_root,
+            0,
+            right_root,
+            0,
+            &mut segments,
+            &mut key_len,
+            &mut on_match,
+        );
     }
 
     /// Intersect two trees and invoke a callback with value pairs only.
@@ -364,6 +420,51 @@ where
                 Range::for_iter(optimized_iter, end_bound)
             }
         }
+    }
+
+    /// Visit all entries whose keys start with `prefix` using a lending borrowed key view.
+    pub fn prefix_for_each_view<Key, F>(&self, prefix: Key, on_each: F)
+    where
+        Key: Into<KeyType>,
+        F: for<'view> FnMut(LendingKeyView<'_, 'view>, &ValueType),
+    {
+        self.prefix_for_each_view_k(&prefix.into(), on_each)
+    }
+
+    /// Visit all entries whose keys start with `prefix` using a lending borrowed key view.
+    pub fn prefix_for_each_view_k<F>(&self, prefix: &KeyType, on_each: F)
+    where
+        F: for<'view> FnMut(LendingKeyView<'_, 'view>, &ValueType),
+    {
+        let Some(root) = self.root.as_ref() else {
+            return;
+        };
+        let Some((subtree_root, subtree_root_segments, subtree_root_len)) =
+            AdaptiveRadixTree::find_prefix_subtree_view(root, prefix)
+        else {
+            return;
+        };
+        LendingIterInner::for_each_with_prefix(
+            Some(subtree_root),
+            subtree_root_segments,
+            subtree_root_len,
+            on_each,
+        );
+    }
+
+    /// Visit key-value pairs within a specified range using a lending borrowed key view.
+    pub fn for_each_range_view<R, F>(&self, range: R, on_each: F)
+    where
+        R: RangeBounds<KeyType>,
+        F: for<'view> FnMut(LendingKeyView<'_, 'view>, &ValueType),
+    {
+        let Some(_) = &self.root else {
+            return;
+        };
+
+        let start_bound = range.start_bound().cloned();
+        let end_bound = range.end_bound().cloned();
+        LendingIterInner::for_each_with_bounds(self.root.as_ref(), start_bound, end_bound, on_each);
     }
 
     /// Check if the tree is empty.
@@ -440,7 +541,7 @@ where
         key: &KeyType,
     ) -> Option<(KeyType, &'a ValueType)> {
         let mut cur_node = cur_node;
-        let mut cur_key = KeyType::new_from_partial(&cur_node.prefix);
+        let mut cur_key = cur_node.prefix.as_ref().to_vec();
         let mut best_match = None;
         let mut depth = 0;
 
@@ -451,7 +552,7 @@ where
             }
 
             if let Some(value) = cur_node.value() {
-                best_match = Some((cur_key.clone(), value));
+                best_match = Some((KeyType::new_from_slice(&cur_key), value));
             }
 
             if cur_node.prefix.len() == key.length_at(depth) {
@@ -465,8 +566,65 @@ where
                 return best_match;
             };
             cur_node = child;
-            cur_key = cur_key.extend_from_partial(&cur_node.prefix);
+            cur_key.extend_from_slice(cur_node.prefix.as_ref());
         }
+    }
+
+    fn longest_prefix_match_lending<'a, F>(
+        cur_node: &'a DefaultNode<KeyType::PartialType, ValueType>,
+        key: &KeyType,
+        on_match: F,
+    ) -> bool
+    where
+        F: for<'view> FnOnce(LendingKeyView<'a, 'view>, &'a ValueType),
+    {
+        let mut cur_node = cur_node;
+        let mut cur_segments = if cur_node.prefix.is_empty() {
+            Vec::new()
+        } else {
+            vec![cur_node.prefix.as_ref()]
+        };
+        let mut cur_len = cur_node.prefix.len();
+        let mut best_match = None::<(usize, usize, &'a ValueType)>;
+        let mut depth = 0;
+
+        loop {
+            let prefix_common_match = cur_node.prefix.prefix_length_key(key, depth);
+            if prefix_common_match != cur_node.prefix.len() {
+                break;
+            }
+
+            if let Some(value) = cur_node.value() {
+                best_match = Some((cur_segments.len(), cur_len, value));
+            }
+
+            if cur_node.prefix.len() == key.length_at(depth) {
+                break;
+            }
+
+            let k = key.at(depth + cur_node.prefix.len());
+            depth += cur_node.prefix.len();
+
+            let Some(child) = cur_node.seek_child(k) else {
+                break;
+            };
+            cur_node = child;
+            let segment = cur_node.prefix.as_ref();
+            if !segment.is_empty() {
+                cur_segments.push(segment);
+                cur_len += segment.len();
+            }
+        }
+
+        if let Some((best_segment_count, best_len, value)) = best_match {
+            on_match(
+                LendingKeyView::new(&cur_segments[..best_segment_count], best_len),
+                value,
+            );
+            return true;
+        }
+
+        false
     }
 
     fn find_prefix_subtree<'a>(
@@ -474,20 +632,20 @@ where
         prefix: &KeyType,
     ) -> Option<(&'a DefaultNode<KeyType::PartialType, ValueType>, KeyType)> {
         let mut cur_node = cur_node;
-        let mut cur_key = KeyType::new_from_partial(&cur_node.prefix);
+        let mut cur_key = cur_node.prefix.as_ref().to_vec();
         let mut depth = 0;
 
         loop {
             let prefix_common_match = cur_node.prefix.prefix_length_key(prefix, depth);
             if prefix_common_match != cur_node.prefix.len() {
                 if prefix_common_match == prefix.length_at(depth) {
-                    return Some((cur_node, cur_key));
+                    return Some((cur_node, KeyType::new_from_slice(&cur_key)));
                 }
                 return None;
             }
 
             if cur_node.prefix.len() == prefix.length_at(depth) {
-                return Some((cur_node, cur_key));
+                return Some((cur_node, KeyType::new_from_slice(&cur_key)));
             }
 
             let k = prefix.at(depth + cur_node.prefix.len());
@@ -495,7 +653,46 @@ where
 
             let child = cur_node.seek_child(k)?;
             cur_node = child;
-            cur_key = cur_key.extend_from_partial(&cur_node.prefix);
+            cur_key.extend_from_slice(cur_node.prefix.as_ref());
+        }
+    }
+
+    fn find_prefix_subtree_view<'a>(
+        cur_node: &'a DefaultNode<KeyType::PartialType, ValueType>,
+        prefix: &KeyType,
+    ) -> Option<PrefixSubtreeView<'a, KeyType::PartialType, ValueType>> {
+        let mut cur_node = cur_node;
+        let mut cur_segments = if cur_node.prefix.is_empty() {
+            Vec::new()
+        } else {
+            vec![cur_node.prefix.as_ref()]
+        };
+        let mut cur_len = cur_node.prefix.len();
+        let mut depth = 0;
+
+        loop {
+            let prefix_common_match = cur_node.prefix.prefix_length_key(prefix, depth);
+            if prefix_common_match != cur_node.prefix.len() {
+                if prefix_common_match == prefix.length_at(depth) {
+                    return Some((cur_node, cur_segments, cur_len));
+                }
+                return None;
+            }
+
+            if cur_node.prefix.len() == prefix.length_at(depth) {
+                return Some((cur_node, cur_segments, cur_len));
+            }
+
+            let k = prefix.at(depth + cur_node.prefix.len());
+            depth += cur_node.prefix.len();
+
+            let child = cur_node.seek_child(k)?;
+            cur_node = child;
+            let segment = cur_node.prefix.as_ref();
+            if !segment.is_empty() {
+                cur_segments.push(segment);
+                cur_len += segment.len();
+            }
         }
     }
 
@@ -590,6 +787,145 @@ where
         }
 
         key_buf.truncate(restore_len);
+    }
+
+    fn intersect_nodes_lending<'a, F>(
+        left: &'a DefaultNode<KeyType::PartialType, ValueType>,
+        mut left_offset: usize,
+        right: &'a DefaultNode<KeyType::PartialType, ValueType>,
+        mut right_offset: usize,
+        key_segments: &mut Vec<&'a [u8]>,
+        key_len: &mut usize,
+        on_match: &mut F,
+    ) where
+        F: for<'view> FnMut(LendingKeyView<'a, 'view>, &'a ValueType, &'a ValueType),
+    {
+        let restore_segments = key_segments.len();
+        let restore_len = *key_len;
+        let left_prefix = left.prefix.as_ref();
+        let right_prefix = right.prefix.as_ref();
+        let matched_left_start = left_offset;
+
+        while left_offset < left_prefix.len() && right_offset < right_prefix.len() {
+            if left_prefix[left_offset] != right_prefix[right_offset] {
+                key_segments.truncate(restore_segments);
+                *key_len = restore_len;
+                return;
+            }
+            left_offset += 1;
+            right_offset += 1;
+        }
+
+        if left_offset > matched_left_start {
+            let matched = &left_prefix[matched_left_start..left_offset];
+            key_segments.push(matched);
+            *key_len += matched.len();
+        }
+
+        if left_offset < left_prefix.len() {
+            if !right.is_inner() {
+                key_segments.truncate(restore_segments);
+                *key_len = restore_len;
+                return;
+            }
+
+            let edge = left_prefix[left_offset];
+            let Some(right_child) = right.seek_child(edge) else {
+                key_segments.truncate(restore_segments);
+                *key_len = restore_len;
+                return;
+            };
+
+            let edge_segment = &left_prefix[left_offset..left_offset + 1];
+            key_segments.push(edge_segment);
+            *key_len += 1;
+            Self::intersect_nodes_lending(
+                left,
+                left_offset + 1,
+                right_child,
+                1,
+                key_segments,
+                key_len,
+                on_match,
+            );
+            key_segments.truncate(restore_segments);
+            *key_len = restore_len;
+            return;
+        }
+
+        if right_offset < right_prefix.len() {
+            if !left.is_inner() {
+                key_segments.truncate(restore_segments);
+                *key_len = restore_len;
+                return;
+            }
+
+            let edge = right_prefix[right_offset];
+            let Some(left_child) = left.seek_child(edge) else {
+                key_segments.truncate(restore_segments);
+                *key_len = restore_len;
+                return;
+            };
+
+            let edge_segment = &right_prefix[right_offset..right_offset + 1];
+            key_segments.push(edge_segment);
+            *key_len += 1;
+            Self::intersect_nodes_lending(
+                left_child,
+                1,
+                right,
+                right_offset + 1,
+                key_segments,
+                key_len,
+                on_match,
+            );
+            key_segments.truncate(restore_segments);
+            *key_len = restore_len;
+            return;
+        }
+
+        if let (Some(left_value), Some(right_value)) = (left.value(), right.value()) {
+            on_match(
+                LendingKeyView::new(key_segments, *key_len),
+                left_value,
+                right_value,
+            );
+        }
+
+        if left.is_inner() && right.is_inner() {
+            if left.num_children() <= right.num_children() {
+                for (edge, left_child) in left.iter() {
+                    if let Some(right_child) = right.seek_child(edge) {
+                        Self::intersect_nodes_lending(
+                            left_child,
+                            0,
+                            right_child,
+                            0,
+                            key_segments,
+                            key_len,
+                            on_match,
+                        );
+                    }
+                }
+            } else {
+                for (edge, right_child) in right.iter() {
+                    if let Some(left_child) = left.seek_child(edge) {
+                        Self::intersect_nodes_lending(
+                            left_child,
+                            0,
+                            right_child,
+                            0,
+                            key_segments,
+                            key_len,
+                            on_match,
+                        );
+                    }
+                }
+            }
+        }
+
+        key_segments.truncate(restore_segments);
+        *key_len = restore_len;
     }
 
     /// Recursively intersect two nodes and emit only value pairs (no key reconstruction).
@@ -1403,6 +1739,60 @@ mod tests {
     }
 
     #[test]
+    fn test_for_each_view_returns_sorted_entries() {
+        let mut tree = AdaptiveRadixTree::<VectorKey, i32>::new();
+        tree.insert_k(&VectorKey::new_from_slice(b"apple"), 1);
+        tree.insert_k(&VectorKey::new_from_slice(b"banana"), 2);
+        tree.insert_k(&VectorKey::new_from_slice(b"cherry"), 3);
+
+        let mut got = Vec::new();
+        tree.for_each_view(|k, v| {
+            got.push((
+                String::from_utf8(k.to_vec()).expect("key must be valid UTF-8"),
+                *v,
+            ));
+        });
+
+        assert_eq!(
+            got,
+            vec![
+                ("apple".to_string(), 1),
+                ("banana".to_string(), 2),
+                ("cherry".to_string(), 3),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_prefix_for_each_view_returns_sorted_prefix_subset() {
+        let mut tree = AdaptiveRadixTree::<VectorKey, i32>::new();
+        tree.insert_k(&VectorKey::new_from_slice(b"alpha1"), 1);
+        tree.insert_k(&VectorKey::new_from_slice(b"alpha2"), 2);
+        tree.insert_k(&VectorKey::new_from_slice(b"alphabet"), 3);
+        tree.insert_k(&VectorKey::new_from_slice(b"alpine"), 4);
+        tree.insert_k(&VectorKey::new_from_slice(b"beta"), 5);
+
+        let prefix = VectorKey::new_from_slice(b"alp");
+        let mut got = Vec::new();
+        tree.prefix_for_each_view_k(&prefix, |k, v| {
+            got.push((
+                String::from_utf8(k.to_vec()).expect("key must be valid UTF-8"),
+                *v,
+            ));
+        });
+
+        assert_eq!(
+            got,
+            vec![
+                ("alpha1".to_string(), 1),
+                ("alpha2".to_string(), 2),
+                ("alphabet".to_string(), 3),
+                ("alpine".to_string(), 4),
+            ]
+        );
+    }
+
+    #[test]
     fn test_prefix_iter_no_match() {
         let mut tree = AdaptiveRadixTree::<VectorKey, i32>::new();
         tree.insert_k(&VectorKey::new_from_slice(b"alpha"), 1);
@@ -1422,6 +1812,30 @@ mod tests {
         let prefix = VectorKey::new_from_slice(&[0x01, 0x02]);
         let got: Vec<i32> = tree.prefix_iter_k(&prefix).map(|(_, v)| *v).collect();
         assert_eq!(got, vec![1, 2]);
+    }
+
+    #[test]
+    fn test_for_each_range_view_returns_expected_subset() {
+        let mut tree = AdaptiveRadixTree::<VectorKey, i32>::new();
+        tree.insert_k(&VectorKey::new_from_slice(b"apple"), 1);
+        tree.insert_k(&VectorKey::new_from_slice(b"banana"), 2);
+        tree.insert_k(&VectorKey::new_from_slice(b"cherry"), 3);
+        tree.insert_k(&VectorKey::new_from_slice(b"date"), 4);
+
+        let start = VectorKey::new_from_slice(b"b");
+        let end = VectorKey::new_from_slice(b"d");
+        let mut got = Vec::new();
+        tree.for_each_range_view(start..end, |k, v| {
+            got.push((
+                String::from_utf8(k.to_vec()).expect("key must be valid UTF-8"),
+                *v,
+            ));
+        });
+
+        assert_eq!(
+            got,
+            vec![("banana".to_string(), 2), ("cherry".to_string(), 3),]
+        );
     }
 
     #[test]
@@ -1456,6 +1870,24 @@ mod tests {
             tree.longest_prefix_match(VectorKey::new_from_slice(b"zebra"))
                 .is_none()
         );
+    }
+
+    #[test]
+    fn test_with_longest_prefix_match_view() {
+        let mut tree = AdaptiveRadixTree::<VectorKey, i32>::new();
+        tree.insert_k(&VectorKey::new_from_slice(b"cat"), 10);
+        tree.insert_k(&VectorKey::new_from_slice(b"dog"), 20);
+
+        let mut seen = None;
+        let found = tree.with_longest_prefix_match_view(
+            VectorKey::new_from_slice(b"catalog"),
+            |matched_key, matched_value| {
+                seen = Some((matched_key.to_vec(), *matched_value));
+            },
+        );
+
+        assert!(found);
+        assert_eq!(seen, Some((b"cat".to_vec(), 10)));
     }
 
     #[test]
@@ -1575,6 +2007,39 @@ mod tests {
         assert!(
             seen.iter()
                 .any(|(k, lv, rv)| *k == "bzz".into() && *lv == 5 && *rv == 50)
+        );
+    }
+
+    #[test]
+    fn test_intersect_lending_with_returns_common_keys_and_values() {
+        let mut left = AdaptiveRadixTree::<ArrayKey<32>, i32>::new();
+        let mut right = AdaptiveRadixTree::<ArrayKey<32>, i32>::new();
+
+        for (k, v) in [("a", 1), ("ab", 2), ("abc", 3), ("abd", 4), ("bzz", 5)] {
+            left.insert(k, v);
+        }
+
+        for (k, v) in [("ab", 20), ("abc", 30), ("bzz", 50), ("dog", 70)] {
+            right.insert(k, v);
+        }
+
+        let mut seen = Vec::new();
+        left.intersect_lending_with(&right, |key, left_value, right_value| {
+            seen.push((
+                trim_array_key_bytes(&key.to_vec()),
+                *left_value,
+                *right_value,
+            ));
+        });
+        seen.sort();
+
+        assert_eq!(
+            seen,
+            vec![
+                (b"ab".to_vec(), 2, 20),
+                (b"abc".to_vec(), 3, 30),
+                (b"bzz".to_vec(), 5, 50),
+            ]
         );
     }
 
