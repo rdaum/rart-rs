@@ -48,6 +48,7 @@ type KeyMapping16_16x1 = KeyedMapping<u64, 16, Bitset16<1>>;
 type KeyMapping16_8x2 = KeyedMapping<u64, 16, Bitset8<2>>;
 
 type KeyMapping4 = KeyedMapping<u64, 4, Bitset8<1>>;
+type ProductionNode48 = IndexedMapping<u64, 48, Bitset64<1>>;
 
 struct SortedKeyProbeContext<const WIDTH: usize, const NUM_CHILDREN: usize> {
     probes: Vec<([u8; WIDTH], u8)>,
@@ -411,6 +412,32 @@ fn bench_grow_indexed_to_direct<const FROM_WIDTH: usize, FromBitset>(
 {
     for (mapping, _) in ctx.mapping_set.iter_mut().take(chunk_size) {
         let new_mapping: DirectMapping<u64> = DirectMapping::from_indexed(mapping);
+        black_box(new_mapping);
+    }
+}
+
+fn bench_grow_sorted_to_indexed<const FROM_WIDTH: usize, const TO_WIDTH: usize, ToBitset>(
+    ctx: &mut FilledMappingSetContext<FROM_WIDTH, SortedKeyedMapping<u64, FROM_WIDTH>>,
+    chunk_size: usize,
+    _chunk_num: usize,
+) where
+    ToBitset: BitsetTrait,
+{
+    for (mapping, _) in ctx.mapping_set.iter_mut().take(chunk_size) {
+        let new_mapping: IndexedMapping<u64, TO_WIDTH, ToBitset> =
+            IndexedMapping::from_sorted_keyed(mapping);
+        black_box(new_mapping);
+    }
+}
+
+fn bench_grow_sorted_node<const FROM_WIDTH: usize, const TO_WIDTH: usize>(
+    ctx: &mut FilledMappingSetContext<FROM_WIDTH, SortedKeyedMapping<u64, FROM_WIDTH>>,
+    chunk_size: usize,
+    _chunk_num: usize,
+) {
+    for (mapping, _) in ctx.mapping_set.iter_mut().take(chunk_size) {
+        let new_mapping: SortedKeyedMapping<u64, TO_WIDTH> =
+            SortedKeyedMapping::from_resized(mapping);
         black_box(new_mapping);
     }
 }
@@ -1059,6 +1086,31 @@ fn make_sorted_node_insert_probes<const WIDTH: usize>(
 }
 
 fn register_grow_node_benches(runner: &BenchmarkRunner) {
+    runner.group::<FilledMappingSetContext<4, SortedKeyedMapping<u64, 4>>>(
+        "grow_node_production",
+        |g| {
+            g.throughput(Throughput::ops())
+                .bench("node4_to_node16", bench_grow_sorted_node::<4, 16>);
+        },
+    );
+
+    runner.group::<FilledMappingSetContext<16, SortedKeyedMapping<u64, 16>>>(
+        "grow_node_production",
+        |g| {
+            g.throughput(Throughput::ops()).bench(
+                "node16_to_node48",
+                bench_grow_sorted_to_indexed::<16, 48, Bitset64<1>>,
+            );
+        },
+    );
+
+    runner.group::<FilledMappingSetContext<48, ProductionNode48>>("grow_node_production", |g| {
+        g.throughput(Throughput::ops()).bench(
+            "node48_to_node256",
+            bench_grow_indexed_to_direct::<48, Bitset64<1>>,
+        );
+    });
+
     runner.group::<FilledMappingSetContext<4, KeyedMapping<u64, 4, Bitset8<1>>>>(
         "grow_node",
         |g| {

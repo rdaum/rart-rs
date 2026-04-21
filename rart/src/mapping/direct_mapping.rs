@@ -60,8 +60,18 @@ impl<N> DirectMapping<N> {
         im: &mut IndexedMapping<N, WIDTH, FromBitset>,
     ) -> Self {
         let mut new_mapping = DirectMapping::<N>::new();
+        let child_count = im.num_children as usize;
+
+        while let Some(key) = im.child_ptr_indexes.first_used() {
+            // SAFETY: `first_used()` only returns initialized index entries.
+            let pos = unsafe { im.child_ptr_indexes.erase_known_present(key) } as usize;
+            // SAFETY: a live index entry points at an initialized child slot.
+            let child = unsafe { im.children.erase_known_present(pos) };
+            new_mapping.children.set(key, child);
+        }
+
+        new_mapping.num_children = child_count;
         im.num_children = 0;
-        im.move_into(&mut new_mapping);
         new_mapping
     }
 
@@ -160,5 +170,27 @@ mod tests {
 
         let keys: Vec<u8> = dm.iter().map(|(k, _)| k).collect();
         assert_eq!(keys, vec![3, 17, 128, 200, 250]);
+    }
+
+    #[test]
+    fn from_indexed_preserves_sparse_children() {
+        let mut indexed = crate::mapping::indexed_mapping::IndexedMapping::<
+            u8,
+            48,
+            crate::utils::bitset::Bitset16<3>,
+        >::new();
+        for key in [200u8, 3, 47, 17, 129] {
+            indexed.add_child(key, key);
+        }
+
+        let dm = super::DirectMapping::from_indexed(&mut indexed);
+        assert_eq!(indexed.num_children(), 0);
+
+        let keys: Vec<u8> = dm.iter().map(|(k, _)| k).collect();
+        assert_eq!(keys, vec![3, 17, 47, 129, 200]);
+
+        for key in [3u8, 17, 47, 129, 200] {
+            assert_eq!(dm.seek_child(key), Some(&key));
+        }
     }
 }

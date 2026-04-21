@@ -120,8 +120,23 @@ impl<N, const WIDTH: usize> SortedKeyedMapping<N, WIDTH> {
         im: &mut IndexedMapping<N, IDX_WIDTH, FromBitset>,
     ) -> Self {
         let mut new_mapping = SortedKeyedMapping::new();
+        let child_count = im.num_children;
+
+        for dst in 0..child_count as usize {
+            let key = im
+                .child_ptr_indexes
+                .first_used()
+                .expect("indexed mapping had fewer live keys than num_children");
+            // SAFETY: `first_used()` only returns initialized index entries.
+            let pos = unsafe { im.child_ptr_indexes.erase_known_present(key) } as usize;
+            new_mapping.keys[dst] = key as u8;
+            // SAFETY: a live index entry points at an initialized child slot.
+            let child = unsafe { im.children.erase_known_present(pos) };
+            new_mapping.children[dst].write(child);
+        }
+
+        new_mapping.num_children = child_count;
         im.num_children = 0;
-        im.move_into(&mut new_mapping);
         new_mapping
     }
 
@@ -279,5 +294,27 @@ mod tests {
         // 32 is the padded size of the struct on account of
         // num_children + keys (u8) + children ptrs
         assert_eq!(std::mem::size_of::<SortedKeyedMapping<Box<u8>, 16>>(), 32);
+    }
+
+    #[test]
+    fn from_indexed_preserves_sorted_iteration() {
+        let mut indexed = crate::mapping::indexed_mapping::IndexedMapping::<
+            u8,
+            48,
+            crate::utils::bitset::Bitset16<3>,
+        >::new();
+        for key in [200u8, 3, 47, 17, 129] {
+            indexed.add_child(key, key);
+        }
+
+        let mapping = SortedKeyedMapping::<u8, 16>::from_indexed(&mut indexed);
+        assert_eq!(indexed.num_children(), 0);
+
+        let keys: Vec<u8> = mapping.iter().map(|(k, _)| k).collect();
+        assert_eq!(keys, vec![3, 17, 47, 129, 200]);
+
+        for key in [3u8, 17, 47, 129, 200] {
+            assert_eq!(mapping.seek_child(key), Some(&key));
+        }
     }
 }

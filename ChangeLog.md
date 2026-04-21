@@ -9,10 +9,23 @@ All notable changes to this project are documented in this file.
 - Optional `triomphe-arc` feature for `VersionedAdaptiveRadixTree`, allowing the versioned tree to
   use `triomphe::Arc` instead of `std::sync::Arc`.
 - Partial-prefix microbench coverage for `ArrPartial` and `VectorPartial` using `micromeasure`.
+- Focused SIMD microbench coverage for node key search paths and `SortedKeyedMapping` probe
+  patterns.
+- Bitset microbench coverage for the production-relevant `Bitset64<1>` and `Bitset64<4>` node
+  cases, including cross-width comparisons against narrower word sizes.
+- Production node growth microbench coverage for `Node4 -> Node16`, `Node16 -> Node48`, and
+  `Node48 -> Node256` transitions.
 
 ### Changed
 
+- Switched several `MaybeUninit` extraction paths in the mappings and slot arrays to
+  `assume_init_read()`, clarifying intent and simplifying move-out code.
+- Mapping growth and shrink conversion helpers now move children directly between layouts instead of
+  rebuilding through repeated trait-level `add_child` / `delete_child` operations.
+
 ### Fixed
+
+- Corrected `Bitset::last()` for multiword bitsets so it returns the true highest set bit.
 
 ### Performance
 
@@ -21,6 +34,13 @@ All notable changes to this project are documented in this file.
   flat.
 - Switched partial-prefix comparisons to a shared chunked byte matcher, substantially improving
   long common-prefix cases in local `partial_prefix_microbenches` runs.
+- Kept SIMD-enabled key search for sorted `Node16` paths after local microbench runs showed strong
+  wins for misses, edge hits, and mixed hit/miss probe distributions.
+- Specialized `Bitset64<1>` / `Bitset64<4>` scan paths after local microbench runs confirmed they
+  remain the best fit for `Node48` and `Node256`.
+- Reduced node growth conversion costs in local `grow_node_production` microbench runs:
+  - `Node16 -> Node48`: ~`7.6%` faster (`32.62 ns -> 30.50 ns`)
+  - `Node48 -> Node256`: ~`30.0%` faster (`154.62 ns -> 118.81 ns`)
 
 ## [0.4.0] - 2026-04-21
 

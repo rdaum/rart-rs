@@ -70,12 +70,17 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> IndexedMapping<N, WIDTH, Bitset
 
     pub(crate) fn from_direct(dm: &mut DirectMapping<N>) -> Self {
         let mut indexed = IndexedMapping::new();
+        let child_count = dm.num_children();
+        let mut next_slot = 0usize;
 
-        let keys: Vec<usize> = dm.children.iter_keys().collect();
-        for key in keys {
-            let child = dm.children.erase(key).unwrap();
-            indexed.add_child(key as u8, child);
+        while let Some(key) = dm.children.first_used() {
+            // SAFETY: `first_used()` only returns initialized child slots.
+            let child = unsafe { dm.children.erase_known_present(key) };
+            indexed.child_ptr_indexes.set(key, next_slot as u8);
+            indexed.children.set(next_slot, child);
+            next_slot += 1;
         }
+        indexed.num_children = child_count as u8;
         indexed
     }
 
@@ -83,11 +88,14 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> IndexedMapping<N, WIDTH, Bitset
         km: &mut SortedKeyedMapping<N, KM_WIDTH>,
     ) -> Self {
         let mut im: IndexedMapping<N, WIDTH, Bitset> = IndexedMapping::new();
-        for i in 0..km.num_children as usize {
+        let child_count = km.num_children as usize;
+        for i in 0..child_count {
             let stolen = unsafe { km.children[i].assume_init_read() };
             km.children[i] = MaybeUninit::uninit();
-            im.add_child(km.keys[i], stolen);
+            im.child_ptr_indexes.set(km.keys[i] as usize, i as u8);
+            im.children.set(i, stolen);
         }
+        im.num_children = km.num_children;
         km.num_children = 0;
         im
     }
@@ -234,5 +242,23 @@ mod test {
 
         let keys: Vec<u8> = mapping.iter().map(|(k, _)| k).collect();
         assert_eq!(keys, vec![3, 17, 47, 129, 200]);
+    }
+
+    #[test]
+    fn from_sorted_keyed_preserves_children() {
+        let mut source = crate::mapping::sorted_keyed_mapping::SortedKeyedMapping::<u8, 16>::new();
+        for key in [17u8, 3, 47, 9, 31] {
+            source.add_child(key, key);
+        }
+
+        let mapping = super::IndexedMapping::<u8, 48, Bitset16<3>>::from_sorted_keyed(&mut source);
+        assert_eq!(source.num_children(), 0);
+
+        let keys: Vec<u8> = mapping.iter().map(|(k, _)| k).collect();
+        assert_eq!(keys, vec![3, 9, 17, 31, 47]);
+
+        for key in [3u8, 9, 17, 31, 47] {
+            assert_eq!(mapping.seek_child(key), Some(&key));
+        }
     }
 }
