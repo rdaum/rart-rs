@@ -826,7 +826,7 @@ fn make_sorted_keys<const WIDTH: usize, const NUM_CHILDREN: usize>(seed: u64) ->
     let mut keys = [255; WIDTH];
     let mut child_set = make_child_set::<NUM_CHILDREN>(seed);
     child_set.sort_unstable();
-    for (dst, src) in keys.iter_mut().zip(child_set.into_iter()) {
+    for (dst, src) in keys.iter_mut().zip(child_set) {
         *dst = src;
     }
     keys
@@ -835,7 +835,7 @@ fn make_sorted_keys<const WIDTH: usize, const NUM_CHILDREN: usize>(seed: u64) ->
 fn make_unsorted_keys<const WIDTH: usize, const NUM_CHILDREN: usize>(seed: u64) -> [u8; WIDTH] {
     let mut keys = [255; WIDTH];
     let child_set = make_child_set::<NUM_CHILDREN>(seed);
-    for (dst, src) in keys.iter_mut().zip(child_set.into_iter()) {
+    for (dst, src) in keys.iter_mut().zip(child_set) {
         *dst = src;
     }
     keys
