@@ -80,7 +80,7 @@ impl<P: Partial, V> Node<P, V> for DefaultNode<P, V> {
 
     #[inline]
     fn new_inner(prefix: P) -> Self {
-        let nt = Content::Node4(Box::new(SortedKeyedMapping::new()));
+        let nt = Content::Node4(Box::default());
         Self {
             prefix,
             value: None,
@@ -130,7 +130,7 @@ impl<P: Partial, V> Node<P, V> for DefaultNode<P, V> {
 
     fn add_child(&mut self, key: u8, node: Self) {
         if matches!(self.content, Content::Empty) {
-            self.content = Content::Node4(Box::new(SortedKeyedMapping::new()));
+            self.content = Content::Node4(Box::default());
         }
 
         if self.is_full() {
@@ -221,7 +221,7 @@ impl<P: Partial, V> DefaultNode<P, V> {
     #[inline]
     #[allow(dead_code)]
     pub fn new_4(prefix: P) -> Self {
-        let nt = Content::Node4(Box::new(SortedKeyedMapping::new()));
+        let nt = Content::Node4(Box::default());
         Self {
             prefix,
             value: None,
@@ -232,7 +232,7 @@ impl<P: Partial, V> DefaultNode<P, V> {
     #[inline]
     #[allow(dead_code)]
     pub fn new_16(prefix: P) -> Self {
-        let nt = Content::Node16(Box::new(SortedKeyedMapping::new()));
+        let nt = Content::Node16(Box::default());
         Self {
             prefix,
             value: None,
@@ -243,7 +243,7 @@ impl<P: Partial, V> DefaultNode<P, V> {
     #[inline]
     #[allow(dead_code)]
     pub fn new_48(prefix: P) -> Self {
-        let nt = Content::Node48(Box::new(IndexedMapping::new()));
+        let nt = Content::Node48(Box::default());
         Self {
             prefix,
             value: None,
@@ -254,7 +254,7 @@ impl<P: Partial, V> DefaultNode<P, V> {
     #[inline]
     #[allow(dead_code)]
     pub fn new_256(prefix: P) -> Self {
-        let nt = Content::Node256(Box::new(DirectMapping::new()));
+        let nt = Content::Node256(Box::default());
         Self {
             prefix,
             value: None,

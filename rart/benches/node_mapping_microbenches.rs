@@ -1,5 +1,4 @@
 /// Microbenches for the specific node mapping types and arrangements.
-use std::mem::MaybeUninit;
 use std::time::Duration;
 
 use micromeasure::{
@@ -24,111 +23,6 @@ type KeyMapping16_16x1 = KeyedMapping<u64, 16, Bitset16<1>>;
 type KeyMapping16_8x2 = KeyedMapping<u64, 16, Bitset8<2>>;
 
 type KeyMapping4 = KeyedMapping<u64, 4, Bitset8<1>>;
-
-const INLINE_EMPTY_SLOT: u8 = u8::MAX;
-
-struct InlineIndexedMapping48<N> {
-    child_ptr_indexes: [u8; 256],
-    free_slots: [u8; 48],
-    children: [MaybeUninit<N>; 48],
-    free_len: u8,
-    num_children: u8,
-}
-
-impl<N> InlineIndexedMapping48<N> {
-    fn new() -> Self {
-        let mut free_slots = [0; 48];
-        for (i, slot) in free_slots.iter_mut().enumerate() {
-            *slot = (47 - i) as u8;
-        }
-
-        Self {
-            child_ptr_indexes: [INLINE_EMPTY_SLOT; 256],
-            free_slots,
-            children: [const { MaybeUninit::uninit() }; 48],
-            free_len: 48,
-            num_children: 0,
-        }
-    }
-}
-
-impl<N> Default for InlineIndexedMapping48<N> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<N> NodeMapping<N, 48> for InlineIndexedMapping48<N> {
-    fn add_child(&mut self, key: u8, node: N) {
-        debug_assert_eq!(self.child_ptr_indexes[key as usize], INLINE_EMPTY_SLOT);
-        debug_assert!(self.free_len > 0);
-
-        self.free_len -= 1;
-        let pos = self.free_slots[self.free_len as usize] as usize;
-        self.child_ptr_indexes[key as usize] = pos as u8;
-        self.children[pos].write(node);
-        self.num_children += 1;
-    }
-
-    fn seek_child(&self, key: u8) -> Option<&N> {
-        let pos = self.child_ptr_indexes[key as usize];
-        if pos == INLINE_EMPTY_SLOT {
-            None
-        } else {
-            // SAFETY: a live index entry points at an initialized child slot.
-            Some(unsafe { self.children[pos as usize].assume_init_ref() })
-        }
-    }
-
-    fn seek_child_mut(&mut self, key: u8) -> Option<&mut N> {
-        let pos = self.child_ptr_indexes[key as usize];
-        if pos == INLINE_EMPTY_SLOT {
-            None
-        } else {
-            // SAFETY: a live index entry points at an initialized child slot.
-            Some(unsafe { self.children[pos as usize].assume_init_mut() })
-        }
-    }
-
-    fn delete_child(&mut self, key: u8) -> Option<N> {
-        let pos = self.child_ptr_indexes[key as usize];
-        if pos == INLINE_EMPTY_SLOT {
-            return None;
-        }
-
-        let pos = pos as usize;
-        self.child_ptr_indexes[key as usize] = INLINE_EMPTY_SLOT;
-        self.num_children -= 1;
-        self.free_slots[self.free_len as usize] = pos as u8;
-        self.free_len += 1;
-
-        // SAFETY: `pos` was looked up from a live index entry.
-        Some(unsafe { self.children[pos].assume_init_read() })
-    }
-
-    fn num_children(&self) -> usize {
-        self.num_children as usize
-    }
-}
-
-impl<N> Drop for InlineIndexedMapping48<N> {
-    fn drop(&mut self) {
-        let mut dropped = [false; 48];
-        for &slot in &self.child_ptr_indexes {
-            if slot == INLINE_EMPTY_SLOT {
-                continue;
-            }
-
-            let slot = slot as usize;
-            if dropped[slot] {
-                continue;
-            }
-            dropped[slot] = true;
-            // SAFETY: any live index entry points at an initialized child slot.
-            unsafe { self.children[slot].assume_init_drop() };
-        }
-    }
-}
 
 fn full_bench_profile() -> bool {
     std::env::var("RART_BENCH_FULL").as_deref() == Ok("1")
@@ -678,10 +572,6 @@ fn register_seek_child_density_benches(runner: &BenchmarkRunner) {
         runner,
         "indexed48_64x1_occ48",
     );
-    register_seek_child_density_bench::<48, 48, InlineIndexedMapping48<u64>>(
-        runner,
-        "indexed48_inline_occ48",
-    );
     register_seek_child_density_bench::<256, 48, DirectMapping<u64>>(runner, "direct_occ48");
     register_seek_child_density_bench::<256, 64, DirectMapping<u64>>(runner, "direct_occ64");
     register_seek_child_density_bench::<256, 96, DirectMapping<u64>>(runner, "direct_occ96");
@@ -694,10 +584,6 @@ fn register_seek_child_density_miss_benches(runner: &BenchmarkRunner) {
     register_seek_child_density_miss_bench::<48, 48, IndexedMapping<u64, 48, Bitset64<1>>>(
         runner,
         "indexed48_64x1_occ48_miss",
-    );
-    register_seek_child_density_miss_bench::<48, 48, InlineIndexedMapping48<u64>>(
-        runner,
-        "indexed48_inline_occ48_miss",
     );
     register_seek_child_density_miss_bench::<256, 48, DirectMapping<u64>>(
         runner,
@@ -730,10 +616,6 @@ fn register_add_child_density_benches(runner: &BenchmarkRunner) {
         runner,
         "indexed48_64x1_occ48",
     );
-    register_add_child_density_bench::<48, 48, InlineIndexedMapping48<u64>>(
-        runner,
-        "indexed48_inline_occ48",
-    );
     register_add_child_density_bench::<256, 48, DirectMapping<u64>>(runner, "direct_occ48");
     register_add_child_density_bench::<256, 64, DirectMapping<u64>>(runner, "direct_occ64");
     register_add_child_density_bench::<256, 96, DirectMapping<u64>>(runner, "direct_occ96");
@@ -746,10 +628,6 @@ fn register_del_child_density_benches(runner: &BenchmarkRunner) {
     register_del_child_density_bench::<48, 48, IndexedMapping<u64, 48, Bitset64<1>>>(
         runner,
         "indexed48_64x1_occ48",
-    );
-    register_del_child_density_bench::<48, 48, InlineIndexedMapping48<u64>>(
-        runner,
-        "indexed48_inline_occ48",
     );
     register_del_child_density_bench::<256, 48, DirectMapping<u64>>(runner, "direct_occ48");
     register_del_child_density_bench::<256, 64, DirectMapping<u64>>(runner, "direct_occ64");

@@ -583,7 +583,7 @@ impl<P: Partial + Clone, V> VersionedNode<P, V> {
         Self {
             prefix,
             value: None,
-            content: VersionedContent::Node4(Box::new(SortedKeyedMapping::new())),
+            content: VersionedContent::Node4(Box::default()),
             version,
         }
     }
@@ -732,7 +732,7 @@ impl<P: Partial + Clone, V> VersionedNode<P, V> {
         V: Clone,
     {
         if matches!(self.content, VersionedContent::Empty) {
-            self.content = VersionedContent::Node4(Box::new(SortedKeyedMapping::new()));
+            self.content = VersionedContent::Node4(Box::default());
         }
 
         if self.is_full() {
