@@ -6,6 +6,16 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Performance
+
+## [0.4.0] - 2026-04-21
+
+### Added
+
 - Prefix-oriented APIs on `AdaptiveRadixTree`:
   - `longest_prefix_match` / `longest_prefix_match_k`
   - `prefix_iter` / `prefix_iter_k`
@@ -16,6 +26,8 @@ All notable changes to this project are documented in this file.
 - Prefix and intersection benchmark coverage:
   - `rart/benches/prefix_bench.rs`
   - `rart/benches/intersection_join_bench.rs`
+- Internal microbench coverage for node mappings and versioned-tree internals using `micromeasure`.
+- Density-sweep microbenches for `Node48`/`Node256` child lookup, miss lookup, insertion, and deletion behavior.
 - Regression tests for sparse-key iteration order in `DirectMapping` and `IndexedMapping`.
 - Property-style coverage for prefix-key edge cases and related regressions.
 
@@ -25,6 +37,9 @@ All notable changes to this project are documented in this file.
   - Added a set-bit iterator in `utils/bitset.rs` and switched `DirectMapping`/`IndexedMapping` iterators to use it.
   - Removed linear `0..255` probing from these hot iteration paths.
 - Added a quick/default benchmark profile with optional full-mode runs via `RART_BENCH_FULL=1`.
+- Raised the workspace MSRV to Rust `1.86`.
+- Switched internal microbench targets from Criterion to `micromeasure` while keeping higher-level workload benchmarks on Criterion.
+- Boxed node-content variants in both `Content` and `VersionedContent` so node headers are no longer sized by the largest inline mapping variant.
 
 ### Fixed
 
@@ -33,6 +48,8 @@ All notable changes to this project are documented in this file.
   - Prefix lookups and subtree iteration now correctly return entries rooted at those inner nodes.
 - Fixed `values_iter()` so it yields a value stored on the root node even when the root also has children.
 - Fixed nested snapshot reference tracking in the multithreaded versioned-tree fuzz target.
+- Tightened `IndexedMapping` and `DirectMapping` hot-path slot access to avoid redundant checks once slot presence is already proven.
+- Corrected `BitArray::first_empty()` range handling for partially-used backing storage.
 
 ### Performance
 
@@ -42,6 +59,8 @@ All notable changes to this project are documented in this file.
   - 4096: ~1.97 ns/elem
   - 32768: ~2.09 ns/elem
 - On 32768 elements, `values_iter()` is ~4x faster than ART full iteration (~2.09 vs ~8.25 ns/elem).
+- Reduced `DefaultNode`/`VersionedNode` header size by storing node-kind payloads behind boxes.
+- Improved `IndexedMapping` hit lookup and add-child hot paths in local node-mapping density benchmarks.
 
 ## [0.3.1] - 2026-02-06
 

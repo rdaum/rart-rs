@@ -207,19 +207,15 @@ Numbers below are from the default quick benchmark profile (`RART_BENCH_FULL` un
 
 ### Single-threaded Performance (AdaptiveRadixTree)
 
-Performance characteristics for lookup patterns and iteration:
+Representative current results from the quick Criterion profile:
 
-**Sequential Key Lookup** (externally supplied keys in order):
+**Point Lookup / Mutation** (`art_bench`, quick profile):
 
-- ART: ~1.6ns (13x faster than BTree, 4.6x faster than HashMap)
-- HashMap: ~7.4ns
-- BTree: ~22ns
-
-**Random Key Lookup**:
-
-- ART: ~20ns
-- HashMap: ~18ns
-- BTree: ~57ns
+- `seq_insert`: ~24.3ns
+- `seq_get`: ~6.7ns at 1k keys, ~7.3ns at 32k keys, ~9.5ns at 131k keys
+- `seq_remove`: ~16.5ns at 1k keys, ~19.0ns at 32k keys, ~26.2ns at 131k keys
+- `rand_get`: ~19.9ns at 1k keys, ~17.9ns at 32k keys, ~24.2ns at 131k keys
+- In these quick-profile runs, ART remains strongest on ordered and lookup-heavy point operations
 
 **Iteration** (key discovery):
 
@@ -257,6 +253,22 @@ Performance characteristics for lookup patterns and iteration:
   early
 - High overlap workloads favor `BTreeMap` merge join more often
 - `intersect_count` is the lightest-weight option when you only need cardinality
+
+**Comparison-oriented ART workloads** (`art_compare_bench`, quick profile):
+
+- `rand_insert/art`: ~259ns
+- `rand_delete/art`: ~82ns
+- `seq_delete/art`: ~27.6ns
+- `random_get_str/art`: ~186ns at 1k keys, ~187ns at 4k keys, ~243ns at 32k keys, ~188ns at 131k
+  keys
+- `random_get_str/art_cached_keys`: ~112ns at 1k, 4k, and 32k keys, ~112ns at 131k keys
+
+Current caveats from the same quick-profile comparison:
+
+- Some cached-key and mid-sized string-lookup workloads are less favorable than the best point
+  lookup cases in the suite
+- As usual with ART, workload shape matters: externally supplied ordered probes are a much better
+  fit than full-tree key discovery
 
 ### Versioned Tree Performance (VersionedAdaptiveRadixTree)
 
