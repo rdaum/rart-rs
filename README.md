@@ -16,6 +16,60 @@ If `rart` is useful in your work, consider sponsoring development on GitHub Spon
 
 ## Overview
 
+If you just want the short version: `rart` is a very fast ordered key-value store for workloads
+where keys share structure and you care about more than plain exact-match lookup.
+
+It is a good fit when you want things like:
+
+- fast exact lookup without giving up sorted order
+- prefix queries such as routing, path matching, or subtree scans
+- prefix-structured joins or intersections where shared structure should let you skip work
+- longest-prefix-match behavior
+- snapshotting / structural sharing in the versioned tree
+
+Typical examples of shared-prefix keyspaces:
+
+- HTTP routes and URL paths such as `/api/v1/users/...`
+- filesystem or object-store paths
+- metric names, tags, or hierarchical telemetry keys
+- DNS names, hostnames, and reversed-domain identifiers
+- network prefixes, binary protocol prefixes, or trie-friendly encoded IDs
+- multi-tenant keys where the tenant or partition is a leading prefix
+- LLM / inference-system cache and routing keys where many requests share a prompt, model, tenant,
+  or session prefix
+- "datalog" or relational tuple indexes, for example `(relation, entity, attribute, value)` or
+  `(tenant, table, primary_key)`, where leading bound columns form natural trie prefixes
+
+If all you need is “give me the value for this key” with no ordering or prefix behavior, a plain
+hash table is often simpler. If you need lots of full ordered scans, a `BTreeMap` may still be the
+better fit. `rart` is for the middle ground where order and prefix structure matter and you want
+them to be fast.
+
+An Adaptive Radix Tree is an ordered map built on trie semantics rather than comparison-based tree
+rotation or hashing. Keys are treated as byte sequences, shared prefixes are stored once, and each
+inner node changes shape as fanout grows (`4`, `16`, `48`, `256` children). In practice that gives
+you a data structure with a distinctive profile:
+
+- exact lookup and insert costs scale with key length rather than collection size
+- ordered traversal and range queries come naturally
+- prefix operations are first-class rather than bolted on
+- shared prefixes improve locality and can cut repeated key work
+
+ARTs are a good fit when your keys are naturally byte-addressable and you care about one or more of
+the following:
+
+- very fast point lookup on ordered keys
+- prefix search, subtree iteration, or longest-prefix match
+- prefix-aware join/intersection behavior that can prune whole subtrees early
+- stable ordered semantics without `BTreeMap`'s comparison-heavy path
+- structural sharing over radix nodes for versioned or snapshot-oriented workloads
+
+They are usually a worse fit when your workload is mostly:
+
+- full-map scans where key reconstruction cost dominates
+- short-lived tiny maps where simpler structures win on constant factors
+- pure exact-match hashing workloads with no need for order or prefix semantics
+
 This crate provides two high-performance tree implementations:
 
 1. **`AdaptiveRadixTree`** - Single-threaded radix tree optimized for speed
@@ -203,8 +257,8 @@ For perf-sensitive traversal, prefer the lending callback APIs over materializin
 - `with_longest_prefix_match_view` / `with_longest_prefix_match_view_k`
 - `intersect_lending_with`
 
-These expose a `LendingKeyView` tied to the callback invocation, so the tree
-can reuse traversal scratch state instead of rebuilding or cloning per-item key views.
+These expose a `LendingKeyView` tied to the callback invocation, so the tree can reuse traversal
+scratch state instead of rebuilding or cloning per-item key views.
 
 Performance tradeoff:
 
@@ -220,117 +274,127 @@ Benchmark environment: NVIDIA GB10 (NVIDIA Spark equivalent, ASUS GX10 variant),
 Criterion.rs. Numbers below are from the default quick benchmark profile (`RART_BENCH_FULL` unset).
 For longer high-confidence runs, use `RART_BENCH_FULL=1`.
 
+Comparison baselines in this section:
+
+- `HashMap`: Rust's standard hash table
+- `BTreeMap`: Rust's standard ordered map
+- `BLART`: the [`blart`](https://crates.io/crates/blart) crate, another Adaptive Radix Tree
+  implementation and the most directly comparable external radix-tree baseline in this benchmark set
+
 ### Single-threaded Performance (AdaptiveRadixTree)
 
-Representative current results from the quick Criterion profile:
+This implementation is strongest on externally-driven lookup, ordered probes, and prefix-aware
+workloads. On this machine, the current quick-profile runs paint a pretty clear shape.
 
-**Point Lookup / Mutation** (`art_bench`, quick profile):
+**Where rart is strongest**
 
-- `seq_insert`: ~24.3ns
-- `seq_get`: ~6.7ns at 1k keys, ~7.3ns at 32k keys, ~9.5ns at 131k keys
-- `seq_remove`: ~16.5ns at 1k keys, ~19.0ns at 32k keys, ~26.2ns at 131k keys
-- `rand_get`: ~19.9ns at 1k keys, ~17.9ns at 32k keys, ~24.2ns at 131k keys
-- In these quick-profile runs, ART remains strongest on ordered and lookup-heavy point operations
+- Point lookups are excellent.
+  - `seq_get` at `1024`: rart `3.1ns`, `HashMap` `7.3ns`, `BLART` `8.3ns`, `BTreeMap` `11.6ns`
+  - `seq_get` at `32768`: rart `3.1ns`, `HashMap` `7.4ns`, `BLART` `8.8ns`, `BTreeMap` `21.9ns`
+- Inserts are competitive with `HashMap`, clearly ahead of `BTreeMap`, and much faster than `BLART`
+  in the current benchmark shape.
+  - `seq_insert`: rart `33.4ns`, `HashMap` `34.3ns`, `BTreeMap` `43.6ns`, `BLART` `107.1ns`
+- Random lookups stay solid.
+  - `rand_get`: rart `20.5ns` at `1024`, `19.6ns` at `32768`
+- Prefix-aware exact query workloads are a good fit.
+  - `longest_prefix_match` at `32768`: rart `1.83ms`, `BTreeMap` `6.78ms`, `HashMap` `1.23ms`
+  - rart handily beats ordered-map baselines here, while the hash baseline remains very fast because
+    it is doing repeated exact lookups rather than ordered subtree traversal.
+- Low-overlap intersections are a good rart story.
+  - `n100000/o10`: `intersect_count` `54.5us`, `intersect_with` `64.1us`, `BTreeMap` merge join
+    `133.8us`
+  - When prefixes diverge early, the tree can prune whole subtrees and beat merge-style joins.
+- Prefix-structured querying is one of rart's real differentiators.
+  - Prefix scans and prefix-aware joins are native tree operations here, not simulated on top of a
+    flat exact-match structure.
+  - In practice, that means rart has a class of wins that `HashMap` does not naturally target at
+    all, and that `BTreeMap` can only reach through more generic ordered scans.
 
-**Iteration** (key discovery):
+**Where rart is weaker**
 
-- ART: ~8.2ns (slower than peers)
-- HashMap: ~0.6ns
-- BTree: ~0.9ns
-- _Note: ART is heavily optimized for ordered key probes from the caller (leveraging cache locality
-  of prefixes). Iterating the ART itself requires reconstructing keys from compressed paths, which
-  is more expensive than BTree leaf traversal._
-- _ART still provides ordered key semantics (sorted traversal/range behavior), unlike `HashMap`._
+- Full-key iteration is still the main weak spot versus conventional map layouts.
+  - Full iteration at `32768`: rart `310us`, `BLART` `61.8us`, `BTreeMap` `29.1us`, `HashMap`
+    `20.5us`
+  - BLART appears to be making different layout tradeoffs that favor raw iteration more strongly
+    than rart does. A plausible explanation is extra iteration-oriented metadata or linkage in the
+    node/leaf layout, which can speed scans but shifts cost elsewhere in memory footprint or update
+    behavior. This README does not claim a proven root-cause analysis for BLART internals; only that
+    the current benchmark shape is consistent with that kind of tradeoff.
+- Value-only iteration is much better than full-key iteration, but still not enough to catch
+  `BTreeMap` or `HashMap`.
+  - `values_iter` at `32768`: rart `83.4us`, `BLART` `62.6us`, `BTreeMap` `29.3us`, `HashMap`
+    `19.9us`
+- Prefix enumeration is mixed.
+  - Narrow prefix scans at `32768`: rart `587.5us`, `BTreeMap` `121.6us`, `HashMap` `93.07ms`
+  - Medium prefix scans at `32768`: rart `16.67ms`, `BTreeMap` `893.3us`, `HashMap` `93.80ms`
+  - So rart is dramatically better than hash-scan baselines for prefix enumeration, but `BTreeMap`
+    still wins this benchmark on this machine.
+- High-overlap intersections favor merge joins.
+  - `n100000/o90`: `intersect_count` `504.1us`, `intersect_with` `580.1us`, `BTreeMap` merge join
+    `178.4us`
 
-**Lending traversal** (`borrowed_view_bench`, quick profile):
+**Traversal profile**
 
-- `for_each_view`: ~6.3µs at 1k entries, ~38.5µs at 4k entries, ~227µs at 32k entries
-- `for_each_range_view`: ~4.9µs at 1k entries, ~19.1µs at 4k entries, ~150µs at 32k entries
-- `with_longest_prefix_match_view`: materially faster than owned longest-prefix-match in local runs
-- `intersect_lending_with`: materially faster than owned intersection in local runs
-- _These APIs avoid per-item key materialization and are the preferred traversal surface when the
-  caller can consume keys inside a callback._
+- The owned `iter()` / `range()` APIs pay for key materialization, which is the main reason rart
+  iteration lags the competition.
+- The lending traversal APIs are the preferred high-performance surface when the caller can consume
+  keys inside a callback:
+  - `for_each_view`
+  - `prefix_for_each_view`
+  - `for_each_range_view`
+  - `with_longest_prefix_match_view`
+  - `intersect_lending_with`
+- Those APIs materially reduce traversal cost on this machine:
+  - full traversal at `32768`: owned `587.8us`, lending `223.0us`
+  - ranged traversal at `32768`: owned `297.8us`, lending `147.9us`
+  - narrow prefix traversal at `32768`: owned `591.8us`, lending `217.4us`
+  - longest-prefix match at `1024`: owned `51.8us`, lending `36.0us`
 
-**Value-only Iteration** (`values_iter`, 32k elements):
+**Practical read**
 
-- ART: ~2.05ns/element
-- BLART: ~1.96ns/element
-- BTreeMap: ~0.87ns/element
-- HashMap: ~0.63ns/element
-- _`values_iter` avoids key reconstruction and is ~4x faster than ART full iteration in this run
-  (~8.2ns/element)._
-
-**Prefix-specific Operations** (`prefix_bench`, quick profile):
-
-- `longest_prefix_match` (32k probes):
-- ART: ~3.45ms total (~9.5M probes/sec)
-- BTreeMap baseline: ~6.73ms total (~4.9M probes/sec)
-- HashMap baseline: ~1.31ms total (~25.1M probes/sec)
-- _HashMap baseline uses repeated exact lookups on shorter prefixes; this is fast but does not
-  provide ordered subtree traversal._
-
-- `prefix_iter` (narrow prefixes, 32k tree, 1024 queries):
-- ART: ~852µs total (~1.20M queries/sec)
-- BTreeMap baseline: ~122µs total (~8.4M queries/sec)
-- HashMap baseline: ~100ms total (~10K queries/sec)
-- _ART is much faster than hash-scan for prefix enumeration, while BTree range iteration is still
-  faster in this benchmark._
-
-**Tree Intersection / Join** (`intersection_join_bench`, quick profile):
-
-- Low overlap workloads favor ART intersection because mismatched prefixes let it skip subtrees
-  early
-- High overlap workloads favor `BTreeMap` merge join more often
-- `intersect_count` is the lightest-weight option when you only need cardinality
-
-**Comparison-oriented ART workloads** (`art_compare_bench`, quick profile):
-
-- `rand_insert/art`: ~259ns
-- `rand_delete/art`: ~82ns
-- `seq_delete/art`: ~27.6ns
-- `random_get_str/art`: ~186ns at 1k keys, ~187ns at 4k keys, ~243ns at 32k keys, ~188ns at 131k
-  keys
-- `random_get_str/art_cached_keys`: ~112ns at 1k, 4k, and 32k keys, ~112ns at 131k keys
-
-Current caveats from the same quick-profile comparison:
-
-- Some cached-key and mid-sized string-lookup workloads are less favorable than the best point
-  lookup cases in the suite
-- As usual with ART, workload shape matters: externally supplied ordered probes are a much better
-  fit than full-tree key discovery
+- If your workload is lookup-heavy, prefix-aware, or low-overlap intersection-heavy, rart is in a
+  good place on this hardware.
+- If your application logic is naturally organized around shared key prefixes, that is one of rart's
+  real superpowers and one of the clearest reasons to choose it over the usual map types.
+- If your workload is dominated by full ordered scans or broad prefix enumeration, `BTreeMap`
+  remains the stronger baseline on this machine.
+- If you only need values during traversal, `values_iter()` is much better than full owned-key
+  iteration, and if you can stay inside callbacks, the lending APIs are better still.
 
 ### Versioned Tree Performance (VersionedAdaptiveRadixTree)
 
-Optimized for transactional workloads with copy-on-write semantics:
+The versioned tree has a similarly clear profile: it is read-leaning, lookup-strong, and not the
+best choice for heavy persistent mutation bursts.
 
-**Lookup Performance** (vs persistent collections from the [im crate](https://crates.io/crates/im)):
+Comparisons in this section use the [`imbl`](https://crates.io/crates/imbl) crate, specifically its
+persistent `HashMap` and `OrdMap`.
 
-_Comparison against im::HashMap (HAMT) and im::OrdMap (B-tree), both persistent data structures with
-structural sharing:_
+**Where `VersionedAdaptiveRadixTree` is strong**
 
-- Small datasets (256 elements): VersionedART 8.9ns vs im::HashMap 18.8ns and im::OrdMap 17.4ns
-- Medium datasets (16k elements): VersionedART 16.4ns vs im::HashMap 28.5ns and im::OrdMap 32.0ns
-- In these benchmarks, 1.3-1.9x faster for lookup-heavy workloads
+- Persistent lookups beat the current `imbl` baselines cleanly on this machine.
+  - `lookup_comparison/16384`: versioned rart `15.1ns`, `imbl::HashMap` `23.4ns`, `imbl::OrdMap`
+    `38.6ns`
+- Sequential scans also favor the versioned radix layout.
+  - `sequential_scan/16384`: versioned rart `126.2us`, `imbl::HashMap` `191.2us`, `imbl::OrdMap`
+    `470.3us`
+- So for read-heavy persistent workloads, especially lookup and scan, the versioned tree is in a
+  very good place.
 
-**Sequential Scanning**:
+**Where `VersionedAdaptiveRadixTree` is weaker**
 
-- Better cache locality due to radix tree structure vs hash-based (HAMT) and tree-based access
-- 256 elements: VersionedART 1.0µs vs im types 1.9-2.7µs (2x faster)
-- 16k elements: VersionedART 122µs vs im::HashMap 209µs/im::OrdMap 398µs (1.7-3.3x faster)
+- Persistent mutation-after-snapshot workloads still favor the mature `imbl` structures.
+  - `mutations_per_snapshot/100`: versioned rart `102.8us`, `imbl::HashMap` `58.1us`, `imbl::OrdMap`
+    `35.5us`
+- Structural-sharing-heavy snapshot workloads show the same shape.
+  - `snapshot_structural_sharing/10`: versioned rart `102.8us`, `imbl::HashMap` `37.0us`,
+    `imbl::OrdMap` `24.8us`
 
-**Snapshot Operations**:
+**Practical read**
 
-- O(1) snapshots: ~8.6ns consistently regardless of tree size
-- im::HashMap clone: ~16.2ns (2x slower)
-- im::OrdMap clone: ~8.6ns (comparable performance)
-
-**Persistent Structure Trade-offs**:
-
-- **Write-heavy workloads**: im types excel due to mature, optimized persistent implementations
-- **Read-heavy workloads**: VersionedART's radix structure provides better cache locality
-- **Both provide structural sharing** - VersionedART via CoW radix nodes, im types via HAMT/B-tree
-  sharing
-- **Sequential access**: VersionedART's prefix compression provides significant advantages
+- If you need snapshot isolation with fast reads, ordered structure, and good scan locality,
+  `VersionedAdaptiveRadixTree` is compelling.
+- If your hot path is repeated persistent mutation and snapshot fan-out, `imbl` remains the stronger
+  baseline on this machine.
 
 Optional feature:
 

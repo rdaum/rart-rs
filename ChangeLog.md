@@ -18,8 +18,8 @@ All notable changes to this project are documented in this file.
 - Partial-prefix microbench coverage for `ArrPartial` and `VectorPartial` using `micromeasure`.
 - Focused SIMD microbench coverage for node key search paths and `SortedKeyedMapping` probe
   patterns.
-- Bitset microbench coverage for the production-relevant `Bitset64<1>` and `Bitset64<4>` node
-  cases, including cross-width comparisons against narrower word sizes.
+- Bitset microbench coverage for the production-relevant `Bitset64<1>` and `Bitset64<4>` node cases,
+  including cross-width comparisons against narrower word sizes.
 - Production node growth microbench coverage for `Node4 -> Node16`, `Node16 -> Node48`, and
   `Node48 -> Node256` transitions.
 
@@ -45,9 +45,10 @@ All notable changes to this project are documented in this file.
   traversal:
   - full iteration: ~`2.6x` faster at `1024`, ~`1.7x` faster at `4096`, ~`2.6x` faster at `32768`
   - ranged traversal: ~`1.9x` faster at `1024`, ~`1.9x` faster at `4096`, ~`2.0x` faster at `32768`
-  - start-bounded traversal: ~`3.3x` faster at `1024`, ~`3.5x` faster at `4096`, ~`3.5x` faster at `32768`
-- Switched partial-prefix comparisons to a shared chunked byte matcher, substantially improving
-  long common-prefix cases in local `partial_prefix_microbenches` runs.
+  - start-bounded traversal: ~`3.3x` faster at `1024`, ~`3.5x` faster at `4096`, ~`3.5x` faster at
+    `32768`
+- Switched partial-prefix comparisons to a shared chunked byte matcher, substantially improving long
+  common-prefix cases in local `partial_prefix_microbenches` runs.
 - Kept SIMD-enabled key search for sorted `Node16` paths after local microbench runs showed strong
   wins for misses, edge hits, and mixed hit/miss probe distributions.
 - Specialized `Bitset64<1>` / `Bitset64<4>` scan paths after local microbench runs confirmed they

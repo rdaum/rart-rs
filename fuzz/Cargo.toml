@@ -2,6 +2,7 @@
 name = "rart-rs-fuzz"
 version.workspace = true
 authors = ["Automatically generated"]
+autobenches = false
 edition.workspace = true
 publish = false
 
@@ -18,23 +19,27 @@ path = "../rart"
 [[bin]]
 name = "rart_check"
 path = "src/rart_check.rs"
+bench = false
 test = false
 doc = false
 
 [[bin]]
 name = "rart_iter_range"
 path = "src/rart_iter_range.rs"
+bench = false
 test = false
 doc = false
 
 [[bin]]
 name = "versioned_tree_check"
 path = "src/versioned_tree_check.rs"
+bench = false
 test = false
 doc = false
 
 [[bin]]
 name = "versioned_tree_multithread"
 path = "src/versioned_tree_multithread.rs"
+bench = false
 test = false
 doc = false
