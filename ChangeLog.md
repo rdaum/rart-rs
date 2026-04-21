@@ -6,6 +6,16 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Performance
+
+## [0.5.0] - 2026-04-21
+
+### Added
+
 - Optional `triomphe-arc` feature for `VersionedAdaptiveRadixTree`, allowing the versioned tree to
   use `triomphe::Arc` instead of `std::sync::Arc`.
 - Lending traversal APIs on `AdaptiveRadixTree` for perf-sensitive iteration, prefix, range,
