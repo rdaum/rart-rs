@@ -283,83 +283,30 @@ Comparison baselines in this section:
 
 ### Single-threaded Performance (AdaptiveRadixTree)
 
-This implementation is strongest on externally-driven lookup, ordered probes, and prefix-aware
-workloads. On this machine, the current quick-profile runs paint a pretty clear shape.
+Quick read on this machine:
 
-**Where rart is strongest**
-
-- Point lookups are excellent.
-  - `seq_get` at `1024`: rart `3.1ns`, `HashMap` `7.3ns`, `BLART` `8.3ns`, `BTreeMap` `11.6ns`
+- `rart` is excellent at point lookup.
   - `seq_get` at `32768`: rart `3.1ns`, `HashMap` `7.4ns`, `BLART` `8.8ns`, `BTreeMap` `21.9ns`
-- Inserts are competitive with `HashMap`, clearly ahead of `BTreeMap`, and much faster than `BLART`
-  in the current benchmark shape.
-  - `seq_insert`: rart `33.4ns`, `HashMap` `34.3ns`, `BTreeMap` `43.6ns`, `BLART` `107.1ns`
-- Random lookups stay solid.
-  - `rand_get`: rart `20.5ns` at `1024`, `19.6ns` at `32768`
-- Prefix-aware exact query workloads are a good fit.
-  - `longest_prefix_match` at `32768`: rart `1.83ms`, `BTreeMap` `6.78ms`, `HashMap` `1.23ms`
-  - rart handily beats ordered-map baselines here, while the hash baseline remains very fast because
-    it is doing repeated exact lookups rather than ordered subtree traversal.
-- Low-overlap intersections are a good rart story.
-  - `n100000/o10`: `intersect_count` `54.5us`, `intersect_with` `64.1us`, `BTreeMap` merge join
+- Inserts are competitive with `HashMap`.
+  - `seq_insert`: rart `33.4ns`, `HashMap` `34.3ns`, `BTreeMap` `43.6ns`
+- Prefix-structured workloads are one of the big reasons to choose it.
+  - `longest_prefix_match` at `32768`: rart `1.83ms`, `BTreeMap` `6.78ms`
+  - low-overlap intersection at `n100000/o10`: `intersect_with` `64.1us`, `BTreeMap` merge join
     `133.8us`
-  - When prefixes diverge early, the tree can prune whole subtrees and beat merge-style joins.
-- Prefix-structured querying is one of rart's real differentiators.
-  - Prefix scans and prefix-aware joins are native tree operations here, not simulated on top of a
-    flat exact-match structure.
-  - In practice, that means rart has a class of wins that `HashMap` does not naturally target at
-    all, and that `BTreeMap` can only reach through more generic ordered scans.
-
-**Where rart is weaker**
-
-- Full-key iteration is still the main weak spot versus conventional map layouts.
-  - Full iteration at `32768`: rart `310us`, `BLART` `61.8us`, `BTreeMap` `29.1us`, `HashMap`
+- Full-key iteration is the main weak spot.
+  - full iteration at `32768`: rart `310us`, `BLART` `61.8us`, `BTreeMap` `29.1us`, `HashMap`
     `20.5us`
-  - BLART appears to be making different layout tradeoffs that favor raw iteration more strongly
-    than rart does. A plausible explanation is extra iteration-oriented metadata or linkage in the
-    node/leaf layout, which can speed scans but shifts cost elsewhere in memory footprint or update
-    behavior. This README does not claim a proven root-cause analysis for BLART internals; only that
-    the current benchmark shape is consistent with that kind of tradeoff.
-- Value-only iteration is much better than full-key iteration, but still not enough to catch
-  `BTreeMap` or `HashMap`.
-  - `values_iter` at `32768`: rart `83.4us`, `BLART` `62.6us`, `BTreeMap` `29.3us`, `HashMap`
-    `19.9us`
-- Prefix enumeration is mixed.
-  - Narrow prefix scans at `32768`: rart `587.5us`, `BTreeMap` `121.6us`, `HashMap` `93.07ms`
-  - Medium prefix scans at `32768`: rart `16.67ms`, `BTreeMap` `893.3us`, `HashMap` `93.80ms`
-  - So rart is dramatically better than hash-scan baselines for prefix enumeration, but `BTreeMap`
-    still wins this benchmark on this machine.
-- High-overlap intersections favor merge joins.
-  - `n100000/o90`: `intersect_count` `504.1us`, `intersect_with` `580.1us`, `BTreeMap` merge join
-    `178.4us`
-
-**Traversal profile**
-
-- The owned `iter()` / `range()` APIs pay for key materialization, which is the main reason rart
-  iteration lags the competition.
-- The lending traversal APIs are the preferred high-performance surface when the caller can consume
-  keys inside a callback:
-  - `for_each_view`
-  - `prefix_for_each_view`
-  - `for_each_range_view`
-  - `with_longest_prefix_match_view`
-  - `intersect_lending_with`
-- Those APIs materially reduce traversal cost on this machine:
+- The lending traversal APIs are the preferred fast path when you can consume keys inside a
+  callback.
   - full traversal at `32768`: owned `587.8us`, lending `223.0us`
   - ranged traversal at `32768`: owned `297.8us`, lending `147.9us`
   - narrow prefix traversal at `32768`: owned `591.8us`, lending `217.4us`
-  - longest-prefix match at `1024`: owned `51.8us`, lending `36.0us`
 
-**Practical read**
+Short version:
 
-- If your workload is lookup-heavy, prefix-aware, or low-overlap intersection-heavy, rart is in a
-  good place on this hardware.
-- If your application logic is naturally organized around shared key prefixes, that is one of rart's
-  real superpowers and one of the clearest reasons to choose it over the usual map types.
-- If your workload is dominated by full ordered scans or broad prefix enumeration, `BTreeMap`
-  remains the stronger baseline on this machine.
-- If you only need values during traversal, `values_iter()` is much better than full owned-key
-  iteration, and if you can stay inside callbacks, the lending APIs are better still.
+- choose `rart` for lookup-heavy, prefix-aware, or low-overlap join workloads
+- choose `BTreeMap` when broad ordered scans dominate
+- choose `HashMap` when you only need flat exact-match lookup
 
 ### Versioned Tree Performance (VersionedAdaptiveRadixTree)
 
@@ -369,32 +316,22 @@ best choice for heavy persistent mutation bursts.
 Comparisons in this section use the [`imbl`](https://crates.io/crates/imbl) crate, specifically its
 persistent `HashMap` and `OrdMap`.
 
-**Where `VersionedAdaptiveRadixTree` is strong**
+Quick read on this machine:
 
-- Persistent lookups beat the current `imbl` baselines cleanly on this machine.
+- persistent lookup is strong
   - `lookup_comparison/16384`: versioned rart `15.1ns`, `imbl::HashMap` `23.4ns`, `imbl::OrdMap`
     `38.6ns`
-- Sequential scans also favor the versioned radix layout.
+- sequential scan is also strong
   - `sequential_scan/16384`: versioned rart `126.2us`, `imbl::HashMap` `191.2us`, `imbl::OrdMap`
     `470.3us`
-- So for read-heavy persistent workloads, especially lookup and scan, the versioned tree is in a
-  very good place.
-
-**Where `VersionedAdaptiveRadixTree` is weaker**
-
-- Persistent mutation-after-snapshot workloads still favor the mature `imbl` structures.
+- mutation-heavy snapshot workloads still favor `imbl`
   - `mutations_per_snapshot/100`: versioned rart `102.8us`, `imbl::HashMap` `58.1us`, `imbl::OrdMap`
     `35.5us`
-- Structural-sharing-heavy snapshot workloads show the same shape.
-  - `snapshot_structural_sharing/10`: versioned rart `102.8us`, `imbl::HashMap` `37.0us`,
-    `imbl::OrdMap` `24.8us`
 
-**Practical read**
+Short version:
 
-- If you need snapshot isolation with fast reads, ordered structure, and good scan locality,
-  `VersionedAdaptiveRadixTree` is compelling.
-- If your hot path is repeated persistent mutation and snapshot fan-out, `imbl` remains the stronger
-  baseline on this machine.
+- choose `VersionedAdaptiveRadixTree` for read-heavy versioned workloads
+- choose `imbl` when repeated persistent mutation bursts dominate
 
 Optional feature:
 
@@ -405,8 +342,8 @@ Optional feature:
 **Best suited for**: Read-heavy versioned workloads, database snapshots, concurrent systems
 requiring point-in-time consistency and efficient structural sharing.
 
-**[📊 View Complete Performance Analysis](benchmarks/PERFORMANCE_ANALYSIS.md)** - Detailed
-benchmarks, technical insights, and workload recommendations.
+Detailed benchmark analysis, graphs, and workload notes live in
+[benchmarks/PERFORMANCE_ANALYSIS.md](https://github.com/rdaum/rart-rs/blob/main/benchmarks/PERFORMANCE_ANALYSIS.md).
 
 ## Architecture
 
@@ -439,7 +376,7 @@ versioning support.
 - Safe public API with compartmentalized unsafe code for performance
 - Comprehensive test suite including property-based fuzzing
 - Multi-threaded fuzz testing for versioned trees
-- Extensive benchmarks against standard library and `im` crate collections
+- Extensive benchmarks against standard library, `imbl`, and other radix-tree baselines
 
 ## Documentation
 
