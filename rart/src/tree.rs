@@ -3,6 +3,7 @@
 //! This module contains the main [`AdaptiveRadixTree`] implementation and related
 //! functionality for the RART crate.
 
+use std::cmp::Ordering;
 use std::cmp::min;
 use std::ops::RangeBounds;
 
@@ -97,6 +98,95 @@ where
             root: None,
             _phantom: Default::default(),
         }
+    }
+
+    /// Build an Adaptive Radix Tree from already sorted key-value pairs.
+    ///
+    /// Duplicate keys must be adjacent because the input is sorted; the last value
+    /// for a key wins. Panics if keys are not in nondecreasing order.
+    pub fn bulk_load_sorted<I>(items: I) -> Self
+    where
+        I: IntoIterator<Item = (KeyType, ValueType)>,
+    {
+        let iter = items.into_iter();
+        let (lower, _) = iter.size_hint();
+        let mut unique: Vec<(KeyType, Option<ValueType>)> = Vec::with_capacity(lower);
+
+        for (key, value) in iter {
+            if let Some((last_key, last_value)) = unique.last_mut() {
+                match Ord::cmp(&*last_key, &key) {
+                    Ordering::Greater => panic!("bulk_load_sorted input is not sorted"),
+                    Ordering::Equal => {
+                        *last_value = Some(value);
+                        continue;
+                    }
+                    Ordering::Less => {}
+                }
+            }
+
+            unique.push((key, Some(value)));
+        }
+
+        Self::from_unique_sorted_items(unique)
+    }
+
+    /// Build an Adaptive Radix Tree from strictly sorted, unique key-value pairs.
+    ///
+    /// This is the fastest bulk-load entry point: it assumes the caller has
+    /// already sorted and deduplicated the input. Debug builds check that the
+    /// precondition holds; release builds skip that validation.
+    pub fn bulk_load_sorted_unique<I>(items: I) -> Self
+    where
+        I: IntoIterator<Item = (KeyType, ValueType)>,
+    {
+        let iter = items.into_iter();
+        let (lower, _) = iter.size_hint();
+        let mut items = Vec::with_capacity(lower);
+        for (key, value) in iter {
+            items.push((key, Some(value)));
+        }
+
+        debug_assert!(
+            items.windows(2).all(|window| window[0].0 < window[1].0),
+            "bulk_load_sorted_unique input is not strictly sorted and unique"
+        );
+
+        Self::from_unique_sorted_items(items)
+    }
+
+    /// Build an Adaptive Radix Tree from indexed, strictly sorted, unique keys.
+    ///
+    /// This avoids staging keys and values inside the builder. `key_at` must
+    /// provide random access to keys sorted in strict ascending order, and
+    /// `take_value_at` is called exactly once for each index whose value is
+    /// moved into the tree. Debug builds check the key ordering precondition;
+    /// release builds skip that validation.
+    pub fn bulk_load_sorted_unique_by_index<'a, KF, VF>(
+        len: usize,
+        key_at: KF,
+        mut take_value_at: VF,
+    ) -> Self
+    where
+        KeyType: 'a,
+        KF: Fn(usize) -> &'a KeyType,
+        VF: FnMut(usize) -> ValueType,
+    {
+        if len == 0 {
+            return Self::new();
+        }
+
+        debug_assert!(
+            (1..len).all(|index| key_at(index - 1) < key_at(index)),
+            "bulk_load_sorted_unique_by_index input is not strictly sorted and unique"
+        );
+
+        Self::from_root(Self::build_bulk_node_by_index(
+            0,
+            len,
+            0,
+            &key_at,
+            &mut take_value_at,
+        ))
     }
 
     /// Create a new Adaptive Radix Tree with the given root node.
@@ -515,6 +605,185 @@ impl<KeyType, ValueType> AdaptiveRadixTree<KeyType, ValueType>
 where
     KeyType: KeyTrait,
 {
+    fn from_unique_sorted_items(mut items: Vec<(KeyType, Option<ValueType>)>) -> Self {
+        if items.is_empty() {
+            return Self::new();
+        }
+
+        Self::from_root(Self::build_bulk_node(&mut items, 0))
+    }
+
+    fn build_bulk_node(
+        items: &mut [(KeyType, Option<ValueType>)],
+        depth: usize,
+    ) -> DefaultNode<KeyType::PartialType, ValueType> {
+        debug_assert!(!items.is_empty());
+
+        if items.len() == 1 {
+            let (key, value) = &mut items[0];
+            return DefaultNode::new_leaf(
+                key.to_partial(depth),
+                value.take().expect("bulk-load value already consumed"),
+            );
+        }
+
+        let prefix_len = Self::common_prefix_len(&items[0].0, &items[items.len() - 1].0, depth);
+        let node_depth = depth + prefix_len;
+        let prefix = items[0].0.to_partial(depth).partial_before(prefix_len);
+        let has_value = items[0].0.length_at(depth) == prefix_len;
+        let first_child = usize::from(has_value);
+        let child_count = Self::child_group_count(&items[first_child..], node_depth);
+
+        if child_count == 0 {
+            debug_assert!(has_value);
+            return DefaultNode::new_leaf(
+                prefix,
+                items[0].1.take().expect("bulk-load value already consumed"),
+            );
+        }
+
+        let mut node = match child_count {
+            0..=4 => DefaultNode::new_4(prefix),
+            5..=16 => DefaultNode::new_16(prefix),
+            17..=48 => DefaultNode::new_48(prefix),
+            _ => DefaultNode::new_256(prefix),
+        };
+
+        if has_value {
+            node.value = Some(items[0].1.take().expect("bulk-load value already consumed"));
+        }
+
+        let mut start = first_child;
+        while start < items.len() {
+            debug_assert!(items[start].0.length_at(0) > node_depth);
+            let edge = items[start].0.at(node_depth);
+            let mut end = start + 1;
+            while end < items.len() && items[end].0.at(node_depth) == edge {
+                end += 1;
+            }
+
+            let child = Self::build_bulk_node(&mut items[start..end], node_depth);
+            node.add_child_sorted_unchecked(edge, child);
+            start = end;
+        }
+
+        node
+    }
+
+    fn build_bulk_node_by_index<'a, KF, VF>(
+        start: usize,
+        end: usize,
+        depth: usize,
+        key_at: &KF,
+        take_value_at: &mut VF,
+    ) -> DefaultNode<KeyType::PartialType, ValueType>
+    where
+        KeyType: 'a,
+        KF: Fn(usize) -> &'a KeyType,
+        VF: FnMut(usize) -> ValueType,
+    {
+        debug_assert!(start < end);
+
+        if end - start == 1 {
+            let key = key_at(start);
+            return DefaultNode::new_leaf(key.to_partial(depth), take_value_at(start));
+        }
+
+        let first_key = key_at(start);
+        let prefix_len = Self::common_prefix_len(first_key, key_at(end - 1), depth);
+        let node_depth = depth + prefix_len;
+        let prefix = first_key.to_partial(depth).partial_before(prefix_len);
+        let has_value = first_key.length_at(depth) == prefix_len;
+        let first_child = start + usize::from(has_value);
+        let child_count = Self::child_group_count_by_index(first_child, end, node_depth, key_at);
+
+        if child_count == 0 {
+            debug_assert!(has_value);
+            return DefaultNode::new_leaf(prefix, take_value_at(start));
+        }
+
+        let mut node = match child_count {
+            0..=4 => DefaultNode::new_4(prefix),
+            5..=16 => DefaultNode::new_16(prefix),
+            17..=48 => DefaultNode::new_48(prefix),
+            _ => DefaultNode::new_256(prefix),
+        };
+
+        if has_value {
+            node.value = Some(take_value_at(start));
+        }
+
+        let mut child_start = first_child;
+        while child_start < end {
+            let child_key = key_at(child_start);
+            debug_assert!(child_key.length_at(0) > node_depth);
+            let edge = child_key.at(node_depth);
+            let mut child_end = child_start + 1;
+            while child_end < end && key_at(child_end).at(node_depth) == edge {
+                child_end += 1;
+            }
+
+            let child = Self::build_bulk_node_by_index(
+                child_start,
+                child_end,
+                node_depth,
+                key_at,
+                take_value_at,
+            );
+            node.add_child_sorted_unchecked(edge, child);
+            child_start = child_end;
+        }
+
+        node
+    }
+
+    fn common_prefix_len(left: &KeyType, right: &KeyType, depth: usize) -> usize {
+        let common_len = left.length_at(depth).min(right.length_at(depth));
+        let mut matched = 0;
+        while matched < common_len && left.at(depth + matched) == right.at(depth + matched) {
+            matched += 1;
+        }
+        matched
+    }
+
+    fn child_group_count(items: &[(KeyType, Option<ValueType>)], depth: usize) -> usize {
+        let mut count = 0;
+        let mut previous = None;
+        for (key, _) in items {
+            debug_assert!(key.length_at(0) > depth);
+            let edge = key.at(depth);
+            if previous != Some(edge) {
+                count += 1;
+                previous = Some(edge);
+            }
+        }
+        count
+    }
+
+    fn child_group_count_by_index<'a, KF>(
+        start: usize,
+        end: usize,
+        depth: usize,
+        key_at: &KF,
+    ) -> usize
+    where
+        KeyType: 'a,
+        KF: Fn(usize) -> &'a KeyType,
+    {
+        let mut count = 0;
+        let mut previous = None;
+        for index in start..end {
+            let key = key_at(index);
+            debug_assert!(key.length_at(0) > depth);
+            let edge = key.at(depth);
+            if previous != Some(edge) {
+                count += 1;
+                previous = Some(edge);
+            }
+        }
+        count
+    }
+
     fn get_iterate<'a>(
         cur_node: &'a DefaultNode<KeyType::PartialType, ValueType>,
         key: &KeyType,
@@ -1208,6 +1477,120 @@ mod tests {
     use crate::keys::vector_key::VectorKey;
     use crate::partials::array_partial::ArrPartial;
     use crate::tree::AdaptiveRadixTree;
+
+    fn collect_items(tree: &AdaptiveRadixTree<ArrayKey<16>, u64>) -> Vec<(Vec<u8>, u64)> {
+        tree.iter()
+            .map(|(key, value)| (key.as_ref().to_vec(), *value))
+            .collect()
+    }
+
+    #[test]
+    fn bulk_load_matches_incremental_insert_for_sorted_numeric_keys() {
+        let items: Vec<_> = (0..4096u64)
+            .map(|value| (ArrayKey::from(value), value))
+            .collect();
+        let mut incremental = AdaptiveRadixTree::<ArrayKey<16>, u64>::new();
+        for &(key, value) in &items {
+            incremental.insert_k(&key, value);
+        }
+
+        let bulk = AdaptiveRadixTree::<ArrayKey<16>, u64>::bulk_load_sorted_unique(items);
+
+        assert_eq!(collect_items(&bulk), collect_items(&incremental));
+        for raw_key in [0, 1, 255, 1024, 4095] {
+            let key = ArrayKey::from(raw_key);
+            assert_eq!(bulk.get_k(&key), Some(&raw_key));
+        }
+    }
+
+    #[test]
+    fn bulk_load_sorted_handles_prefix_keys_and_empty_key() {
+        let items = vec![
+            (ArrayKey::new_from_slice(b""), 0),
+            (ArrayKey::new_from_slice(b"a"), 1),
+            (ArrayKey::new_from_slice(b"ab"), 2),
+            (ArrayKey::new_from_slice(b"abc"), 3),
+            (ArrayKey::new_from_slice(b"b"), 4),
+        ];
+        let mut incremental = AdaptiveRadixTree::<ArrayKey<16>, u64>::new();
+        for &(key, value) in &items {
+            incremental.insert_k(&key, value);
+        }
+
+        let bulk = AdaptiveRadixTree::<ArrayKey<16>, u64>::bulk_load_sorted(items);
+
+        assert_eq!(collect_items(&bulk), collect_items(&incremental));
+        assert_eq!(bulk.get_k(&ArrayKey::new_from_slice(b"")), Some(&0));
+        assert_eq!(bulk.get_k(&ArrayKey::new_from_slice(b"abc")), Some(&3));
+    }
+
+    #[test]
+    fn bulk_load_sorted_unique_matches_incremental_insert() {
+        let items = vec![
+            (ArrayKey::new_from_slice(b"a"), 1),
+            (ArrayKey::new_from_slice(b"ab"), 2),
+            (ArrayKey::new_from_slice(b"b"), 3),
+            (ArrayKey::new_from_slice(b"ba"), 4),
+        ];
+        let mut incremental = AdaptiveRadixTree::<ArrayKey<16>, u64>::new();
+        for &(key, value) in &items {
+            incremental.insert_k(&key, value);
+        }
+
+        let bulk = AdaptiveRadixTree::<ArrayKey<16>, u64>::bulk_load_sorted_unique(items);
+
+        assert_eq!(collect_items(&bulk), collect_items(&incremental));
+    }
+
+    #[test]
+    fn bulk_load_sorted_unique_by_index_matches_incremental_insert() {
+        let keys = [
+            ArrayKey::new_from_slice(b""),
+            ArrayKey::new_from_slice(b"a"),
+            ArrayKey::new_from_slice(b"ab"),
+            ArrayKey::new_from_slice(b"b"),
+            ArrayKey::new_from_slice(b"ba"),
+        ];
+        let mut values: Vec<_> = (0..keys.len()).map(|value| Some(value as u64)).collect();
+        let mut incremental = AdaptiveRadixTree::<ArrayKey<16>, u64>::new();
+        for (index, key) in keys.iter().enumerate() {
+            incremental.insert_k(key, index as u64);
+        }
+
+        let bulk = AdaptiveRadixTree::<ArrayKey<16>, u64>::bulk_load_sorted_unique_by_index(
+            keys.len(),
+            |index| &keys[index],
+            |index| values[index].take().expect("value should be taken once"),
+        );
+
+        assert_eq!(collect_items(&bulk), collect_items(&incremental));
+        assert!(values.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn bulk_load_sorted_keeps_last_adjacent_duplicate_value() {
+        let items = vec![
+            (ArrayKey::new_from_slice(b"a"), 1),
+            (ArrayKey::new_from_slice(b"a"), 3),
+            (ArrayKey::new_from_slice(b"b"), 2),
+        ];
+
+        let tree = AdaptiveRadixTree::<ArrayKey<16>, u64>::bulk_load_sorted(items);
+
+        assert_eq!(tree.get_k(&ArrayKey::new_from_slice(b"a")), Some(&3));
+        assert_eq!(tree.get_k(&ArrayKey::new_from_slice(b"b")), Some(&2));
+    }
+
+    #[test]
+    #[should_panic(expected = "bulk_load_sorted input is not sorted")]
+    fn bulk_load_sorted_rejects_unsorted_input() {
+        let items = vec![
+            (ArrayKey::new_from_slice(b"b"), 1),
+            (ArrayKey::new_from_slice(b"a"), 2),
+        ];
+
+        let _ = AdaptiveRadixTree::<ArrayKey<16>, u64>::bulk_load_sorted(items);
+    }
 
     #[test]
     fn values_iter_includes_root_value() {

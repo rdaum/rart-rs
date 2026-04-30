@@ -133,6 +133,17 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> IndexedMapping<N, WIDTH, Bitset
             mapping: self,
         }
     }
+
+    #[inline]
+    pub(crate) fn add_child_sorted(&mut self, key: u8, node: N) {
+        let pos = self.num_children as usize;
+        debug_assert!(pos < WIDTH);
+        debug_assert!(!self.child_ptr_indexes.check(key as usize));
+
+        self.child_ptr_indexes.set(key as usize, pos as u8);
+        self.children.set(pos, node);
+        self.num_children += 1;
+    }
 }
 
 pub struct IndexedMappingIter<'a, N, const WIDTH: usize, Bitset: BitsetTrait> {

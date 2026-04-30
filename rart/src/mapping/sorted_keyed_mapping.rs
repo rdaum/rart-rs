@@ -159,6 +159,17 @@ impl<N, const WIDTH: usize> SortedKeyedMapping<N, WIDTH> {
             idx: 0,
         }
     }
+
+    #[inline]
+    pub(crate) fn add_child_sorted(&mut self, key: u8, node: N) {
+        let idx = self.num_children as usize;
+        debug_assert!(idx < WIDTH);
+        debug_assert!(idx == 0 || self.keys[idx - 1] < key);
+
+        self.keys[idx] = key;
+        self.children[idx].write(node);
+        self.num_children += 1;
+    }
 }
 
 pub(crate) struct SortedKeyedMappingIter<'a, N, const WIDTH: usize> {

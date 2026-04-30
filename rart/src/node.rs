@@ -335,6 +335,16 @@ impl<P: Partial, V> DefaultNode<P, V> {
             Content::Empty => NodeIter::Empty,
         }
     }
+
+    pub(crate) fn add_child_sorted_unchecked(&mut self, key: u8, node: Self) {
+        match &mut self.content {
+            Content::Node4(km) => km.add_child_sorted(key, node),
+            Content::Node16(km) => km.add_child_sorted(key, node),
+            Content::Node48(im) => im.add_child_sorted(key, node),
+            Content::Node256(dm) => dm.add_child(key, node),
+            Content::Empty => unreachable!("bulk-loaded inner nodes have child storage"),
+        }
+    }
 }
 
 #[cfg(test)]

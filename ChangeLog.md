@@ -6,11 +6,23 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Sorted bulk-load APIs for `AdaptiveRadixTree`:
+  - `bulk_load_sorted`
+  - `bulk_load_sorted_unique`
+  - `bulk_load_sorted_unique_by_index`
+
 ### Changed
 
 ### Fixed
 
 ### Performance
+
+- Added direct sorted child append paths for bulk construction of `Node4`, `Node16`, and `Node48`,
+  avoiding incremental child search/growth work when the final fanout is known.
+- In local `bulk_load_bench` runs, sorted callback bulk loading improved large tree construction
+  versus incremental insertion:
+  - sorted `u64` 131K: ~`1.39 ms` bulk load versus ~`3.6 ms` incremental baseline
+  - sorted prefixed 131K: ~`1.38 ms` bulk load versus ~`2.76 ms` incremental baseline
 
 ## [0.5.0] - 2026-04-21
 
