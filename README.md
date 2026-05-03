@@ -144,17 +144,22 @@ Both trees support flexible key types optimized for different use cases:
 
 - **`ArrayKey<N>`**: Fixed-size keys up to N bytes, stack-allocated for performance
 - **`VectorKey`**: Variable-size keys, heap-allocated for flexibility
+- **`OverflowKey<K, P>`**: Variable-size keys with inline storage for short keys and boxed
+  overflow for longer keys
 
 ```rust
-use rart::{ArrayKey, VectorKey};
+use rart::{ArrayKey, OverflowKey, VectorKey};
 
 // Fixed-size keys (recommended for performance)
-let key1: ArrayKey<16 > = "hello".into();
-let key2: ArrayKey<8 > = 42u64.into();
+let key1: ArrayKey<16> = "hello".into();
+let key2: ArrayKey<8> = 42u64.into();
 
 // Variable-size keys (for dynamic content)
 let key3: VectorKey = "hello world".into();
 let key4: VectorKey = 1337u32.into();
+
+// Mostly-short dynamic keys (inline key bytes, smaller inline node prefixes)
+let key5: OverflowKey<32, 8> = "tenant:account:42".into();
 ```
 
 ## Prefix Operations

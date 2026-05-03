@@ -37,23 +37,26 @@
 //!
 //! ## Key Types
 //!
-//! RART supports two main key types:
+//! RART supports three main key types:
 //!
 //! - [`ArrayKey<N>`]: Fixed-size keys up to N bytes, stack-allocated
-//! - [`VectorKey`]: Variable-size keys, heap-allocated  
+//! - [`VectorKey`]: Variable-size keys, heap-allocated
+//! - [`OverflowKey<K, P>`]: Variable-size keys with inline storage for short keys and boxed
+//!   overflow for longer keys
 //!
-//! Both key types support automatic conversion from common Rust types:
+//! All key types support automatic conversion from common Rust types:
 //!
 //! ```rust
-//! use rart::{ArrayKey, VectorKey};
+//! use rart::{ArrayKey, OverflowKey, VectorKey};
 //!
 //! // From string literals
 //! let key1: ArrayKey<16> = "hello".into();
 //! let key2: VectorKey = "world".into();
+//! let key3: OverflowKey<32, 8> = "mostly short".into();
 //!
 //! // From numeric types
-//! let key3: ArrayKey<8> = 42u64.into();
-//! let key4: VectorKey = 1337u32.into();
+//! let key4: ArrayKey<8> = 42u64.into();
+//! let key5: VectorKey = 1337u32.into();
 //! ```
 
 // Private implementation modules
@@ -76,7 +79,7 @@ pub mod versioned_tree;
 
 // Re-export main types for convenience
 pub use iter::LendingKeyView;
-pub use keys::{KeyTrait, array_key::ArrayKey, vector_key::VectorKey};
+pub use keys::{KeyTrait, array_key::ArrayKey, overflow_key::OverflowKey, vector_key::VectorKey};
 pub use partials::Partial;
 pub use tree::AdaptiveRadixTree;
 pub use versioned_tree::VersionedAdaptiveRadixTree;

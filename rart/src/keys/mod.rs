@@ -7,6 +7,8 @@
 //!
 //! - [`ArrayKey<N>`](array_key::ArrayKey): Fixed-size keys up to N bytes, stored on the stack
 //! - [`VectorKey`](vector_key::VectorKey): Variable-size keys stored on the heap
+//! - [`OverflowKey<K, P>`](overflow_key::OverflowKey): Inline storage for short dynamic keys with
+//!   boxed overflow for longer keys
 //!
 //! ## Custom Keys
 //!
@@ -23,6 +25,7 @@
 use crate::partials::Partial;
 
 pub mod array_key;
+pub mod overflow_key;
 pub mod vector_key;
 
 /// Trait for types that can be used as keys in an Adaptive Radix Tree.

@@ -8,6 +8,8 @@
 //!
 //! - [`ArrPartial<N>`](array_partial::ArrPartial): Fixed-size partial keys up to N bytes
 //! - [`VectorPartial`](vector_partial::VectorPartial): Variable-size partial keys
+//! - [`OverflowPartial<N>`](overflow_partial::OverflowPartial): Inline partial storage with boxed
+//!   overflow for longer prefixes
 //!
 //! ## Usage
 //!
@@ -25,6 +27,7 @@
 use crate::keys::KeyTrait;
 
 pub mod array_partial;
+pub mod overflow_partial;
 pub mod vector_partial;
 
 #[inline]

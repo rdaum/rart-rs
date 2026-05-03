@@ -789,18 +789,21 @@ where
         key: &KeyType,
     ) -> Option<&'a ValueType> {
         let mut cur_node = cur_node;
+        let key_bytes = key.as_ref();
         let mut depth = 0;
         loop {
-            let prefix_common_match = cur_node.prefix.prefix_length_key(key, depth);
-            if prefix_common_match != cur_node.prefix.len() {
+            let prefix_len = cur_node.prefix.len();
+            let remaining_len = key_bytes.len() - depth;
+            let prefix_common_match = cur_node.prefix.prefix_length_slice(&key_bytes[depth..]);
+            if prefix_common_match != prefix_len {
                 return None;
             }
 
-            if cur_node.prefix.len() == key.length_at(depth) {
+            if prefix_len == remaining_len {
                 return cur_node.value();
             }
-            let k = key.at(depth + cur_node.prefix.len());
-            depth += cur_node.prefix.len();
+            let k = key_bytes[depth + prefix_len];
+            depth += prefix_len;
             cur_node = cur_node.seek_child(k)?
         }
     }
@@ -1268,19 +1271,22 @@ where
         key: &KeyType,
     ) -> Option<&'a mut ValueType> {
         let mut cur_node = cur_node;
+        let key_bytes = key.as_ref();
         let mut depth = 0;
         loop {
-            let prefix_common_match = cur_node.prefix.prefix_length_key(key, depth);
-            if prefix_common_match != cur_node.prefix.len() {
+            let prefix_len = cur_node.prefix.len();
+            let remaining_len = key_bytes.len() - depth;
+            let prefix_common_match = cur_node.prefix.prefix_length_slice(&key_bytes[depth..]);
+            if prefix_common_match != prefix_len {
                 return None;
             }
 
-            if cur_node.prefix.len() == key.length_at(depth) {
+            if prefix_len == remaining_len {
                 return cur_node.value_mut();
             }
 
-            let k = key.at(depth + cur_node.prefix.len());
-            depth += cur_node.prefix.len();
+            let k = key_bytes[depth + prefix_len];
+            depth += prefix_len;
             cur_node = cur_node.seek_child_mut(k)?;
         }
     }

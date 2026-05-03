@@ -10,13 +10,31 @@ All notable changes to this project are documented in this file.
   - `bulk_load_sorted`
   - `bulk_load_sorted_unique`
   - `bulk_load_sorted_unique_by_index`
+- Added `OverflowKey<K, P>` as a supported key type for variable-size keys with inline storage for
+  short keys and boxed overflow for longer keys.
+  - Added `OverflowPartial<P>` as the associated node-prefix representation.
+  - Documented `OverflowKey<32, 8>` as a useful starting point for mixed dynamic-key workloads.
+- Whole-tree `micromeasure` key-type macrobench coverage comparing `ArrayKey`, `VectorKey`, and
+  `OverflowKey`.
+- Key-storage `micromeasure` coverage for focused construction, insertion, lookup, iteration, byte
+  scan, and prefix comparison paths.
 
 ### Changed
+
+- Optimized `AdaptiveRadixTree` lookup paths to reuse a single borrowed key byte slice while walking
+  the tree, reducing repeated key representation checks for dynamic key types.
 
 ### Fixed
 
 ### Performance
 
+- In local `key_type_macrobenches` quick runs, `OverflowKey<32, 8>` reduced build cost versus
+  `VectorKey` while keeping lookup close:
+  - mixed 90% short keys: build ~`57.5 ns/key` versus ~`83.4 ns/key`; lookup ~`11.4 ns/key` versus
+    ~`11.0 ns/key`
+  - common-prefix 48-byte keys: build ~`59.9 ns/key` versus ~`80.4 ns/key`; lookup
+    ~`10.1 ns/key` versus ~`9.1 ns/key`
+  - lending iteration was slightly faster for `OverflowKey<32, 8>` in both sampled workloads.
 - Added direct sorted child append paths for bulk construction of `Node4`, `Node16`, and `Node48`,
   avoiding incremental child search/growth work when the final fanout is known.
 - In local `bulk_load_bench` runs, sorted callback bulk loading improved large tree construction
