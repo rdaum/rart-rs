@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-03
+
 ### Added
 
 - Sorted bulk-load APIs for `AdaptiveRadixTree`:
@@ -25,8 +27,6 @@ All notable changes to this project are documented in this file.
 
 - Optimized `AdaptiveRadixTree` lookup paths to reuse a single borrowed key byte slice while walking
   the tree, reducing repeated key representation checks for dynamic key types.
-
-### Fixed
 
 ### Performance
 
