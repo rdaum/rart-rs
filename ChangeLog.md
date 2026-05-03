@@ -18,6 +18,8 @@ All notable changes to this project are documented in this file.
   `OverflowKey`.
 - Key-storage `micromeasure` coverage for focused construction, insertion, lookup, iteration, byte
   scan, and prefix comparison paths.
+- Additional examples covering key-type selection, prefix/range traversal, lending key views, bulk
+  loading, intersection, and versioned snapshots.
 
 ### Changed
 
