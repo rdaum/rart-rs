@@ -146,6 +146,20 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> IndexedMapping<N, WIDTH, Bitset
     }
 }
 
+impl<N, const WIDTH: usize, Bitset> IndexedMapping<N, WIDTH, Bitset>
+where
+    N: Clone,
+    Bitset: BitsetTrait + Clone,
+{
+    pub(crate) fn clone_mapping(&self) -> Self {
+        Self {
+            child_ptr_indexes: self.child_ptr_indexes.clone_live_slots(),
+            children: self.children.clone_live_slots(),
+            num_children: self.num_children,
+        }
+    }
+}
+
 pub struct IndexedMappingIter<'a, N, const WIDTH: usize, Bitset: BitsetTrait> {
     key_iter: BitsetOnesIter<u64, 4>,
     mapping: &'a IndexedMapping<N, WIDTH, Bitset>,
@@ -271,5 +285,28 @@ mod test {
         for key in [3u8, 9, 17, 31, 47] {
             assert_eq!(mapping.seek_child(key), Some(&key));
         }
+    }
+
+    #[test]
+    fn clone_mapping_preserves_sparse_slots() {
+        let mut mapping = super::IndexedMapping::<usize, 48, Bitset16<3>>::new();
+        for key in [200u8, 3, 47, 17, 129] {
+            mapping.add_child(key, key as usize);
+        }
+
+        mapping.delete_child(47);
+        mapping.add_child(99, 99);
+
+        let mut cloned = mapping.clone_mapping();
+        assert_eq!(cloned.num_children(), mapping.num_children());
+
+        for key in [3u8, 17, 99, 129, 200] {
+            assert_eq!(cloned.seek_child(key), Some(&(key as usize)));
+        }
+        assert_eq!(cloned.seek_child(47), None);
+
+        assert_eq!(cloned.delete_child(99), Some(99));
+        assert_eq!(cloned.seek_child(99), None);
+        assert_eq!(mapping.seek_child(99), Some(&99));
     }
 }

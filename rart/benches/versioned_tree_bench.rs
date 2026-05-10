@@ -2,14 +2,19 @@
 /// from the `im` crate (imbl::HashMap and imbl::OrdMap) for MVCC-style workloads.
 use std::time::{Duration, Instant};
 
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use rand::{Rng, rng};
 
 use imbl::{HashMap as ImHashMap, OrdMap as ImOrdMap};
-use rart::VersionedAdaptiveRadixTree;
 use rart::keys::array_key::ArrayKey;
+use rart::{KeyTrait, OverflowKey, VersionedAdaptiveRadixTree};
 
 const TREE_SIZES: [usize; 4] = [1 << 8, 1 << 10, 1 << 12, 1 << 14];
+const DENSE_SEQUENTIAL_QUICK_SIZES: [usize; 5] = [16, 48, 64, 256, 4096];
+const DENSE_SEQUENTIAL_FULL_SIZES: [usize; 6] = [16, 48, 64, 256, 4096, 65536];
+
+type DenseSequentialKey = OverflowKey<8, 4>;
+type DenseSequentialTree = VersionedAdaptiveRadixTree<DenseSequentialKey, usize>;
 
 fn full_bench_profile() -> bool {
     std::env::var("RART_BENCH_FULL").as_deref() == Ok("1")
@@ -24,6 +29,33 @@ fn criterion_config() -> Criterion {
             .warm_up_time(Duration::from_secs(1))
             .measurement_time(Duration::from_secs(2))
     }
+}
+
+fn dense_sequential_sizes() -> &'static [usize] {
+    if full_bench_profile() {
+        &DENSE_SEQUENTIAL_FULL_SIZES
+    } else {
+        &DENSE_SEQUENTIAL_QUICK_SIZES
+    }
+}
+
+fn dense_sequential_key(i: u32) -> DenseSequentialKey {
+    let mut bytes = [0; 5];
+    bytes[0] = 8;
+    bytes[1..].copy_from_slice(&i.to_be_bytes());
+    DenseSequentialKey::new_from_slice(&bytes)
+}
+
+fn dense_sequential_keys(size: usize) -> Vec<DenseSequentialKey> {
+    (0..size).map(|i| dense_sequential_key(i as u32)).collect()
+}
+
+fn build_dense_sequential_tree(keys: &[DenseSequentialKey]) -> DenseSequentialTree {
+    let mut tree = DenseSequentialTree::new();
+    for (i, key) in keys.iter().enumerate() {
+        tree.insert_k(key, i);
+    }
+    tree
 }
 
 /// Benchmark lookup operations
@@ -415,9 +447,150 @@ pub fn snapshot_structural_sharing(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark dense sequential byte keys with a fixed tag followed by a big-endian integer.
+pub fn dense_sequential_key_mutation(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dense_sequential_key_mutation");
+
+    for &size in dense_sequential_sizes() {
+        group.throughput(Throughput::Elements(size as u64));
+        let keys = dense_sequential_keys(size);
+        let scratch_keys = dense_sequential_keys(size.saturating_add(1024));
+
+        group.bench_with_input(
+            BenchmarkId::new("replace_existing_owned", size),
+            &size,
+            |b, _| {
+                b.iter_batched(
+                    || build_dense_sequential_tree(&keys),
+                    |mut tree| {
+                        for (i, key) in keys.iter().enumerate() {
+                            std::hint::black_box(tree.insert_k(key, i.wrapping_add(1)));
+                        }
+                        std::hint::black_box(tree);
+                    },
+                    BatchSize::SmallInput,
+                )
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("replace_existing_with_snapshot", size),
+            &size,
+            |b, _| {
+                b.iter_batched(
+                    || {
+                        let tree = build_dense_sequential_tree(&keys);
+                        let snapshot = tree.snapshot();
+                        (tree, snapshot)
+                    },
+                    |(mut tree, snapshot)| {
+                        for (i, key) in keys.iter().enumerate() {
+                            std::hint::black_box(tree.insert_k(key, i.wrapping_add(1)));
+                        }
+                        std::hint::black_box(snapshot);
+                        std::hint::black_box(tree);
+                    },
+                    BatchSize::SmallInput,
+                )
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("insert_remove_owned", size),
+            &size,
+            |b, _| {
+                b.iter_batched(
+                    || build_dense_sequential_tree(&keys),
+                    |mut tree| {
+                        for i in 0..size {
+                            let key = &scratch_keys[size + (i % 1024)];
+                            std::hint::black_box(tree.insert_k(key, i));
+                            std::hint::black_box(tree.remove_k(key));
+                        }
+                        std::hint::black_box(tree);
+                    },
+                    BatchSize::SmallInput,
+                )
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("insert_remove_with_snapshot", size),
+            &size,
+            |b, _| {
+                b.iter_batched(
+                    || {
+                        let tree = build_dense_sequential_tree(&keys);
+                        let snapshot = tree.snapshot();
+                        (tree, snapshot)
+                    },
+                    |(mut tree, snapshot)| {
+                        for i in 0..size {
+                            let key = &scratch_keys[size + (i % 1024)];
+                            std::hint::black_box(tree.insert_k(key, i));
+                            std::hint::black_box(tree.remove_k(key));
+                        }
+                        std::hint::black_box(snapshot);
+                        std::hint::black_box(tree);
+                    },
+                    BatchSize::SmallInput,
+                )
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("remove_reinsert_owned", size),
+            &size,
+            |b, _| {
+                b.iter_batched(
+                    || build_dense_sequential_tree(&keys),
+                    |mut tree| {
+                        for (i, key) in keys.iter().enumerate() {
+                            std::hint::black_box(tree.remove_k(key));
+                            std::hint::black_box(tree.insert_k(key, i));
+                        }
+                        std::hint::black_box(tree);
+                    },
+                    BatchSize::SmallInput,
+                )
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("remove_reinsert_with_snapshot", size),
+            &size,
+            |b, _| {
+                b.iter_batched(
+                    || {
+                        let tree = build_dense_sequential_tree(&keys);
+                        let snapshot = tree.snapshot();
+                        (tree, snapshot)
+                    },
+                    |(mut tree, snapshot)| {
+                        for (i, key) in keys.iter().enumerate() {
+                            std::hint::black_box(tree.remove_k(key));
+                            std::hint::black_box(tree.insert_k(key, i));
+                        }
+                        std::hint::black_box(snapshot);
+                        std::hint::black_box(tree);
+                    },
+                    BatchSize::SmallInput,
+                )
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     name = versioned_benches;
     config = criterion_config();
-    targets = lookup_comparison, snapshot_creation, sequential_scan_comparison, mutations_per_snapshot, snapshot_structural_sharing
+    targets = lookup_comparison,
+        snapshot_creation,
+        sequential_scan_comparison,
+        mutations_per_snapshot,
+        snapshot_structural_sharing,
+        dense_sequential_key_mutation
 );
 criterion_main!(versioned_benches);

@@ -84,6 +84,15 @@ impl<N> DirectMapping<N> {
     }
 }
 
+impl<N: Clone> DirectMapping<N> {
+    pub(crate) fn clone_mapping(&self) -> Self {
+        Self {
+            children: self.children.clone_live_slots(),
+            num_children: self.num_children,
+        }
+    }
+}
+
 pub struct DirectMappingIter<'a, N> {
     key_iter: BitsetOnesIter<u64, 4>,
     mapping: &'a DirectMapping<N>,
@@ -192,5 +201,24 @@ mod tests {
         for key in [3u8, 17, 47, 129, 200] {
             assert_eq!(dm.seek_child(key), Some(&key));
         }
+    }
+
+    #[test]
+    fn clone_mapping_preserves_sparse_slots() {
+        let mut dm = super::DirectMapping::new();
+        for key in [0u8, 17, 63, 128, 255] {
+            dm.add_child(key, key as usize);
+        }
+
+        let mut cloned = dm.clone_mapping();
+        assert_eq!(cloned.num_children(), dm.num_children());
+
+        for key in [0u8, 17, 63, 128, 255] {
+            assert_eq!(cloned.seek_child(key), Some(&(key as usize)));
+        }
+
+        assert_eq!(cloned.delete_child(63), Some(63));
+        assert_eq!(cloned.seek_child(63), None);
+        assert_eq!(dm.seek_child(63), Some(&63));
     }
 }

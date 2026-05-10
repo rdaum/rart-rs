@@ -226,6 +226,27 @@ where
     }
 }
 
+impl<X, const RANGE_WIDTH: usize, BitsetType> BitArray<X, RANGE_WIDTH, BitsetType>
+where
+    X: Clone,
+    BitsetType: BitsetTrait + std::default::Default + Clone,
+{
+    pub(crate) fn clone_live_slots(&self) -> Self {
+        let mut cloned = Self::new();
+
+        for pos in 0..RANGE_WIDTH {
+            if self.bitset.check(pos) {
+                // SAFETY: the source bitset marks `pos` as initialized.
+                let value = unsafe { self.get_known_present(pos) }.clone();
+                cloned.set(pos, value);
+            }
+        }
+
+        cloned.bitset = self.bitset.clone();
+        cloned
+    }
+}
+
 impl<X, const RANGE_WIDTH: usize, BitsetType> Default for BitArray<X, RANGE_WIDTH, BitsetType>
 where
     BitsetType: BitsetTrait + std::default::Default,

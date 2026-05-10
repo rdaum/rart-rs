@@ -4,6 +4,43 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Dense sequential tagged-key mutation benchmark coverage for `VersionedAdaptiveRadixTree`:
+  - replacement of existing keys
+  - insert/remove steady-state mutation
+  - remove/reinsert steady-state mutation
+  - each operation measured for uniquely owned trees and trees with a live snapshot
+- Regression coverage for snapshot isolation after COW mutation through wide versioned nodes.
+- Mapping clone regression tests for `IndexedMapping` and `DirectMapping` sparse-slot preservation.
+
+### Changed
+
+- Optimized `VersionedAdaptiveRadixTree` owned mutation paths to take root and child ownership before
+  recursive descent, allowing `Arc::try_unwrap` to succeed when the mutated tree is uniquely owned.
+- Optimized `VersionedNode` COW cloning for `Node48` and `Node256` by cloning mapping metadata and
+  live child slots directly instead of rebuilding through repeated `add_child` calls.
+- Added an internal `BitArray::clone_live_slots` helper so mapping clones preserve existing slot
+  layout while cloning only initialized entries.
+
+### Fixed
+
+- Removed avoidable copy-on-write cloning during versioned insert/remove when no snapshot or other
+  shared owner exists for the mutated path.
+- Preserved snapshot isolation while mutating dense sequential tagged-key trees that force `Node48`
+  and `Node256` layouts.
+
+### Performance
+
+- In local `versioned_tree_bench` quick runs for 4096 dense sequential tagged keys, comparing the
+  previous implementation at `f16dbb9` against this change with the same benchmark file:
+  - replace existing, owned tree: ~`10.681 ms` -> ~`838.7 us` (`12.7x` faster)
+  - replace existing, live snapshot: ~`10.807 ms` -> ~`1.022 ms` (`10.6x` faster)
+  - insert/remove, owned tree: ~`2.545 ms` -> ~`754.9 us` (`3.4x` faster)
+  - insert/remove, live snapshot: ~`2.540 ms` -> ~`749.2 us` (`3.4x` faster)
+  - remove/reinsert, owned tree: ~`20.861 ms` -> ~`1.355 ms` (`15.4x` faster)
+  - remove/reinsert, live snapshot: ~`21.055 ms` -> ~`1.475 ms` (`14.3x` faster)
+
 ## [0.6.0] - 2026-05-03
 
 ### Added

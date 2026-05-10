@@ -221,7 +221,7 @@ where
     pub fn insert_k(&mut self, key: &KeyType, value: ValueType) -> bool {
         self.version += 1;
 
-        let Some(root) = &self.root else {
+        let Some(root) = self.root.take() else {
             self.root = Some(Arc::new(VersionedNode::new_leaf(
                 key.to_partial(0),
                 value,
@@ -231,7 +231,7 @@ where
         };
 
         let (new_root, was_replaced) =
-            Self::insert_recurse(Arc::clone(root), key, value, 0, self.version, None);
+            Self::insert_recurse(root, key, value, 0, self.version, None);
         self.root = Some(new_root);
         was_replaced
     }
@@ -310,7 +310,7 @@ where
     pub fn insert_and_replace_k(&mut self, key: &KeyType, value: ValueType) -> Option<ValueType> {
         self.version += 1;
 
-        let Some(root) = &self.root else {
+        let Some(root) = self.root.take() else {
             self.root = Some(Arc::new(VersionedNode::new_leaf(
                 key.to_partial(0),
                 value,
@@ -320,14 +320,8 @@ where
         };
 
         let mut old_value = None;
-        let (new_root, _was_replaced) = Self::insert_recurse(
-            Arc::clone(root),
-            key,
-            value,
-            0,
-            self.version,
-            Some(&mut old_value),
-        );
+        let (new_root, _was_replaced) =
+            Self::insert_recurse(root, key, value, 0, self.version, Some(&mut old_value));
         self.root = Some(new_root);
         old_value
     }
@@ -348,23 +342,22 @@ where
     /// Uses copy-on-write to ensure this operation doesn't affect other snapshots.
     /// Returns the removed value if the key existed.
     pub fn remove_k(&mut self, key: &KeyType) -> Option<ValueType> {
-        let root = self.root.as_ref()?;
-
-        // Check if there's a prefix match at the root
-        let prefix_common_match = root.prefix.prefix_length_key(key, 0);
-        if prefix_common_match != root.prefix.len() {
-            return None;
-        }
+        self.get_k(key)?;
 
         self.version += 1;
+        let root = self
+            .root
+            .take()
+            .expect("non-empty tree checked before remove mutation");
 
         // Special case: root is a leaf
         if root.is_leaf() {
             if root.prefix.len() != key.length_at(0) {
+                self.root = Some(root);
                 return None;
             }
 
-            match Arc::try_unwrap(self.root.take().unwrap()) {
+            match Arc::try_unwrap(root) {
                 Ok(mut owned_root) => {
                     return owned_root.value.take();
                 }
@@ -378,7 +371,7 @@ where
         }
 
         if root.prefix.len() == key.length_at(0) {
-            let new_root = Self::ensure_cow_node(Arc::clone(root), self.version);
+            let new_root = Self::ensure_cow_node(root, self.version);
             let mut new_root = match Arc::try_unwrap(new_root) {
                 Ok(owned) => owned,
                 Err(_) => panic!("ensure_cow_node should have given us exclusive ownership"),
@@ -392,8 +385,8 @@ where
             return removed;
         }
 
-        let (new_root, removed_value) =
-            Self::remove_recurse(Arc::clone(root), key, 0, self.version)?;
+        let (new_root, removed_value) = Self::remove_recurse(root, key, 0, self.version)
+            .expect("prechecked key should be removable");
 
         // Update root, handling the case where it might become empty
         if let Some(root_node) = new_root {
@@ -711,20 +704,10 @@ impl<P: Partial + Clone, V> VersionedNode<P, V> {
                     VersionedContent::Node16(Box::new(new_km))
                 }
                 VersionedContent::Node48(km) => {
-                    // Manually clone Node48 mapping
-                    let mut new_km = IndexedMapping::new();
-                    for (key, child) in km.iter() {
-                        new_km.add_child(key, Arc::clone(child));
-                    }
-                    VersionedContent::Node48(Box::new(new_km))
+                    VersionedContent::Node48(Box::new(km.clone_mapping()))
                 }
                 VersionedContent::Node256(km) => {
-                    // Manually clone Node256 mapping
-                    let mut new_km = DirectMapping::new();
-                    for (key, child) in km.iter() {
-                        new_km.add_child(key, Arc::clone(child));
-                    }
-                    VersionedContent::Node256(Box::new(new_km))
+                    VersionedContent::Node256(Box::new(km.clone_mapping()))
                 }
             },
             version: new_version,
@@ -916,13 +899,15 @@ where
         let prefix_len = cur_node.prefix.len();
         let new_node = Self::ensure_cow_node(cur_node, version);
 
-        // Handle all node types
-        let existing_child = new_node.seek_child(k);
+        let mut new_node_mut = match Arc::try_unwrap(new_node) {
+            Ok(owned) => owned,
+            Err(_) => panic!("ensure_cow_node should have given us exclusive ownership"),
+        };
 
-        if let Some(child) = existing_child {
+        if let Some(child) = new_node_mut.delete_child(k) {
             // Recurse into existing child
             let (new_child, was_replaced) = Self::insert_recurse(
-                Arc::clone(child),
+                child,
                 key,
                 value,
                 depth + prefix_len,
@@ -930,13 +915,6 @@ where
                 old_value_out,
             );
 
-            // Create new version of this node with updated child
-            // Since ensure_cow_node gave us ownership, we can unwrap safely
-            let mut new_node_mut = match Arc::try_unwrap(new_node) {
-                Ok(owned) => owned,
-                Err(_) => panic!("ensure_cow_node should have given us exclusive ownership"),
-            };
-            new_node_mut.delete_child(k);
             new_node_mut.add_child(k, new_child);
 
             (Arc::new(new_node_mut), was_replaced)
@@ -947,11 +925,6 @@ where
                 value,
                 version,
             ));
-
-            let mut new_node_mut = match Arc::try_unwrap(new_node) {
-                Ok(owned) => owned,
-                Err(_) => panic!("ensure_cow_node should have given us exclusive ownership"),
-            };
 
             new_node_mut.add_child(k, new_leaf);
 
@@ -997,26 +970,20 @@ where
 
         // This is an inner node, recurse to find child
         let k = key.at(depth + cur_node.prefix.len());
-        let child = cur_node.seek_child(k)?;
+        let prefix_len = cur_node.prefix.len();
 
-        let (new_child_opt, removed_value) = Self::remove_recurse(
-            Arc::clone(child),
-            key,
-            depth + cur_node.prefix.len(),
-            version,
-        )?;
-
-        // Create new version of this node with updated child
         let new_node = Self::ensure_cow_node(cur_node, version);
 
-        // We need to get mutable access to modify the children
-        // Since ensure_cow_node gave us ownership, we can unwrap safely
         let mut new_node_mut = match Arc::try_unwrap(new_node) {
             Ok(owned) => owned,
             Err(_) => panic!("ensure_cow_node should have given us exclusive ownership"),
         };
 
-        new_node_mut.delete_child(k);
+        let child = new_node_mut.delete_child(k)?;
+        let (new_child_opt, removed_value) =
+            Self::remove_recurse(child, key, depth + prefix_len, version)
+                .expect("prechecked key should be removable");
+
         if let Some(new_child) = new_child_opt {
             new_node_mut.add_child(k, new_child);
         }
@@ -1032,9 +999,18 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::keys::array_key::ArrayKey;
+    use crate::keys::{array_key::ArrayKey, overflow_key::OverflowKey};
     use proptest::prelude::*;
     use std::mem::size_of;
+
+    type DenseSequentialKey = OverflowKey<8, 4>;
+
+    fn dense_sequential_key(i: u32) -> DenseSequentialKey {
+        let mut bytes = [0; 5];
+        bytes[0] = 8;
+        bytes[1..].copy_from_slice(&i.to_be_bytes());
+        <DenseSequentialKey as crate::keys::KeyTrait>::new_from_slice(&bytes)
+    }
 
     #[test]
     fn boxed_versioned_content_keeps_node_header_small() {
@@ -1072,6 +1048,27 @@ mod tests {
         },
     }
 
+    #[derive(Clone, Debug)]
+    enum DenseVersionedOp {
+        Insert {
+            key_idx: u16,
+            value: u16,
+        },
+        Remove {
+            key_idx: u16,
+        },
+        Snapshot,
+        SnapshotInsert {
+            snapshot_idx: u8,
+            key_idx: u16,
+            value: u16,
+        },
+        SnapshotRemove {
+            snapshot_idx: u8,
+            key_idx: u16,
+        },
+    }
+
     fn versioned_op_strategy() -> impl Strategy<Value = VersionedOp> {
         prop_oneof![
             any::<u8>().prop_map(|key| VersionedOp::Get { key }),
@@ -1090,6 +1087,28 @@ mod tests {
         ]
     }
 
+    fn dense_versioned_op_strategy() -> impl Strategy<Value = DenseVersionedOp> {
+        prop_oneof![
+            (0u16..512, any::<u16>())
+                .prop_map(|(key_idx, value)| { DenseVersionedOp::Insert { key_idx, value } }),
+            (0u16..512).prop_map(|key_idx| DenseVersionedOp::Remove { key_idx }),
+            Just(DenseVersionedOp::Snapshot),
+            (any::<u8>(), 0u16..512, any::<u16>()).prop_map(|(snapshot_idx, key_idx, value)| {
+                DenseVersionedOp::SnapshotInsert {
+                    snapshot_idx,
+                    key_idx,
+                    value,
+                }
+            },),
+            (any::<u8>(), 0u16..512).prop_map(|(snapshot_idx, key_idx)| {
+                DenseVersionedOp::SnapshotRemove {
+                    snapshot_idx,
+                    key_idx,
+                }
+            }),
+        ]
+    }
+
     fn assert_versioned_tree_matches_map(
         tree: &VersionedAdaptiveRadixTree<ArrayKey<16>, u16>,
         map: &std::collections::BTreeMap<u8, u16>,
@@ -1099,6 +1118,21 @@ mod tests {
                 tree.get(key).copied(),
                 map.get(&key).copied(),
                 "mismatch at key {key}"
+            );
+        }
+    }
+
+    fn assert_dense_tree_matches_map(
+        tree: &VersionedAdaptiveRadixTree<DenseSequentialKey, u16>,
+        map: &std::collections::BTreeMap<u16, u16>,
+        key_limit: u16,
+    ) {
+        for key_idx in 0..key_limit {
+            let key = dense_sequential_key(key_idx as u32);
+            assert_eq!(
+                tree.get_k(&key).copied(),
+                map.get(&key_idx).copied(),
+                "mismatch at dense sequential key index {key_idx}"
             );
         }
     }
@@ -1170,6 +1204,89 @@ mod tests {
             assert_versioned_tree_matches_map(&tree, &map);
             for (snapshot, snapshot_map) in snapshots.iter().zip(snapshot_maps.iter()) {
                 assert_versioned_tree_matches_map(snapshot, snapshot_map);
+            }
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+        #[test]
+        fn prop_dense_sequential_snapshots_remain_isolated(
+            ops in proptest::collection::vec(dense_versioned_op_strategy(), 0..96)
+        ) {
+            let mut tree = VersionedAdaptiveRadixTree::<DenseSequentialKey, u16>::new();
+            let mut map = std::collections::BTreeMap::<u16, u16>::new();
+            let mut snapshots = Vec::new();
+            let mut snapshot_maps = Vec::new();
+
+            for key_idx in 0u16..256 {
+                let key = dense_sequential_key(key_idx as u32);
+                prop_assert!(!tree.insert_k(&key, key_idx));
+                map.insert(key_idx, key_idx);
+            }
+
+            for op in ops {
+                match op {
+                    DenseVersionedOp::Insert { key_idx, value } => {
+                        let key = dense_sequential_key(key_idx as u32);
+                        let expected_replaced = map.insert(key_idx, value).is_some();
+                        let actual_replaced = tree.insert_k(&key, value);
+                        prop_assert_eq!(actual_replaced, expected_replaced);
+                        prop_assert_eq!(tree.get_k(&key).copied(), map.get(&key_idx).copied());
+                    }
+                    DenseVersionedOp::Remove { key_idx } => {
+                        let key = dense_sequential_key(key_idx as u32);
+                        let expected_removed = map.remove(&key_idx);
+                        let actual_removed = tree.remove_k(&key);
+                        prop_assert_eq!(actual_removed, expected_removed);
+                        prop_assert_eq!(tree.get_k(&key).copied(), map.get(&key_idx).copied());
+                    }
+                    DenseVersionedOp::Snapshot => {
+                        snapshots.push(tree.snapshot());
+                        snapshot_maps.push(map.clone());
+                    }
+                    DenseVersionedOp::SnapshotInsert {
+                        snapshot_idx,
+                        key_idx,
+                        value,
+                    } => {
+                        if !snapshots.is_empty() {
+                            let idx = snapshot_idx as usize % snapshots.len();
+                            let key = dense_sequential_key(key_idx as u32);
+                            let expected_replaced =
+                                snapshot_maps[idx].insert(key_idx, value).is_some();
+                            let actual_replaced = snapshots[idx].insert_k(&key, value);
+                            prop_assert_eq!(actual_replaced, expected_replaced);
+                            prop_assert_eq!(
+                                snapshots[idx].get_k(&key).copied(),
+                                snapshot_maps[idx].get(&key_idx).copied()
+                            );
+                            prop_assert_eq!(tree.get_k(&key).copied(), map.get(&key_idx).copied());
+                        }
+                    }
+                    DenseVersionedOp::SnapshotRemove {
+                        snapshot_idx,
+                        key_idx,
+                    } => {
+                        if !snapshots.is_empty() {
+                            let idx = snapshot_idx as usize % snapshots.len();
+                            let key = dense_sequential_key(key_idx as u32);
+                            let expected_removed = snapshot_maps[idx].remove(&key_idx);
+                            let actual_removed = snapshots[idx].remove_k(&key);
+                            prop_assert_eq!(actual_removed, expected_removed);
+                            prop_assert_eq!(
+                                snapshots[idx].get_k(&key).copied(),
+                                snapshot_maps[idx].get(&key_idx).copied()
+                            );
+                            prop_assert_eq!(tree.get_k(&key).copied(), map.get(&key_idx).copied());
+                        }
+                    }
+                }
+            }
+
+            assert_dense_tree_matches_map(&tree, &map, 512);
+            for (snapshot, snapshot_map) in snapshots.iter().zip(snapshot_maps.iter()) {
+                assert_dense_tree_matches_map(snapshot, snapshot_map, 512);
             }
         }
     }
@@ -1750,6 +1867,82 @@ mod tests {
         assert_eq!(tree.get_k(&ArrayKey::new_from_slice(b"da")), Some(&2));
         assert_eq!(snapshot.get_k(&ArrayKey::new_from_slice(b"d")), Some(&1));
         assert_eq!(snapshot.get_k(&ArrayKey::new_from_slice(b"da")), None);
+    }
+
+    #[test]
+    fn dense_sequential_snapshot_isolation_survives_wide_node_cow() {
+        for size in [48usize, 256] {
+            let keys: Vec<_> = (0..size).map(|i| dense_sequential_key(i as u32)).collect();
+            let mut tree = VersionedAdaptiveRadixTree::<DenseSequentialKey, usize>::new();
+            for (i, key) in keys.iter().enumerate() {
+                assert!(!tree.insert_k(key, i));
+            }
+
+            let snapshot = tree.snapshot();
+
+            for (i, key) in keys.iter().enumerate() {
+                assert!(tree.insert_k(key, i + 10_000));
+            }
+
+            for (i, key) in keys.iter().enumerate() {
+                assert_eq!(snapshot.get_k(key), Some(&i));
+                assert_eq!(tree.get_k(key), Some(&(i + 10_000)));
+            }
+
+            let scratch_key = dense_sequential_key((size + 1024) as u32);
+            assert!(!tree.insert_k(&scratch_key, 77));
+            assert_eq!(tree.remove_k(&scratch_key), Some(77));
+            assert_eq!(snapshot.get_k(&scratch_key), None);
+            assert_eq!(tree.get_k(&scratch_key), None);
+
+            for (i, key) in keys.iter().enumerate() {
+                assert_eq!(tree.remove_k(key), Some(i + 10_000));
+                assert!(!tree.insert_k(key, i + 20_000));
+            }
+
+            for (i, key) in keys.iter().enumerate() {
+                assert_eq!(snapshot.get_k(key), Some(&i));
+                assert_eq!(tree.get_k(key), Some(&(i + 20_000)));
+            }
+        }
+    }
+
+    #[test]
+    fn dense_sequential_multiple_snapshots_mutate_independently() {
+        let size = 4096usize;
+        let keys: Vec<_> = (0..size).map(|i| dense_sequential_key(i as u32)).collect();
+        let mut tree = VersionedAdaptiveRadixTree::<DenseSequentialKey, usize>::new();
+
+        for (i, key) in keys.iter().enumerate() {
+            assert!(!tree.insert_k(key, i));
+        }
+
+        let mut snapshot_a = tree.snapshot();
+        let snapshot_b = tree.snapshot();
+
+        for (i, key) in keys.iter().enumerate() {
+            assert!(tree.insert_k(key, i + 10_000));
+        }
+
+        for (i, key) in keys.iter().enumerate().step_by(3) {
+            assert_eq!(snapshot_a.remove_k(key), Some(i));
+            assert!(!snapshot_a.insert_k(key, i + 20_000));
+        }
+
+        for i in size..(size + 128) {
+            let key = dense_sequential_key(i as u32);
+            assert!(!snapshot_a.insert_k(&key, i + 30_000));
+            assert_eq!(tree.get_k(&key), None);
+            assert_eq!(snapshot_b.get_k(&key), None);
+        }
+
+        for (i, key) in keys.iter().enumerate() {
+            assert_eq!(tree.get_k(key), Some(&(i + 10_000)));
+            assert_eq!(snapshot_b.get_k(key), Some(&i));
+
+            let expected_a = if i % 3 == 0 { i + 20_000 } else { i };
+            assert_eq!(snapshot_a.get_k(key), Some(&expected_a));
+        }
     }
 
     #[test]
