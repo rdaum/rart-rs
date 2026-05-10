@@ -6,19 +6,42 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
-- 
+- Traversal APIs on `VersionedAdaptiveRadixTree` matching the unversioned traversal surface:
+  - `iter`
+  - `for_each_view`
+  - `values_iter`
+  - `prefix_iter` / `prefix_iter_k`
+  - `prefix_for_each_view` / `prefix_for_each_view_k`
+  - `range`
+  - `for_each_range_view`
+- Versioned traversal regression coverage for empty trees, root leaves, prefix keys, compressed
+  prefixes, no-match prefixes, ordered traversal, ranges, snapshot isolation, wide node layouts, and
+  Moor-shaped object/symbol cache keys.
+- Versioned-tree benchmark coverage for fair iteration comparisons against `imbl::HashMap` and
+  `imbl::OrdMap`, separating owned-key traversal, lending traversal, and values-only traversal.
+- Versioned prefix-invalidation benchmarks for object/symbol-shaped keys comparing ART prefix
+  traversal, `imbl::OrdMap::range`, hash-map full scans, and expected point lookups.
 
 ### Changed
 
-- 
-
-### Fixed
-
-- 
+- Updated README versioned-tree performance guidance with fresh May 10, 2026 quick-profile benchmark
+  numbers and clearer guidance around iteration and prefix-invalidation tradeoffs.
 
 ### Performance
 
-- 
+- In local `versioned_tree_bench` quick runs:
+  - `lookup_comparison/16384`: versioned rart ~`14.9 ns`, `imbl::HashMap` ~`22.6 ns`,
+    `imbl::OrdMap` ~`38.0 ns`
+  - `sequential_scan/16384`: versioned rart ~`132.5 us`, `imbl::HashMap` ~`187.5 us`,
+    `imbl::OrdMap` ~`463.9 us`
+  - `mutations_per_snapshot/100`: versioned rart ~`19.3 us`, `imbl::HashMap` ~`58.6 us`,
+    `imbl::OrdMap` ~`35.7 us`
+  - `full_iteration/16384`: owned versioned rart ~`169.5 us`, lending versioned rart ~`95.6 us`,
+    values-only versioned rart ~`43.9 us`, `imbl::HashMap` ~`48.3 us`, `imbl::OrdMap`
+    ~`44.9 us`
+  - object-prefix invalidation over 64 symbols: versioned rart lending prefix ~`352 ns`, owned
+    prefix iterator ~`704 ns`, `imbl::OrdMap::range` ~`268 ns`, `imbl::HashMap` full scan
+    ~`402 us`
 
 ## [0.6.1] - 2026-05-10
 

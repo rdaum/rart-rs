@@ -4,11 +4,16 @@
 //! and mutated independently using copy-on-write node sharing for memory efficiency.
 
 use std::cmp::min;
+use std::collections::Bound;
+use std::ops::RangeBounds;
 
+use crate::iter::LendingKeyView;
 use crate::keys::KeyTrait;
 use crate::mapping::{
-    NodeMapping, direct_mapping::DirectMapping, indexed_mapping::IndexedMapping,
-    sorted_keyed_mapping::SortedKeyedMapping,
+    NodeMapping,
+    direct_mapping::{DirectMapping, DirectMappingIter},
+    indexed_mapping::{IndexedMapping, IndexedMappingIter},
+    sorted_keyed_mapping::{SortedKeyedMapping, SortedKeyedMappingIter},
 };
 use crate::partials::Partial;
 use crate::utils::bitset::Bitset64;
@@ -20,6 +25,87 @@ use triomphe::Arc;
 
 /// Type alias for remove operation result to reduce type complexity
 type RemoveResult<P, V> = (Option<Arc<VersionedNode<P, V>>>, V);
+type VersionedPrefixSubtreeView<'a, P, V> = (&'a VersionedNode<P, V>, Vec<&'a [u8]>, usize);
+
+type VersionedIterEntry<'a, P, V> = (u8, &'a VersionedNode<P, V>);
+
+enum VersionedIterFrameIter<'a, P: Partial, V> {
+    Plain(VersionedNodeIter<'a, P, V>),
+    Leading {
+        first: Option<VersionedIterEntry<'a, P, V>>,
+        rest: VersionedNodeIter<'a, P, V>,
+    },
+}
+
+impl<'a, P: Partial, V> Iterator for VersionedIterFrameIter<'a, P, V> {
+    type Item = VersionedIterEntry<'a, P, V>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            VersionedIterFrameIter::Plain(iter) => iter.next(),
+            VersionedIterFrameIter::Leading { first, rest } => first.take().or_else(|| rest.next()),
+        }
+    }
+}
+
+pub(crate) enum VersionedNodeIter<'a, P: Partial, V> {
+    Node4(SortedKeyedMappingIter<'a, Arc<VersionedNode<P, V>>, 4>),
+    Node16(SortedKeyedMappingIter<'a, Arc<VersionedNode<P, V>>, 16>),
+    Node48(IndexedMappingIter<'a, Arc<VersionedNode<P, V>>, 48, Bitset64<1>>),
+    Node256(DirectMappingIter<'a, Arc<VersionedNode<P, V>>>),
+    Empty,
+}
+
+impl<'a, P: Partial, V> Iterator for VersionedNodeIter<'a, P, V> {
+    type Item = (u8, &'a VersionedNode<P, V>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            VersionedNodeIter::Node4(iter) => iter.next().map(|(key, child)| (key, child.as_ref())),
+            VersionedNodeIter::Node16(iter) => {
+                iter.next().map(|(key, child)| (key, child.as_ref()))
+            }
+            VersionedNodeIter::Node48(iter) => {
+                iter.next().map(|(key, child)| (key, child.as_ref()))
+            }
+            VersionedNodeIter::Node256(iter) => {
+                iter.next().map(|(key, child)| (key, child.as_ref()))
+            }
+            VersionedNodeIter::Empty => None,
+        }
+    }
+}
+
+/// Iterator over all key-value pairs in a [`VersionedAdaptiveRadixTree`].
+pub struct VersionedIter<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> {
+    inner: Box<dyn Iterator<Item = (K, &'a V)> + 'a>,
+    _marker: std::marker::PhantomData<(K, P)>,
+}
+
+struct VersionedIterInner<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> {
+    node_iter_stack: Vec<(usize, VersionedIterFrameIter<'a, P, V>)>,
+    cur_key: Vec<u8>,
+    start_bound: Option<Bound<K>>,
+}
+
+pub(crate) struct VersionedLendingIterInner<'a, P: Partial + 'a, V> {
+    node_iter_stack: Vec<(usize, usize, VersionedIterFrameIter<'a, P, V>)>,
+    cur_segments: Vec<&'a [u8]>,
+    cur_len: usize,
+    end_bound: Option<(Vec<u8>, bool)>,
+}
+
+/// Iterator over only values in a [`VersionedAdaptiveRadixTree`].
+pub struct VersionedValuesIter<'a, P: Partial + 'a, V> {
+    root_value: Option<&'a V>,
+    node_iter_stack: Vec<VersionedNodeIter<'a, P, V>>,
+}
+
+/// Iterator over versioned key-value pairs within a specified range.
+pub struct VersionedRange<'a, K: KeyTrait + 'a, V> {
+    iter: VersionedIter<'a, K, K::PartialType, V>,
+    end: Bound<K>,
+}
 
 /// A versioned Adaptive Radix Tree that supports snapshot-based copy-on-write mutations.
 ///
@@ -160,6 +246,115 @@ where
     pub fn get_k(&self, key: &KeyType) -> Option<&ValueType> {
         let root = self.root.as_ref()?;
         Self::get_iterate(root, key)
+    }
+
+    /// Iterate over all key-value pairs in lexicographic order.
+    pub fn iter(&self) -> VersionedIter<'_, KeyType, KeyType::PartialType, ValueType> {
+        VersionedIter::new(self.root.as_deref())
+    }
+
+    /// Visit all key-value pairs using a lending borrowed key view.
+    pub fn for_each_view<F>(&self, on_each: F)
+    where
+        F: for<'view> FnMut(LendingKeyView<'_, 'view>, &ValueType),
+    {
+        VersionedLendingIterInner::for_each(self.root.as_deref(), on_each);
+    }
+
+    /// Create an iterator over only the values in the tree.
+    pub fn values_iter(&self) -> VersionedValuesIter<'_, KeyType::PartialType, ValueType> {
+        VersionedValuesIter::new(self.root.as_deref())
+    }
+
+    /// Iterate over all entries whose keys start with `prefix`.
+    #[inline]
+    pub fn prefix_iter<Key>(
+        &self,
+        prefix: Key,
+    ) -> VersionedIter<'_, KeyType, KeyType::PartialType, ValueType>
+    where
+        Key: Into<KeyType>,
+    {
+        self.prefix_iter_k(&prefix.into())
+    }
+
+    /// Iterate over all entries whose keys start with `prefix`.
+    pub fn prefix_iter_k(
+        &self,
+        prefix: &KeyType,
+    ) -> VersionedIter<'_, KeyType, KeyType::PartialType, ValueType> {
+        let Some(root) = self.root.as_deref() else {
+            return VersionedIter::empty();
+        };
+        let Some((subtree_root, subtree_root_key)) = Self::find_prefix_subtree(root, prefix) else {
+            return VersionedIter::empty();
+        };
+        VersionedIter::new_with_prefix(Some(subtree_root), subtree_root_key)
+    }
+
+    /// Visit all entries whose keys start with `prefix` using a lending borrowed key view.
+    pub fn prefix_for_each_view<Key, F>(&self, prefix: Key, on_each: F)
+    where
+        Key: Into<KeyType>,
+        F: for<'view> FnMut(LendingKeyView<'_, 'view>, &ValueType),
+    {
+        self.prefix_for_each_view_k(&prefix.into(), on_each)
+    }
+
+    /// Visit all entries whose keys start with `prefix` using a lending borrowed key view.
+    pub fn prefix_for_each_view_k<F>(&self, prefix: &KeyType, on_each: F)
+    where
+        F: for<'view> FnMut(LendingKeyView<'_, 'view>, &ValueType),
+    {
+        let Some(root) = self.root.as_deref() else {
+            return;
+        };
+        let Some((subtree_root, subtree_root_segments, subtree_root_len)) =
+            Self::find_prefix_subtree_view(root, prefix)
+        else {
+            return;
+        };
+        VersionedLendingIterInner::for_each_with_prefix(
+            Some(subtree_root),
+            subtree_root_segments,
+            subtree_root_len,
+            on_each,
+        );
+    }
+
+    /// Create an iterator over key-value pairs within a specified range.
+    pub fn range<'a, R>(&'a self, range: R) -> VersionedRange<'a, KeyType, ValueType>
+    where
+        R: RangeBounds<KeyType> + 'a,
+    {
+        let start_bound = range.start_bound().cloned();
+        let end_bound = range.end_bound().cloned();
+
+        let iter = match start_bound {
+            Bound::Unbounded => self.iter(),
+            _ => VersionedIter::new_with_start_bound(self.root.as_deref(), start_bound),
+        };
+
+        VersionedRange {
+            iter,
+            end: end_bound,
+        }
+    }
+
+    /// Visit key-value pairs within a specified range using a lending borrowed key view.
+    pub fn for_each_range_view<R, F>(&self, range: R, on_each: F)
+    where
+        R: RangeBounds<KeyType>,
+        F: for<'view> FnMut(LendingKeyView<'_, 'view>, &ValueType),
+    {
+        let start_bound = range.start_bound().cloned();
+        let end_bound = range.end_bound().cloned();
+        VersionedLendingIterInner::for_each_with_bounds(
+            self.root.as_deref(),
+            start_bound,
+            end_bound,
+            on_each,
+        );
     }
 
     /// Insert a key-value pair (generic version).
@@ -564,7 +759,7 @@ where
     }
 }
 
-impl<P: Partial + Clone, V> VersionedNode<P, V> {
+impl<P: Partial, V> VersionedNode<P, V> {
     /// Create a new leaf node.
     pub fn new_leaf(prefix: P, value: V, version: u64) -> Self {
         Self {
@@ -636,6 +831,7 @@ impl<P: Partial + Clone, V> VersionedNode<P, V> {
     /// Create a grown version of this node (Node4 → Node16 → Node48 → Node256).
     pub fn grow(&self, new_version: u64) -> Self
     where
+        P: Clone,
         V: Clone,
     {
         Self {
@@ -680,6 +876,7 @@ impl<P: Partial + Clone, V> VersionedNode<P, V> {
     /// Create a copy-on-write clone of this node with a new version.
     pub fn cow_clone_inner(&self, new_version: u64) -> Self
     where
+        P: Clone,
         V: Clone,
     {
         Self {
@@ -716,6 +913,7 @@ impl<P: Partial + Clone, V> VersionedNode<P, V> {
 
     fn add_child(&mut self, key: u8, child: Arc<VersionedNode<P, V>>)
     where
+        P: Clone,
         V: Clone,
     {
         if matches!(self.content, VersionedContent::Empty) {
@@ -744,6 +942,685 @@ impl<P: Partial + Clone, V> VersionedNode<P, V> {
             VersionedContent::Node48(km) => km.delete_child(key),
             VersionedContent::Node256(km) => km.delete_child(key),
             VersionedContent::Empty => None,
+        }
+    }
+
+    pub(crate) fn iter(&self) -> VersionedNodeIter<'_, P, V> {
+        match &self.content {
+            VersionedContent::Node4(n) => VersionedNodeIter::Node4(n.iter()),
+            VersionedContent::Node16(n) => VersionedNodeIter::Node16(n.iter()),
+            VersionedContent::Node48(n) => VersionedNodeIter::Node48(n.iter()),
+            VersionedContent::Node256(n) => VersionedNodeIter::Node256(n.iter()),
+            VersionedContent::Empty => VersionedNodeIter::Empty,
+        }
+    }
+}
+
+impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> VersionedIterInner<'a, K, P, V> {
+    #[inline]
+    fn key_order(lhs: &K, rhs: &K) -> std::cmp::Ordering {
+        let lhs_len = lhs.length_at(0);
+        let rhs_len = rhs.length_at(0);
+        let common = lhs_len.min(rhs_len);
+        for i in 0..common {
+            match lhs.at(i).cmp(&rhs.at(i)) {
+                std::cmp::Ordering::Equal => {}
+                ord => return ord,
+            }
+        }
+        lhs_len.cmp(&rhs_len)
+    }
+
+    fn from_node_and_key(node: &'a VersionedNode<P, V>, cur_key: K) -> Self {
+        Self {
+            node_iter_stack: vec![(
+                cur_key.length_at(0),
+                VersionedIterFrameIter::Plain(node.iter()),
+            )],
+            cur_key: cur_key.as_ref().to_vec(),
+            start_bound: None,
+        }
+    }
+
+    fn new(node: &'a VersionedNode<P, V>) -> Self {
+        Self::from_node_and_key(node, K::new_from_partial(&node.prefix))
+    }
+
+    fn new_with_start_bound(node: &'a VersionedNode<P, V>, start_bound: Bound<K>) -> Self {
+        let seek_key = match &start_bound {
+            Bound::Included(key) | Bound::Excluded(key) => Some(key),
+            Bound::Unbounded => None,
+        };
+
+        if let Some(seek_key) = seek_key {
+            return Self {
+                node_iter_stack: Self::build_positioned_stack(node, seek_key, 0),
+                cur_key: node.prefix.as_ref().to_vec(),
+                start_bound: Some(start_bound),
+            };
+        }
+
+        Self {
+            node_iter_stack: vec![(
+                node.prefix.len(),
+                VersionedIterFrameIter::Plain(node.iter()),
+            )],
+            cur_key: node.prefix.as_ref().to_vec(),
+            start_bound: None,
+        }
+    }
+
+    fn build_positioned_stack(
+        node: &'a VersionedNode<P, V>,
+        seek_key: &K,
+        depth: usize,
+    ) -> Vec<(usize, VersionedIterFrameIter<'a, P, V>)> {
+        let prefix_common = node.prefix.prefix_length_key(seek_key, depth);
+        if prefix_common != node.prefix.len() {
+            let seek_remaining = seek_key.length_at(depth);
+            if prefix_common >= seek_remaining {
+                return vec![(
+                    node.prefix.len(),
+                    VersionedIterFrameIter::Plain(node.iter()),
+                )];
+            }
+
+            let node_byte = node.prefix.at(prefix_common);
+            let seek_byte = seek_key.at(depth + prefix_common);
+
+            if node_byte < seek_byte {
+                return vec![];
+            }
+
+            return vec![(
+                node.prefix.len(),
+                VersionedIterFrameIter::Plain(node.iter()),
+            )];
+        }
+
+        if seek_key.length_at(depth) == node.prefix.len() {
+            return vec![(
+                node.prefix.len(),
+                VersionedIterFrameIter::Plain(node.iter()),
+            )];
+        }
+
+        let target_depth = depth + node.prefix.len();
+        let target_byte = seek_key.at(target_depth);
+        let mut iter = node.iter();
+        while let Some((key, child)) = iter.next() {
+            if key < target_byte {
+                continue;
+            }
+
+            return vec![(
+                node.prefix.len(),
+                VersionedIterFrameIter::Leading {
+                    first: Some((key, child)),
+                    rest: iter,
+                },
+            )];
+        }
+
+        vec![]
+    }
+}
+
+impl<'a, K: KeyTrait<PartialType = P> + 'a, P: Partial + 'a, V> VersionedIter<'a, K, P, V> {
+    fn empty() -> Self {
+        Self {
+            inner: Box::new(std::iter::empty()),
+            _marker: Default::default(),
+        }
+    }
+
+    fn from_root_and_children(
+        root_key: K,
+        root_value: Option<&'a V>,
+        children: VersionedIterInner<'a, K, P, V>,
+    ) -> Self {
+        let inner: Box<dyn Iterator<Item = (K, &'a V)> + 'a> = match root_value {
+            Some(value) => Box::new(std::iter::once((root_key, value)).chain(children)),
+            None => Box::new(children),
+        };
+
+        Self {
+            inner,
+            _marker: Default::default(),
+        }
+    }
+
+    fn new(node: Option<&'a VersionedNode<P, V>>) -> Self {
+        let Some(root_node) = node else {
+            return Self::empty();
+        };
+
+        let root_key = K::new_from_partial(&root_node.prefix);
+        let root_value = root_node.value();
+
+        if root_node.is_leaf() {
+            return Self {
+                inner: Box::new(std::iter::once((
+                    root_key,
+                    root_value.expect("corruption: missing data at leaf node during iteration"),
+                ))),
+                _marker: Default::default(),
+            };
+        }
+
+        Self::from_root_and_children(root_key, root_value, VersionedIterInner::new(root_node))
+    }
+
+    fn new_with_prefix(node: Option<&'a VersionedNode<P, V>>, root_key: K) -> Self {
+        let Some(root_node) = node else {
+            return Self::empty();
+        };
+
+        let root_value = root_node.value();
+
+        if root_node.is_leaf() {
+            return Self {
+                inner: Box::new(std::iter::once((
+                    root_key,
+                    root_value.expect("corruption: missing data at leaf node during iteration"),
+                ))),
+                _marker: Default::default(),
+            };
+        }
+
+        Self::from_root_and_children(
+            root_key.clone(),
+            root_value,
+            VersionedIterInner::from_node_and_key(root_node, root_key),
+        )
+    }
+
+    fn new_with_start_bound(node: Option<&'a VersionedNode<P, V>>, start_bound: Bound<K>) -> Self {
+        let Some(root_node) = node else {
+            return Self::empty();
+        };
+
+        let root_key = K::new_from_partial(&root_node.prefix);
+        let root_value = root_node.value();
+        let satisfies_start = match &start_bound {
+            Bound::Included(start_key) => {
+                VersionedIterInner::<K, P, V>::key_order(&root_key, start_key)
+                    >= std::cmp::Ordering::Equal
+            }
+            Bound::Excluded(start_key) => {
+                VersionedIterInner::<K, P, V>::key_order(&root_key, start_key)
+                    > std::cmp::Ordering::Equal
+            }
+            Bound::Unbounded => true,
+        };
+
+        if root_node.is_leaf() {
+            if satisfies_start {
+                return Self {
+                    inner: Box::new(std::iter::once((
+                        root_key,
+                        root_value.expect("corruption: missing data at leaf node during iteration"),
+                    ))),
+                    _marker: Default::default(),
+                };
+            }
+
+            return Self::empty();
+        }
+
+        let children = VersionedIterInner::new_with_start_bound(root_node, start_bound);
+        if satisfies_start {
+            return Self::from_root_and_children(root_key, root_value, children);
+        }
+
+        Self {
+            inner: Box::new(children),
+            _marker: Default::default(),
+        }
+    }
+}
+
+impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> Iterator for VersionedIter<'a, K, P, V> {
+    type Item = (K, &'a V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+}
+
+impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> Iterator
+    for VersionedIterInner<'a, K, P, V>
+{
+    type Item = (K, &'a V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let (tree_depth, last_iter) = self.node_iter_stack.last_mut()?;
+            let tree_depth = *tree_depth;
+            self.cur_key.truncate(tree_depth);
+
+            let Some((_key, node)) = last_iter.next() else {
+                self.node_iter_stack.pop();
+                if let Some((parent_depth, _)) = self.node_iter_stack.last() {
+                    self.cur_key.truncate(*parent_depth);
+                }
+                continue;
+            };
+
+            self.cur_key.extend_from_slice(node.prefix.as_ref());
+
+            let is_inner = node.is_inner();
+            if is_inner {
+                self.node_iter_stack.push((
+                    tree_depth + node.prefix.len(),
+                    VersionedIterFrameIter::Plain(node.iter()),
+                ));
+            }
+
+            if let Some(value) = node.value() {
+                let key = K::new_from_slice(&self.cur_key);
+                if let Some(start_bound) = self.start_bound.as_ref() {
+                    let satisfies_start = match start_bound {
+                        Bound::Included(start_key) => {
+                            VersionedIterInner::<K, P, V>::key_order(&key, start_key)
+                                >= std::cmp::Ordering::Equal
+                        }
+                        Bound::Excluded(start_key) => {
+                            VersionedIterInner::<K, P, V>::key_order(&key, start_key)
+                                > std::cmp::Ordering::Equal
+                        }
+                        Bound::Unbounded => true,
+                    };
+                    if !satisfies_start {
+                        continue;
+                    }
+                    self.start_bound = None;
+                }
+                return Some((key, value));
+            }
+
+            if !is_inner {
+                self.cur_key.truncate(tree_depth);
+            }
+        }
+    }
+}
+
+impl<'a, P: Partial + 'a, V> VersionedLendingIterInner<'a, P, V> {
+    fn cmp_segments_to_slice(segments: &[&[u8]], len: usize, slice: &[u8]) -> std::cmp::Ordering {
+        let mut offset = 0usize;
+        for segment in segments {
+            let remaining = &slice[offset..];
+            let common = segment.len().min(remaining.len());
+            match segment[..common].cmp(&remaining[..common]) {
+                std::cmp::Ordering::Equal => {}
+                ord => return ord,
+            }
+
+            if segment.len() != common {
+                return std::cmp::Ordering::Greater;
+            }
+            if remaining.len() != common {
+                return std::cmp::Ordering::Less;
+            }
+            offset += common;
+        }
+
+        len.cmp(&slice.len())
+    }
+
+    fn within_end_bound(&self) -> bool {
+        let Some((end_key, inclusive)) = self.end_bound.as_ref() else {
+            return true;
+        };
+
+        match Self::cmp_segments_to_slice(&self.cur_segments, self.cur_len, end_key) {
+            std::cmp::Ordering::Less => true,
+            std::cmp::Ordering::Equal => *inclusive,
+            std::cmp::Ordering::Greater => false,
+        }
+    }
+
+    fn lending_view<'view>(&'view self) -> LendingKeyView<'a, 'view> {
+        LendingKeyView::new(&self.cur_segments, self.cur_len)
+    }
+
+    fn visit_each<F>(&mut self, on_each: &mut F)
+    where
+        F: for<'view> FnMut(LendingKeyView<'a, 'view>, &'a V),
+    {
+        loop {
+            let next = {
+                let (segment_depth, key_len, last_iter) = match self.node_iter_stack.last_mut() {
+                    Some(v) => v,
+                    None => return,
+                };
+                let segment_depth = *segment_depth;
+                let key_len = *key_len;
+                self.cur_segments.truncate(segment_depth);
+                self.cur_len = key_len;
+
+                let Some((_key, node)) = last_iter.next() else {
+                    self.node_iter_stack.pop();
+                    if let Some((parent_segment_depth, parent_key_len, _)) =
+                        self.node_iter_stack.last()
+                    {
+                        self.cur_segments.truncate(*parent_segment_depth);
+                        self.cur_len = *parent_key_len;
+                    }
+                    continue;
+                };
+
+                let segment = node.prefix.as_ref();
+                if !segment.is_empty() {
+                    self.cur_segments.push(segment);
+                    self.cur_len += segment.len();
+                }
+
+                let is_inner = node.is_inner();
+                if is_inner {
+                    self.node_iter_stack.push((
+                        self.cur_segments.len(),
+                        self.cur_len,
+                        VersionedIterFrameIter::Plain(node.iter()),
+                    ));
+                }
+
+                Some((segment, is_inner, node.value()))
+            };
+
+            let Some((segment, is_inner, value)) = next else {
+                continue;
+            };
+
+            if let Some(value) = value {
+                if !self.within_end_bound() {
+                    self.node_iter_stack.clear();
+                    self.cur_segments.clear();
+                    self.cur_len = 0;
+                    return;
+                }
+                on_each(self.lending_view(), value);
+            }
+
+            if !is_inner && !segment.is_empty() {
+                self.cur_segments.pop();
+                self.cur_len -= segment.len();
+            }
+        }
+    }
+
+    fn build_positioned_stack<K: KeyTrait<PartialType = P>>(
+        node: &'a VersionedNode<P, V>,
+        seek_key: &K,
+        depth: usize,
+    ) -> Vec<(usize, usize, VersionedIterFrameIter<'a, P, V>)> {
+        let root_segment_depth = usize::from(!node.prefix.as_ref().is_empty());
+
+        let prefix_common = node.prefix.prefix_length_key(seek_key, depth);
+        if prefix_common != node.prefix.len() {
+            let seek_remaining = seek_key.length_at(depth);
+            if prefix_common >= seek_remaining {
+                return vec![(
+                    root_segment_depth,
+                    node.prefix.len(),
+                    VersionedIterFrameIter::Plain(node.iter()),
+                )];
+            }
+
+            let node_byte = node.prefix.at(prefix_common);
+            let seek_byte = seek_key.at(depth + prefix_common);
+
+            if node_byte < seek_byte {
+                return vec![];
+            }
+
+            return vec![(
+                root_segment_depth,
+                node.prefix.len(),
+                VersionedIterFrameIter::Plain(node.iter()),
+            )];
+        }
+
+        if seek_key.length_at(depth) == node.prefix.len() {
+            return vec![(
+                root_segment_depth,
+                node.prefix.len(),
+                VersionedIterFrameIter::Plain(node.iter()),
+            )];
+        }
+
+        let target_depth = depth + node.prefix.len();
+        let target_byte = seek_key.at(target_depth);
+        let mut iter = node.iter();
+        while let Some((key, child)) = iter.next() {
+            if key < target_byte {
+                continue;
+            }
+
+            return vec![(
+                root_segment_depth,
+                node.prefix.len(),
+                VersionedIterFrameIter::Leading {
+                    first: Some((key, child)),
+                    rest: iter,
+                },
+            )];
+        }
+
+        vec![]
+    }
+
+    fn for_each<F>(node: Option<&'a VersionedNode<P, V>>, mut on_each: F)
+    where
+        F: for<'view> FnMut(LendingKeyView<'a, 'view>, &'a V),
+    {
+        let Some(root_node) = node else {
+            return;
+        };
+
+        let root_segments = if root_node.prefix.is_empty() {
+            Vec::new()
+        } else {
+            vec![root_node.prefix.as_ref()]
+        };
+        let root_len = root_node.prefix.len();
+
+        if let Some(value) = root_node.value() {
+            on_each(LendingKeyView::new(&root_segments, root_len), value);
+        }
+
+        if root_node.is_inner() {
+            let mut inner = Self {
+                node_iter_stack: vec![(
+                    root_segments.len(),
+                    root_len,
+                    VersionedIterFrameIter::Plain(root_node.iter()),
+                )],
+                cur_segments: root_segments,
+                cur_len: root_len,
+                end_bound: None,
+            };
+            inner.visit_each(&mut on_each);
+        }
+    }
+
+    fn for_each_with_prefix<F>(
+        node: Option<&'a VersionedNode<P, V>>,
+        root_segments: Vec<&'a [u8]>,
+        root_len: usize,
+        mut on_each: F,
+    ) where
+        F: for<'view> FnMut(LendingKeyView<'a, 'view>, &'a V),
+    {
+        let Some(root_node) = node else {
+            return;
+        };
+
+        if let Some(value) = root_node.value() {
+            on_each(LendingKeyView::new(&root_segments, root_len), value);
+        }
+
+        if root_node.is_inner() {
+            let mut inner = Self {
+                node_iter_stack: vec![(
+                    root_segments.len(),
+                    root_len,
+                    VersionedIterFrameIter::Plain(root_node.iter()),
+                )],
+                cur_segments: root_segments,
+                cur_len: root_len,
+                end_bound: None,
+            };
+            inner.visit_each(&mut on_each);
+        }
+    }
+
+    fn for_each_with_bounds<K, F>(
+        node: Option<&'a VersionedNode<P, V>>,
+        start_bound: Bound<K>,
+        end_bound: Bound<K>,
+        mut on_each: F,
+    ) where
+        K: KeyTrait<PartialType = P>,
+        F: for<'view> FnMut(LendingKeyView<'a, 'view>, &'a V),
+    {
+        let Some(root_node) = node else {
+            return;
+        };
+
+        let end_bound_vec = match end_bound {
+            Bound::Included(key) => Some((key.as_ref().to_vec(), true)),
+            Bound::Excluded(key) => Some((key.as_ref().to_vec(), false)),
+            Bound::Unbounded => None,
+        };
+
+        let root_segments = if root_node.prefix.is_empty() {
+            Vec::new()
+        } else {
+            vec![root_node.prefix.as_ref()]
+        };
+        let root_len = root_node.prefix.len();
+        let root_view = LendingKeyView::new(&root_segments, root_len);
+        let satisfies_start = match &start_bound {
+            Bound::Included(start_key) => {
+                root_view.cmp_slice(start_key.as_ref()) >= std::cmp::Ordering::Equal
+            }
+            Bound::Excluded(start_key) => {
+                root_view.cmp_slice(start_key.as_ref()) > std::cmp::Ordering::Equal
+            }
+            Bound::Unbounded => true,
+        };
+        let satisfies_end = match end_bound_vec.as_ref() {
+            Some((end_key, inclusive)) => match root_view.cmp_slice(end_key) {
+                std::cmp::Ordering::Less => true,
+                std::cmp::Ordering::Equal => *inclusive,
+                std::cmp::Ordering::Greater => false,
+            },
+            None => true,
+        };
+
+        if !satisfies_end {
+            return;
+        }
+
+        if let Some(value) = root_node.value()
+            && satisfies_start
+        {
+            on_each(root_view, value);
+        }
+
+        if !root_node.is_inner() {
+            return;
+        }
+
+        let seek_key = match &start_bound {
+            Bound::Included(key) | Bound::Excluded(key) => Some(key),
+            Bound::Unbounded => None,
+        };
+
+        let mut inner = if let Some(seek_key) = seek_key {
+            Self {
+                node_iter_stack: Self::build_positioned_stack(root_node, seek_key, 0),
+                cur_segments: root_segments,
+                cur_len: root_len,
+                end_bound: end_bound_vec,
+            }
+        } else {
+            Self {
+                node_iter_stack: vec![(
+                    root_segments.len(),
+                    root_len,
+                    VersionedIterFrameIter::Plain(root_node.iter()),
+                )],
+                cur_segments: root_segments,
+                cur_len: root_len,
+                end_bound: end_bound_vec,
+            }
+        };
+
+        inner.visit_each(&mut on_each);
+    }
+}
+
+impl<'a, P: Partial + 'a, V> VersionedValuesIter<'a, P, V> {
+    fn new(node: Option<&'a VersionedNode<P, V>>) -> Self {
+        let Some(root_node) = node else {
+            return Self {
+                root_value: None,
+                node_iter_stack: Vec::new(),
+            };
+        };
+
+        Self {
+            root_value: root_node.value(),
+            node_iter_stack: vec![root_node.iter()],
+        }
+    }
+}
+
+impl<'a, P: Partial + 'a, V> Iterator for VersionedValuesIter<'a, P, V> {
+    type Item = &'a V;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(value) = self.root_value.take() {
+            return Some(value);
+        }
+
+        loop {
+            let last_iter = self.node_iter_stack.last_mut()?;
+
+            let Some((_key, node)) = last_iter.next() else {
+                self.node_iter_stack.pop();
+                continue;
+            };
+
+            if node.is_inner() {
+                self.node_iter_stack.push(node.iter());
+            }
+
+            if let Some(value) = node.value() {
+                return Some(value);
+            }
+        }
+    }
+}
+
+impl<'a, K: KeyTrait + 'a, V> Iterator for VersionedRange<'a, K, V> {
+    type Item = (K, &'a V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let next = self.iter.next()?;
+        match &self.end {
+            Bound::Included(end_key) => match next.0.cmp(end_key) {
+                std::cmp::Ordering::Less | std::cmp::Ordering::Equal => Some(next),
+                std::cmp::Ordering::Greater => None,
+            },
+            Bound::Excluded(end_key) => match next.0.cmp(end_key) {
+                std::cmp::Ordering::Less => Some(next),
+                std::cmp::Ordering::Equal | std::cmp::Ordering::Greater => None,
+            },
+            Bound::Unbounded => Some(next),
         }
     }
 }
@@ -775,6 +1652,73 @@ where
             let k = key.at(depth + cur_node.prefix.len());
             depth += cur_node.prefix.len();
             cur_node = cur_node.seek_child(k)?.as_ref();
+        }
+    }
+
+    fn find_prefix_subtree<'a>(
+        cur_node: &'a VersionedNode<KeyType::PartialType, ValueType>,
+        prefix: &KeyType,
+    ) -> Option<(&'a VersionedNode<KeyType::PartialType, ValueType>, KeyType)> {
+        let mut cur_node = cur_node;
+        let mut cur_key = cur_node.prefix.as_ref().to_vec();
+        let mut depth = 0;
+
+        loop {
+            let prefix_common_match = cur_node.prefix.prefix_length_key(prefix, depth);
+            if prefix_common_match != cur_node.prefix.len() {
+                if prefix_common_match == prefix.length_at(depth) {
+                    return Some((cur_node, KeyType::new_from_slice(&cur_key)));
+                }
+                return None;
+            }
+
+            if cur_node.prefix.len() == prefix.length_at(depth) {
+                return Some((cur_node, KeyType::new_from_slice(&cur_key)));
+            }
+
+            let key = prefix.at(depth + cur_node.prefix.len());
+            depth += cur_node.prefix.len();
+
+            cur_node = cur_node.seek_child(key)?.as_ref();
+            cur_key.extend_from_slice(cur_node.prefix.as_ref());
+        }
+    }
+
+    fn find_prefix_subtree_view<'a>(
+        cur_node: &'a VersionedNode<KeyType::PartialType, ValueType>,
+        prefix: &KeyType,
+    ) -> Option<VersionedPrefixSubtreeView<'a, KeyType::PartialType, ValueType>> {
+        let mut cur_node = cur_node;
+        let mut cur_segments = if cur_node.prefix.is_empty() {
+            Vec::new()
+        } else {
+            vec![cur_node.prefix.as_ref()]
+        };
+        let mut cur_len = cur_node.prefix.len();
+        let mut depth = 0;
+
+        loop {
+            let prefix_common_match = cur_node.prefix.prefix_length_key(prefix, depth);
+            if prefix_common_match != cur_node.prefix.len() {
+                if prefix_common_match == prefix.length_at(depth) {
+                    return Some((cur_node, cur_segments, cur_len));
+                }
+                return None;
+            }
+
+            if cur_node.prefix.len() == prefix.length_at(depth) {
+                return Some((cur_node, cur_segments, cur_len));
+            }
+
+            let key = prefix.at(depth + cur_node.prefix.len());
+            depth += cur_node.prefix.len();
+
+            cur_node = cur_node.seek_child(key)?.as_ref();
+            let segment = cur_node.prefix.as_ref();
+            if !segment.is_empty() {
+                cur_segments.push(segment);
+                cur_len += segment.len();
+            }
         }
     }
 
@@ -1867,6 +2811,216 @@ mod tests {
         assert_eq!(tree.get_k(&ArrayKey::new_from_slice(b"da")), Some(&2));
         assert_eq!(snapshot.get_k(&ArrayKey::new_from_slice(b"d")), Some(&1));
         assert_eq!(snapshot.get_k(&ArrayKey::new_from_slice(b"da")), None);
+    }
+
+    #[test]
+    fn traversal_empty_tree_visits_nothing() {
+        let tree = VersionedAdaptiveRadixTree::<ArrayKey<8>, i32>::new();
+        let mut count = 0;
+        tree.for_each_view(|_, _| count += 1);
+        assert_eq!(count, 0);
+        assert_eq!(tree.iter().count(), 0);
+        assert_eq!(tree.values_iter().count(), 0);
+    }
+
+    #[test]
+    fn traversal_single_root_leaf() {
+        let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<8>, i32>::new();
+        let key = ArrayKey::new_from_slice(b"only");
+        tree.insert_k(&key, 7);
+
+        let iter_items: Vec<_> = tree.iter().map(|(key, value)| (key, *value)).collect();
+        assert_eq!(iter_items, vec![(key, 7)]);
+
+        let mut views = Vec::new();
+        tree.for_each_view(|key_view, value| {
+            views.push((key_view.to_vec(), *value));
+        });
+        assert_eq!(views, vec![(b"only".to_vec(), 7)]);
+        assert_eq!(tree.values_iter().copied().collect::<Vec<_>>(), vec![7]);
+    }
+
+    #[test]
+    fn traversal_handles_key_that_is_prefix_of_another() {
+        let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<8>, i32>::new();
+        tree.insert_k(&ArrayKey::new_from_slice(b"d"), 1);
+        tree.insert_k(&ArrayKey::new_from_slice(b"da"), 2);
+
+        let prefix = ArrayKey::new_from_slice(b"d");
+        let values: Vec<_> = tree
+            .prefix_iter_k(&prefix)
+            .map(|(key, value)| (key.as_ref().to_vec(), *value))
+            .collect();
+        assert_eq!(values, vec![(b"d".to_vec(), 1), (b"da".to_vec(), 2)]);
+
+        let mut views = Vec::new();
+        tree.prefix_for_each_view_k(&prefix, |key_view, value| {
+            views.push((key_view.to_vec(), *value));
+        });
+        assert_eq!(views, vec![(b"d".to_vec(), 1), (b"da".to_vec(), 2)]);
+    }
+
+    #[test]
+    fn prefix_traversal_matches_inside_compressed_prefix() {
+        let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+        tree.insert_k(&ArrayKey::new_from_slice(b"abcdef"), 1);
+        tree.insert_k(&ArrayKey::new_from_slice(b"abcxyz"), 2);
+
+        let prefix = ArrayKey::new_from_slice(b"abc");
+        let values: Vec<_> = tree
+            .prefix_iter_k(&prefix)
+            .map(|(key, value)| (key.as_ref().to_vec(), *value))
+            .collect();
+        assert_eq!(
+            values,
+            vec![(b"abcdef".to_vec(), 1), (b"abcxyz".to_vec(), 2)]
+        );
+    }
+
+    #[test]
+    fn prefix_traversal_no_match_visits_nothing() {
+        let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+        tree.insert_k(&ArrayKey::new_from_slice(b"abcdef"), 1);
+
+        let prefix = ArrayKey::new_from_slice(b"abz");
+        let mut count = 0;
+        tree.prefix_for_each_view_k(&prefix, |_, _| count += 1);
+        assert_eq!(count, 0);
+        assert_eq!(tree.prefix_iter_k(&prefix).count(), 0);
+    }
+
+    #[test]
+    fn versioned_traversal_order_matches_unversioned_tree() {
+        let mut versioned = VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+        let mut unversioned = crate::tree::AdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+        let keys = [
+            b"banana".as_slice(),
+            b"app".as_slice(),
+            b"apple".as_slice(),
+            b"band".as_slice(),
+            b"can".as_slice(),
+            b"bandana".as_slice(),
+        ];
+
+        for (idx, key) in keys.iter().enumerate() {
+            let key = ArrayKey::new_from_slice(key);
+            versioned.insert_k(&key, idx as i32);
+            unversioned.insert_k(&key, idx as i32);
+        }
+
+        let versioned_items: Vec<_> = versioned
+            .iter()
+            .map(|(key, value)| (key.as_ref().to_vec(), *value))
+            .collect();
+        let unversioned_items: Vec<_> = unversioned
+            .iter()
+            .map(|(key, value)| (key.as_ref().to_vec(), *value))
+            .collect();
+        assert_eq!(versioned_items, unversioned_items);
+
+        let start = ArrayKey::new_from_slice(b"banana");
+        let end = ArrayKey::new_from_slice(b"can");
+        let versioned_range: Vec<_> = versioned
+            .range(start..end)
+            .map(|(key, value)| (key.as_ref().to_vec(), *value))
+            .collect();
+        assert_eq!(
+            versioned_range,
+            vec![
+                (b"banana".to_vec(), 0),
+                (b"band".to_vec(), 3),
+                (b"bandana".to_vec(), 5)
+            ]
+        );
+    }
+
+    #[test]
+    fn versioned_traversal_preserves_snapshot_isolation() {
+        let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+        for (key, value) in [
+            (b"a".as_slice(), 1),
+            (b"b".as_slice(), 2),
+            (b"c".as_slice(), 3),
+        ] {
+            tree.insert_k(&ArrayKey::new_from_slice(key), value);
+        }
+
+        let snapshot = tree.snapshot();
+        tree.insert_k(&ArrayKey::new_from_slice(b"b"), 20);
+        tree.insert_k(&ArrayKey::new_from_slice(b"d"), 4);
+        assert_eq!(tree.remove_k(&ArrayKey::new_from_slice(b"a")), Some(1));
+
+        let snapshot_items: Vec<_> = snapshot
+            .iter()
+            .map(|(key, value)| (key.as_ref().to_vec(), *value))
+            .collect();
+        assert_eq!(
+            snapshot_items,
+            vec![(b"a".to_vec(), 1), (b"b".to_vec(), 2), (b"c".to_vec(), 3)]
+        );
+
+        let tree_items: Vec<_> = tree
+            .iter()
+            .map(|(key, value)| (key.as_ref().to_vec(), *value))
+            .collect();
+        assert_eq!(
+            tree_items,
+            vec![(b"b".to_vec(), 20), (b"c".to_vec(), 3), (b"d".to_vec(), 4)]
+        );
+    }
+
+    #[test]
+    fn traversal_covers_wide_node_shapes() {
+        for size in [4usize, 16, 48, 256] {
+            let mut tree = VersionedAdaptiveRadixTree::<DenseSequentialKey, usize>::new();
+            for idx in 0..size {
+                tree.insert_k(&dense_sequential_key(idx as u32), idx);
+            }
+
+            let values: Vec<_> = tree.values_iter().copied().collect();
+            assert_eq!(values, (0..size).collect::<Vec<_>>());
+
+            let mut viewed = Vec::new();
+            tree.for_each_view(|key_view, value| {
+                viewed.push((key_view.to_vec(), *value));
+            });
+            assert_eq!(viewed.len(), size);
+            assert_eq!(viewed[0].1, 0);
+            assert_eq!(viewed[size - 1].1, size - 1);
+        }
+    }
+
+    fn cache_key(obj: u64, symbol: u32) -> ArrayKey<16> {
+        let mut bytes = [0; 16];
+        bytes[..8].copy_from_slice(&obj.to_be_bytes());
+        bytes[8..12].copy_from_slice(&symbol.to_be_bytes());
+        ArrayKey::new_from_slice(&bytes[..12])
+    }
+
+    fn obj_prefix(obj: u64) -> ArrayKey<16> {
+        let mut bytes = [0; 16];
+        bytes[..8].copy_from_slice(&obj.to_be_bytes());
+        ArrayKey::new_from_slice(&bytes[..8])
+    }
+
+    #[test]
+    fn prefix_for_each_view_supports_moor_shaped_cache_keys() {
+        let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, usize>::new();
+        for symbol in 0..5 {
+            tree.insert_k(&cache_key(10, symbol), symbol as usize);
+        }
+        for symbol in 0..3 {
+            tree.insert_k(&cache_key(11, symbol), 100 + symbol as usize);
+        }
+
+        let prefix = obj_prefix(10);
+        let mut values = Vec::new();
+        tree.prefix_for_each_view_k(&prefix, |key_view, value| {
+            assert!(key_view.to_vec().starts_with(prefix.as_ref()));
+            values.push(*value);
+        });
+
+        assert_eq!(values, vec![0, 1, 2, 3, 4]);
     }
 
     #[test]

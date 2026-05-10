@@ -114,6 +114,7 @@ println ! ("{:?} -> {}", key.as_ref(), value);
 - O(1) snapshots: Create new versions without copying data
 - Copy-on-write mutations: Only copy nodes along modified paths
 - Structural sharing: Unmodified subtrees shared between versions
+- Ordered traversal, prefix traversal, and lending traversal over snapshots
 - Thread-safe: Snapshots can be moved across threads safely
 - Multiversion support for database and concurrent applications
 - Optional `triomphe-arc` feature for lower-overhead shared ownership in the versioned tree
@@ -164,15 +165,19 @@ let key5: OverflowKey<32, 8> = "tenant:account:42".into();
 
 ## Prefix Operations
 
-`AdaptiveRadixTree` now exposes explicit prefix-oriented APIs:
+`AdaptiveRadixTree` exposes explicit prefix-oriented APIs, and both tree types expose prefix
+traversal:
 
-- `longest_prefix_match` / `longest_prefix_match_k`
-- `prefix_iter` / `prefix_iter_k`
+- `longest_prefix_match` / `longest_prefix_match_k` on `AdaptiveRadixTree`
+- `prefix_iter` / `prefix_iter_k` on both tree types
+- `prefix_for_each_view` / `prefix_for_each_view_k` on both tree types
 
 These are useful when exact lookup is not enough:
 
 - `longest_prefix_match*`: find the deepest stored key that is a prefix of a probe key
 - `prefix_iter*`: iterate only the subtree under a prefix, in sorted key order
+- `prefix_for_each_view*`: visit prefix matches with a borrowed key view, avoiding owned key
+  reconstruction
 
 ```rust
 use rart::{AdaptiveRadixTree, KeyTrait, VectorKey};
@@ -276,8 +281,8 @@ Performance tradeoff:
 ## Performance
 
 Benchmark environment: NVIDIA GB10 (NVIDIA Spark equivalent, ASUS GX10 variant), ARM Cortex-X925,
-Criterion.rs. Numbers below are from the default quick benchmark profile (`RART_BENCH_FULL` unset).
-For longer high-confidence runs, use `RART_BENCH_FULL=1`.
+Criterion.rs. Numbers below were refreshed on May 10, 2026 from the default quick benchmark profile
+(`RART_BENCH_FULL` unset). For longer high-confidence runs, use `RART_BENCH_FULL=1`.
 
 Comparison baselines in this section:
 
@@ -324,19 +329,28 @@ persistent `HashMap` and `OrdMap`.
 Quick read on this machine:
 
 - persistent lookup is strong
-  - `lookup_comparison/16384`: versioned rart `15.1ns`, `imbl::HashMap` `23.4ns`, `imbl::OrdMap`
-    `38.6ns`
-- sequential scan is also strong
-  - `sequential_scan/16384`: versioned rart `126.2us`, `imbl::HashMap` `191.2us`, `imbl::OrdMap`
-    `470.3us`
-- mutation-heavy snapshot workloads still favor `imbl`
-  - `mutations_per_snapshot/100`: versioned rart `102.8us`, `imbl::HashMap` `58.1us`, `imbl::OrdMap`
-    `35.5us`
+  - `lookup_comparison/16384`: versioned rart `14.9ns`, `imbl::HashMap` `22.6ns`, `imbl::OrdMap`
+    `38.0ns`
+- sequential point scans are also strong
+  - `sequential_scan/16384`: versioned rart `132.5us`, `imbl::HashMap` `187.5us`,
+    `imbl::OrdMap` `463.9us`
+- snapshot-plus-mutation bursts are now competitive with `imbl`
+  - `mutations_per_snapshot/100`: versioned rart `19.3us`, `imbl::HashMap` `58.6us`,
+    `imbl::OrdMap` `35.7us`
+- full iteration depends on whether keys must be reconstructed
+  - `full_iteration/16384`: owned versioned rart `169.5us`, lending versioned rart `95.6us`,
+    values-only versioned rart `43.9us`, `imbl::HashMap` `48.3us`, `imbl::OrdMap` `44.9us`
+- prefix invalidation is workload-sensitive
+  - object-prefix invalidation over 64 symbols: versioned rart lending prefix `352ns`, owned prefix
+    iterator `704ns`, `imbl::OrdMap::range` `268ns`, `imbl::HashMap` full scan `402us`
 
 Short version:
 
-- choose `VersionedAdaptiveRadixTree` for read-heavy versioned workloads
-- choose `imbl` when repeated persistent mutation bursts dominate
+- choose `VersionedAdaptiveRadixTree` for lookup-heavy versioned workloads, cheap snapshots, and
+  prefix invalidation when the alternative is scanning a hash map
+- use lending traversal or `values_iter` when broad scans do not require owned keys
+- compare against `imbl::OrdMap::range` for ordered prefix workloads; it can be faster for small,
+  dense prefix ranges
 
 Optional feature:
 

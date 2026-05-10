@@ -12,9 +12,13 @@ use rart::{KeyTrait, OverflowKey, VersionedAdaptiveRadixTree};
 const TREE_SIZES: [usize; 4] = [1 << 8, 1 << 10, 1 << 12, 1 << 14];
 const DENSE_SEQUENTIAL_QUICK_SIZES: [usize; 5] = [16, 48, 64, 256, 4096];
 const DENSE_SEQUENTIAL_FULL_SIZES: [usize; 6] = [16, 48, 64, 256, 4096, 65536];
+const ITERATION_SIZES: [usize; 3] = [1 << 10, 1 << 12, 1 << 14];
+const PREFIX_OBJECTS: usize = 1024;
+const PREFIX_SYMBOLS_PER_OBJECT: usize = 64;
 
 type DenseSequentialKey = OverflowKey<8, 4>;
 type DenseSequentialTree = VersionedAdaptiveRadixTree<DenseSequentialKey, usize>;
+type CacheKey = [u8; 12];
 
 fn full_bench_profile() -> bool {
     std::env::var("RART_BENCH_FULL").as_deref() == Ok("1")
@@ -56,6 +60,67 @@ fn build_dense_sequential_tree(keys: &[DenseSequentialKey]) -> DenseSequentialTr
         tree.insert_k(key, i);
     }
     tree
+}
+
+fn cache_key_bytes(obj: u64, symbol: u32) -> CacheKey {
+    let mut bytes = [0; 12];
+    bytes[..8].copy_from_slice(&obj.to_be_bytes());
+    bytes[8..].copy_from_slice(&symbol.to_be_bytes());
+    bytes
+}
+
+fn cache_key(obj: u64, symbol: u32) -> ArrayKey<16> {
+    ArrayKey::new_from_slice(&cache_key_bytes(obj, symbol))
+}
+
+fn cache_prefix(obj: u64) -> ArrayKey<16> {
+    ArrayKey::new_from_slice(&obj.to_be_bytes())
+}
+
+fn build_iteration_inputs(
+    size: usize,
+) -> (
+    VersionedAdaptiveRadixTree<ArrayKey<16>, usize>,
+    ImHashMap<usize, usize>,
+    ImOrdMap<usize, usize>,
+) {
+    let mut versioned_tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, usize>::new();
+    let mut im_hashmap = ImHashMap::new();
+    let mut im_ordmap = ImOrdMap::new();
+
+    for i in 0..size {
+        versioned_tree.insert(i, i);
+        im_hashmap = im_hashmap.update(i, i);
+        im_ordmap = im_ordmap.update(i, i);
+    }
+
+    (versioned_tree, im_hashmap, im_ordmap)
+}
+
+fn build_prefix_inputs() -> (
+    VersionedAdaptiveRadixTree<ArrayKey<16>, usize>,
+    ImHashMap<CacheKey, usize>,
+    ImOrdMap<CacheKey, usize>,
+) {
+    let mut versioned_tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, usize>::new();
+    let mut im_hashmap = ImHashMap::new();
+    let mut im_ordmap = ImOrdMap::new();
+
+    for obj in 0..PREFIX_OBJECTS {
+        for symbol in 0..PREFIX_SYMBOLS_PER_OBJECT {
+            let key = cache_key_bytes(obj as u64, symbol as u32);
+            let value = obj * PREFIX_SYMBOLS_PER_OBJECT + symbol;
+            versioned_tree.insert_k(&ArrayKey::new_from_slice(&key), value);
+            im_hashmap = im_hashmap.update(key, value);
+            im_ordmap = im_ordmap.update(key, value);
+        }
+    }
+
+    (versioned_tree, im_hashmap, im_ordmap)
+}
+
+fn prefix_range(obj: u64) -> (CacheKey, CacheKey) {
+    (cache_key_bytes(obj, 0), cache_key_bytes(obj + 1, 0))
 }
 
 /// Benchmark lookup operations
@@ -206,6 +271,160 @@ pub fn sequential_scan_comparison(c: &mut Criterion) {
             })
         });
     }
+
+    group.finish();
+}
+
+/// Benchmark full persistent-container iteration.
+///
+/// The owned ART iterator reconstructs keys. The lending and values-only variants represent the
+/// fairer comparison when callers can consume borrowed key views or only need values.
+pub fn full_iteration_comparison(c: &mut Criterion) {
+    let mut group = c.benchmark_group("full_iteration");
+
+    for size in ITERATION_SIZES {
+        let (versioned_tree, im_hashmap, im_ordmap) = build_iteration_inputs(size);
+        group.throughput(Throughput::Elements(size as u64));
+
+        group.bench_with_input(
+            BenchmarkId::new("versioned_art_owned_iter", size),
+            &size,
+            |b, _| {
+                b.iter(|| {
+                    let mut sum = 0usize;
+                    for (key, value) in versioned_tree.iter() {
+                        sum = sum.wrapping_add(key.as_ref().len());
+                        sum = sum.wrapping_add(*value);
+                    }
+                    std::hint::black_box(sum);
+                })
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("versioned_art_lending_view", size),
+            &size,
+            |b, _| {
+                b.iter(|| {
+                    let mut sum = 0usize;
+                    versioned_tree.for_each_view(|key, value| {
+                        sum = sum.wrapping_add(key.len());
+                        sum = sum.wrapping_add(*value);
+                    });
+                    std::hint::black_box(sum);
+                })
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("versioned_art_values_iter", size),
+            &size,
+            |b, _| {
+                b.iter(|| {
+                    let mut sum = 0usize;
+                    for value in versioned_tree.values_iter() {
+                        sum = sum.wrapping_add(*value);
+                    }
+                    std::hint::black_box(sum);
+                })
+            },
+        );
+
+        group.bench_with_input(BenchmarkId::new("im_hashmap_iter", size), &size, |b, _| {
+            b.iter(|| {
+                let mut sum = 0usize;
+                for (key, value) in im_hashmap.iter() {
+                    sum = sum.wrapping_add(*key);
+                    sum = sum.wrapping_add(*value);
+                }
+                std::hint::black_box(sum);
+            })
+        });
+
+        group.bench_with_input(BenchmarkId::new("im_ordmap_iter", size), &size, |b, _| {
+            b.iter(|| {
+                let mut sum = 0usize;
+                for (key, value) in im_ordmap.iter() {
+                    sum = sum.wrapping_add(*key);
+                    sum = sum.wrapping_add(*value);
+                }
+                std::hint::black_box(sum);
+            })
+        });
+    }
+
+    group.finish();
+}
+
+/// Benchmark object-prefix invalidation over cache-shaped keys:
+/// [obj: u64 big-endian][symbol: u32 big-endian].
+pub fn prefix_invalidation_comparison(c: &mut Criterion) {
+    let mut group = c.benchmark_group("prefix_invalidation");
+    let (versioned_tree, im_hashmap, im_ordmap) = build_prefix_inputs();
+    let target_obj = (PREFIX_OBJECTS / 2) as u64;
+    let prefix = cache_prefix(target_obj);
+    let (range_start, range_end) = prefix_range(target_obj);
+
+    group.throughput(Throughput::Elements(PREFIX_SYMBOLS_PER_OBJECT as u64));
+
+    group.bench_function("versioned_art_prefix_lending", |b| {
+        b.iter(|| {
+            let mut sum = 0usize;
+            versioned_tree.prefix_for_each_view_k(&prefix, |key, value| {
+                sum = sum.wrapping_add(key.len());
+                sum = sum.wrapping_add(*value);
+            });
+            std::hint::black_box(sum);
+        })
+    });
+
+    group.bench_function("versioned_art_prefix_owned_iter", |b| {
+        b.iter(|| {
+            let mut sum = 0usize;
+            for (key, value) in versioned_tree.prefix_iter_k(&prefix) {
+                sum = sum.wrapping_add(key.as_ref().len());
+                sum = sum.wrapping_add(*value);
+            }
+            std::hint::black_box(sum);
+        })
+    });
+
+    group.bench_function("im_ordmap_range", |b| {
+        b.iter(|| {
+            let mut sum = 0usize;
+            for (key, value) in im_ordmap.range(range_start..range_end) {
+                sum = sum.wrapping_add(key.len());
+                sum = sum.wrapping_add(*value);
+            }
+            std::hint::black_box(sum);
+        })
+    });
+
+    group.bench_function("im_hashmap_full_scan", |b| {
+        b.iter(|| {
+            let mut sum = 0usize;
+            for (key, value) in im_hashmap.iter() {
+                if key[..8] == target_obj.to_be_bytes() {
+                    sum = sum.wrapping_add(key.len());
+                    sum = sum.wrapping_add(*value);
+                }
+            }
+            std::hint::black_box(sum);
+        })
+    });
+
+    group.bench_function("point_lookup_expected_prefix_entries", |b| {
+        b.iter(|| {
+            let mut sum = 0usize;
+            for symbol in 0..PREFIX_SYMBOLS_PER_OBJECT {
+                let key = cache_key(target_obj, symbol as u32);
+                if let Some(value) = versioned_tree.get_k(&key) {
+                    sum = sum.wrapping_add(*value);
+                }
+            }
+            std::hint::black_box(sum);
+        })
+    });
 
     group.finish();
 }
@@ -589,6 +808,8 @@ criterion_group!(
     targets = lookup_comparison,
         snapshot_creation,
         sequential_scan_comparison,
+        full_iteration_comparison,
+        prefix_invalidation_comparison,
         mutations_per_snapshot,
         snapshot_structural_sharing,
         dense_sequential_key_mutation
