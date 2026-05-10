@@ -213,10 +213,11 @@ How this differs from standard maps:
 
 ## Intersection Operations
 
-`AdaptiveRadixTree` also exposes ART-native intersection/join APIs for finding keys present in two
-trees:
+Both `AdaptiveRadixTree` and `VersionedAdaptiveRadixTree` expose ART-native intersection/join APIs
+for finding keys present in two trees:
 
 - `intersect_with`: visit matching keys and both values
+- `intersect_lending_with`: visit matching keys through a borrowed key view
 - `intersect_values_with`: visit only value pairs, avoiding key reconstruction
 - `intersect_count`: count overlapping keys
 
@@ -340,6 +341,13 @@ Quick read on this machine:
 - full iteration depends on whether keys must be reconstructed
   - `full_iteration/16384`: owned versioned rart `169.5us`, lending versioned rart `95.6us`,
     values-only versioned rart `43.9us`, `imbl::HashMap` `48.3us`, `imbl::OrdMap` `44.9us`
+- versioned intersection/join performance depends heavily on overlap and key reconstruction
+  - `join_comparison/n100000_o10`: lending versioned rart `58.5us`, owned versioned rart
+    `60.9us`, `imbl::OrdMap` merge join `309.7us`, `imbl::HashMap` probe join `3.00ms`
+  - `join_comparison/n100000_o50` values-only: versioned rart `259.1us`, `imbl::OrdMap`
+    `426.7us`, `imbl::HashMap` `6.27ms`
+  - `join_comparison/n100000_o90` count-only: versioned rart `532.7us`, `imbl::OrdMap`
+    `512.3us`, `imbl::HashMap` `3.87ms`
 - prefix invalidation is workload-sensitive
   - object-prefix invalidation over 64 symbols: versioned rart lending prefix `352ns`, owned prefix
     iterator `704ns`, `imbl::OrdMap::range` `268ns`, `imbl::HashMap` full scan `402us`
@@ -348,7 +356,9 @@ Short version:
 
 - choose `VersionedAdaptiveRadixTree` for lookup-heavy versioned workloads, cheap snapshots, and
   prefix invalidation when the alternative is scanning a hash map
-- use lending traversal or `values_iter` when broad scans do not require owned keys
+- use lending traversal, values-only traversal, or values-only joins when owned keys are not needed
+- compare against `imbl::OrdMap` for very high-overlap ordered joins; it can catch up when most keys
+  match and little prefix pruning is available
 - compare against `imbl::OrdMap::range` for ordered prefix workloads; it can be faster for small,
   dense prefix ranges
 

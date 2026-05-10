@@ -1,5 +1,6 @@
 /// Comprehensive benchmarks comparing VersionedAdaptiveRadixTree against persistent data structures
 /// from the `im` crate (imbl::HashMap and imbl::OrdMap) for MVCC-style workloads.
+use std::cmp::Ordering;
 use std::time::{Duration, Instant};
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
@@ -13,6 +14,8 @@ const TREE_SIZES: [usize; 4] = [1 << 8, 1 << 10, 1 << 12, 1 << 14];
 const DENSE_SEQUENTIAL_QUICK_SIZES: [usize; 5] = [16, 48, 64, 256, 4096];
 const DENSE_SEQUENTIAL_FULL_SIZES: [usize; 6] = [16, 48, 64, 256, 4096, 65536];
 const ITERATION_SIZES: [usize; 3] = [1 << 10, 1 << 12, 1 << 14];
+const JOIN_SIZES: [usize; 2] = [10_000, 100_000];
+const JOIN_OVERLAPS: [f64; 3] = [0.1, 0.5, 0.9];
 const PREFIX_OBJECTS: usize = 1024;
 const PREFIX_SYMBOLS_PER_OBJECT: usize = 64;
 
@@ -121,6 +124,244 @@ fn build_prefix_inputs() -> (
 
 fn prefix_range(obj: u64) -> (CacheKey, CacheKey) {
     (cache_key_bytes(obj, 0), cache_key_bytes(obj + 1, 0))
+}
+
+fn generate_overlapping_keys(size: usize, overlap_ratio: f64) -> (Vec<u64>, Vec<u64>) {
+    let overlap = ((size as f64) * overlap_ratio) as usize;
+    let unique = size - overlap;
+
+    let mut left = Vec::with_capacity(size);
+    let mut right = Vec::with_capacity(size);
+
+    for i in 0..overlap as u64 {
+        left.push(i);
+        right.push(i);
+    }
+
+    for i in 0..unique as u64 {
+        left.push(1_000_000_000 + i);
+        right.push(2_000_000_000 + i);
+    }
+
+    (left, right)
+}
+
+fn build_join_tree(keys: &[u64]) -> VersionedAdaptiveRadixTree<ArrayKey<16>, usize> {
+    let mut tree = VersionedAdaptiveRadixTree::new();
+    for (i, key) in keys.iter().enumerate() {
+        tree.insert(*key, i);
+    }
+    tree
+}
+
+fn build_join_hashmap(keys: &[u64]) -> ImHashMap<u64, usize> {
+    let mut map = ImHashMap::new();
+    for (i, key) in keys.iter().enumerate() {
+        map = map.update(*key, i);
+    }
+    map
+}
+
+fn build_join_ordmap(keys: &[u64]) -> ImOrdMap<u64, usize> {
+    let mut map = ImOrdMap::new();
+    for (i, key) in keys.iter().enumerate() {
+        map = map.update(*key, i);
+    }
+    map
+}
+
+fn versioned_art_join_checksum(
+    left: &VersionedAdaptiveRadixTree<ArrayKey<16>, usize>,
+    right: &VersionedAdaptiveRadixTree<ArrayKey<16>, usize>,
+) -> usize {
+    let mut checksum = 0usize;
+    left.intersect_with(right, |key, left_value, right_value| {
+        checksum = checksum.wrapping_add(key.as_ref().len());
+        checksum = checksum.wrapping_add(*left_value);
+        checksum = checksum.wrapping_add(*right_value);
+    });
+    checksum
+}
+
+fn versioned_art_lending_join_checksum(
+    left: &VersionedAdaptiveRadixTree<ArrayKey<16>, usize>,
+    right: &VersionedAdaptiveRadixTree<ArrayKey<16>, usize>,
+) -> usize {
+    let mut checksum = 0usize;
+    left.intersect_lending_with(right, |key, left_value, right_value| {
+        checksum = checksum.wrapping_add(key.len());
+        checksum = checksum.wrapping_add(*left_value);
+        checksum = checksum.wrapping_add(*right_value);
+    });
+    checksum
+}
+
+fn versioned_art_values_join_checksum(
+    left: &VersionedAdaptiveRadixTree<ArrayKey<16>, usize>,
+    right: &VersionedAdaptiveRadixTree<ArrayKey<16>, usize>,
+) -> usize {
+    let mut checksum = 0usize;
+    left.intersect_values_with(right, |left_value, right_value| {
+        checksum = checksum.wrapping_add(*left_value);
+        checksum = checksum.wrapping_add(*right_value);
+    });
+    checksum
+}
+
+fn im_ordmap_merge_join_checksum(
+    left: &ImOrdMap<u64, usize>,
+    right: &ImOrdMap<u64, usize>,
+) -> usize {
+    let mut left_it = left.iter().peekable();
+    let mut right_it = right.iter().peekable();
+    let mut checksum = 0usize;
+
+    loop {
+        let (Some((left_key, left_value)), Some((right_key, right_value))) =
+            (left_it.peek().copied(), right_it.peek().copied())
+        else {
+            return checksum;
+        };
+
+        match left_key.cmp(right_key) {
+            Ordering::Less => {
+                let _ = left_it.next();
+            }
+            Ordering::Greater => {
+                let _ = right_it.next();
+            }
+            Ordering::Equal => {
+                checksum = checksum.wrapping_add(std::mem::size_of::<u64>());
+                checksum = checksum.wrapping_add(*left_value);
+                checksum = checksum.wrapping_add(*right_value);
+                let _ = left_it.next();
+                let _ = right_it.next();
+            }
+        }
+    }
+}
+
+fn im_ordmap_merge_join_values_checksum(
+    left: &ImOrdMap<u64, usize>,
+    right: &ImOrdMap<u64, usize>,
+) -> usize {
+    let mut left_it = left.iter().peekable();
+    let mut right_it = right.iter().peekable();
+    let mut checksum = 0usize;
+
+    loop {
+        let (Some((left_key, left_value)), Some((right_key, right_value))) =
+            (left_it.peek().copied(), right_it.peek().copied())
+        else {
+            return checksum;
+        };
+
+        match left_key.cmp(right_key) {
+            Ordering::Less => {
+                let _ = left_it.next();
+            }
+            Ordering::Greater => {
+                let _ = right_it.next();
+            }
+            Ordering::Equal => {
+                checksum = checksum.wrapping_add(*left_value);
+                checksum = checksum.wrapping_add(*right_value);
+                let _ = left_it.next();
+                let _ = right_it.next();
+            }
+        }
+    }
+}
+
+fn im_ordmap_merge_join_count(left: &ImOrdMap<u64, usize>, right: &ImOrdMap<u64, usize>) -> usize {
+    let mut left_it = left.iter().peekable();
+    let mut right_it = right.iter().peekable();
+    let mut count = 0usize;
+
+    loop {
+        let (Some((left_key, _)), Some((right_key, _))) =
+            (left_it.peek().copied(), right_it.peek().copied())
+        else {
+            return count;
+        };
+
+        match left_key.cmp(right_key) {
+            Ordering::Less => {
+                let _ = left_it.next();
+            }
+            Ordering::Greater => {
+                let _ = right_it.next();
+            }
+            Ordering::Equal => {
+                count += 1;
+                let _ = left_it.next();
+                let _ = right_it.next();
+            }
+        }
+    }
+}
+
+fn im_hashmap_probe_join_checksum(
+    left: &ImHashMap<u64, usize>,
+    right: &ImHashMap<u64, usize>,
+) -> usize {
+    let (probe, lookup) = if left.len() <= right.len() {
+        (left, right)
+    } else {
+        (right, left)
+    };
+    let mut checksum = 0usize;
+
+    for (key, probe_value) in probe.iter() {
+        if let Some(lookup_value) = lookup.get(key) {
+            checksum = checksum.wrapping_add(std::mem::size_of::<u64>());
+            checksum = checksum.wrapping_add(*probe_value);
+            checksum = checksum.wrapping_add(*lookup_value);
+        }
+    }
+
+    checksum
+}
+
+fn im_hashmap_probe_join_values_checksum(
+    left: &ImHashMap<u64, usize>,
+    right: &ImHashMap<u64, usize>,
+) -> usize {
+    let (probe, lookup) = if left.len() <= right.len() {
+        (left, right)
+    } else {
+        (right, left)
+    };
+    let mut checksum = 0usize;
+
+    for (key, probe_value) in probe.iter() {
+        if let Some(lookup_value) = lookup.get(key) {
+            checksum = checksum.wrapping_add(*probe_value);
+            checksum = checksum.wrapping_add(*lookup_value);
+        }
+    }
+
+    checksum
+}
+
+fn im_hashmap_probe_join_count(
+    left: &ImHashMap<u64, usize>,
+    right: &ImHashMap<u64, usize>,
+) -> usize {
+    let (probe, lookup) = if left.len() <= right.len() {
+        (left, right)
+    } else {
+        (right, left)
+    };
+    let mut count = 0usize;
+
+    for key in probe.keys() {
+        if lookup.contains_key(key) {
+            count += 1;
+        }
+    }
+
+    count
 }
 
 /// Benchmark lookup operations
@@ -351,6 +592,166 @@ pub fn full_iteration_comparison(c: &mut Criterion) {
                 std::hint::black_box(sum);
             })
         });
+    }
+
+    group.finish();
+}
+
+/// Benchmark persistent-container join/intersection shapes over the same overlapping key sets.
+pub fn join_comparison(c: &mut Criterion) {
+    let mut group = c.benchmark_group("join_comparison");
+
+    for size in JOIN_SIZES {
+        for overlap in JOIN_OVERLAPS {
+            let (left_keys, right_keys) = generate_overlapping_keys(size, overlap);
+            let left_tree = build_join_tree(&left_keys);
+            let right_tree = build_join_tree(&right_keys);
+            let left_hashmap = build_join_hashmap(&left_keys);
+            let right_hashmap = build_join_hashmap(&right_keys);
+            let left_ordmap = build_join_ordmap(&left_keys);
+            let right_ordmap = build_join_ordmap(&right_keys);
+            let case = format!("n{}_o{}", size, (overlap * 100.0) as u32);
+
+            group.throughput(Throughput::Elements(size as u64));
+
+            group.bench_with_input(
+                BenchmarkId::new("versioned_art_intersect_with", &case),
+                &case,
+                |b, _| {
+                    b.iter(|| {
+                        let checksum = versioned_art_join_checksum(
+                            std::hint::black_box(&left_tree),
+                            std::hint::black_box(&right_tree),
+                        );
+                        std::hint::black_box(checksum);
+                    })
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new("versioned_art_intersect_lending", &case),
+                &case,
+                |b, _| {
+                    b.iter(|| {
+                        let checksum = versioned_art_lending_join_checksum(
+                            std::hint::black_box(&left_tree),
+                            std::hint::black_box(&right_tree),
+                        );
+                        std::hint::black_box(checksum);
+                    })
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new("im_ordmap_merge_join", &case),
+                &case,
+                |b, _| {
+                    b.iter(|| {
+                        let checksum = im_ordmap_merge_join_checksum(
+                            std::hint::black_box(&left_ordmap),
+                            std::hint::black_box(&right_ordmap),
+                        );
+                        std::hint::black_box(checksum);
+                    })
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new("im_hashmap_probe_join", &case),
+                &case,
+                |b, _| {
+                    b.iter(|| {
+                        let checksum = im_hashmap_probe_join_checksum(
+                            std::hint::black_box(&left_hashmap),
+                            std::hint::black_box(&right_hashmap),
+                        );
+                        std::hint::black_box(checksum);
+                    })
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new("versioned_art_intersect_values", &case),
+                &case,
+                |b, _| {
+                    b.iter(|| {
+                        let checksum = versioned_art_values_join_checksum(
+                            std::hint::black_box(&left_tree),
+                            std::hint::black_box(&right_tree),
+                        );
+                        std::hint::black_box(checksum);
+                    })
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new("im_ordmap_merge_join_values", &case),
+                &case,
+                |b, _| {
+                    b.iter(|| {
+                        let checksum = im_ordmap_merge_join_values_checksum(
+                            std::hint::black_box(&left_ordmap),
+                            std::hint::black_box(&right_ordmap),
+                        );
+                        std::hint::black_box(checksum);
+                    })
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new("im_hashmap_probe_join_values", &case),
+                &case,
+                |b, _| {
+                    b.iter(|| {
+                        let checksum = im_hashmap_probe_join_values_checksum(
+                            std::hint::black_box(&left_hashmap),
+                            std::hint::black_box(&right_hashmap),
+                        );
+                        std::hint::black_box(checksum);
+                    })
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new("versioned_art_intersect_count", &case),
+                &case,
+                |b, _| {
+                    b.iter(|| {
+                        let count = std::hint::black_box(&left_tree)
+                            .intersect_count(std::hint::black_box(&right_tree));
+                        std::hint::black_box(count);
+                    })
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new("im_ordmap_merge_join_count", &case),
+                &case,
+                |b, _| {
+                    b.iter(|| {
+                        let count = im_ordmap_merge_join_count(
+                            std::hint::black_box(&left_ordmap),
+                            std::hint::black_box(&right_ordmap),
+                        );
+                        std::hint::black_box(count);
+                    })
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new("im_hashmap_probe_join_count", &case),
+                &case,
+                |b, _| {
+                    b.iter(|| {
+                        let count = im_hashmap_probe_join_count(
+                            std::hint::black_box(&left_hashmap),
+                            std::hint::black_box(&right_hashmap),
+                        );
+                        std::hint::black_box(count);
+                    })
+                },
+            );
+        }
     }
 
     group.finish();
@@ -809,6 +1210,7 @@ criterion_group!(
         snapshot_creation,
         sequential_scan_comparison,
         full_iteration_comparison,
+        join_comparison,
         prefix_invalidation_comparison,
         mutations_per_snapshot,
         snapshot_structural_sharing,

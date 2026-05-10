@@ -14,11 +14,20 @@ All notable changes to this project are documented in this file.
   - `prefix_for_each_view` / `prefix_for_each_view_k`
   - `range`
   - `for_each_range_view`
+- ART-native intersection/join APIs on `VersionedAdaptiveRadixTree`:
+  - `intersect_with`
+  - `intersect_lending_with`
+  - `intersect_values_with`
+  - `intersect_count`
 - Versioned traversal regression coverage for empty trees, root leaves, prefix keys, compressed
   prefixes, no-match prefixes, ordered traversal, ranges, snapshot isolation, wide node layouts, and
   Moor-shaped object/symbol cache keys.
+- Versioned intersection regression coverage for owned-key, lending-key, values-only, count,
+  empty-tree, and snapshot-isolated join paths.
 - Versioned-tree benchmark coverage for fair iteration comparisons against `imbl::HashMap` and
   `imbl::OrdMap`, separating owned-key traversal, lending traversal, and values-only traversal.
+- Versioned-tree join benchmark coverage comparing ART-native intersections with `imbl::OrdMap`
+  merge joins and `imbl::HashMap` probe joins across 10%, 50%, and 90% overlap ratios.
 - Versioned prefix-invalidation benchmarks for object/symbol-shaped keys comparing ART prefix
   traversal, `imbl::OrdMap::range`, hash-map full scans, and expected point lookups.
 
@@ -39,6 +48,12 @@ All notable changes to this project are documented in this file.
   - `full_iteration/16384`: owned versioned rart ~`169.5 us`, lending versioned rart ~`95.6 us`,
     values-only versioned rart ~`43.9 us`, `imbl::HashMap` ~`48.3 us`, `imbl::OrdMap`
     ~`44.9 us`
+  - `join_comparison/n100000_o10`: lending versioned rart ~`58.5 us`, owned versioned rart
+    ~`60.9 us`, `imbl::OrdMap` merge join ~`309.7 us`, `imbl::HashMap` probe join ~`3.00 ms`
+  - `join_comparison/n100000_o50` values-only: versioned rart ~`259.1 us`, `imbl::OrdMap`
+    ~`426.7 us`, `imbl::HashMap` ~`6.27 ms`
+  - `join_comparison/n100000_o90` count-only: versioned rart ~`532.7 us`, `imbl::OrdMap`
+    ~`512.3 us`, `imbl::HashMap` ~`3.87 ms`
   - object-prefix invalidation over 64 symbols: versioned rart lending prefix ~`352 ns`, owned
     prefix iterator ~`704 ns`, `imbl::OrdMap::range` ~`268 ns`, `imbl::HashMap` full scan
     ~`402 us`
