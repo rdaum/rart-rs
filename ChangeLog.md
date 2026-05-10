@@ -6,6 +6,24 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- 
+
+### Changed
+
+- 
+
+### Fixed
+
+- 
+
+### Performance
+
+- 
+
+## [0.6.1] - 2026-05-10
+
+### Added
+
 - Dense sequential tagged-key mutation benchmark coverage for `VersionedAdaptiveRadixTree`:
   - replacement of existing keys
   - insert/remove steady-state mutation
