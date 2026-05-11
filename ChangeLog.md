@@ -6,6 +6,16 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Performance
+
+## [0.7.0] - 2026-05-10
+
+### Added
+
 - Traversal APIs on `VersionedAdaptiveRadixTree` matching the unversioned traversal surface:
   - `iter`
   - `for_each_view`
