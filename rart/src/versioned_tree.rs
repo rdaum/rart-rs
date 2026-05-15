@@ -82,6 +82,18 @@ pub struct VersionedIter<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> {
     _marker: std::marker::PhantomData<(K, P)>,
 }
 
+/// Iterator over stored keys that are prefixes of a probe key in a
+/// [`VersionedAdaptiveRadixTree`].
+///
+/// This iterator follows only the path described by the probe key and yields
+/// matching stored keys from shortest to longest.
+pub struct VersionedPrefixMatchIter<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> {
+    cur_node: Option<&'a VersionedNode<P, V>>,
+    probe: K,
+    cur_key: Vec<u8>,
+    depth: usize,
+}
+
 struct VersionedIterInner<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> {
     node_iter_stack: Vec<(usize, VersionedIterFrameIter<'a, P, V>)>,
     cur_key: Vec<u8>,
@@ -328,6 +340,63 @@ where
             count += 1;
         });
         count
+    }
+
+    /// Iterate over stored key/value pairs whose keys are prefixes of `key`.
+    ///
+    /// Matches are yielded from shortest to longest. This differs from
+    /// [`Self::prefix_iter`], which yields entries below a supplied prefix.
+    #[inline]
+    pub fn prefix_match_iter<Key>(
+        &self,
+        key: Key,
+    ) -> VersionedPrefixMatchIter<'_, KeyType, KeyType::PartialType, ValueType>
+    where
+        Key: Into<KeyType>,
+    {
+        VersionedPrefixMatchIter::new(self.root.as_deref(), key.into())
+    }
+
+    /// Iterate over stored key/value pairs whose keys are prefixes of `key`.
+    ///
+    /// Matches are yielded from shortest to longest. This differs from
+    /// [`Self::prefix_iter_k`], which yields entries below a supplied prefix.
+    #[inline]
+    pub fn prefix_match_iter_k(
+        &self,
+        key: &KeyType,
+    ) -> VersionedPrefixMatchIter<'_, KeyType, KeyType::PartialType, ValueType> {
+        VersionedPrefixMatchIter::new(self.root.as_deref(), key.clone())
+    }
+
+    /// Visit stored key/value pairs whose keys are prefixes of `key`.
+    ///
+    /// Matches are visited from shortest to longest. The key slice passed to
+    /// the callback borrows from the supplied probe key, so the tree does not
+    /// rebuild owned keys or maintain per-match key scratch state.
+    #[inline]
+    pub fn prefix_match_for_each<Key, F>(&self, key: Key, on_match: F)
+    where
+        Key: Into<KeyType>,
+        F: FnMut(&[u8], &ValueType),
+    {
+        self.prefix_match_for_each_k(&key.into(), on_match)
+    }
+
+    /// Visit stored key/value pairs whose keys are prefixes of `key`.
+    ///
+    /// Matches are visited from shortest to longest. The key slice passed to
+    /// the callback borrows from the supplied probe key, so the tree does not
+    /// rebuild owned keys or maintain per-match key scratch state.
+    #[inline]
+    pub fn prefix_match_for_each_k<F>(&self, key: &KeyType, on_match: F)
+    where
+        F: FnMut(&[u8], &ValueType),
+    {
+        let Some(root) = self.root.as_deref() else {
+            return;
+        };
+        Self::prefix_match_for_each_impl(root, key, on_match);
     }
 
     /// Iterate over all entries whose keys start with `prefix`.
@@ -1252,6 +1321,51 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> Iterator for Versione
     }
 }
 
+impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> VersionedPrefixMatchIter<'a, K, P, V> {
+    fn new(node: Option<&'a VersionedNode<P, V>>, probe: K) -> Self {
+        Self {
+            cur_node: node,
+            probe,
+            cur_key: Vec::new(),
+            depth: 0,
+        }
+    }
+}
+
+impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> Iterator
+    for VersionedPrefixMatchIter<'a, K, P, V>
+{
+    type Item = (K, &'a V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let cur_node = self.cur_node.take()?;
+            let remaining_len = self.probe.length_at(self.depth);
+            let prefix_len = cur_node.prefix.len();
+            let prefix_common_match = cur_node.prefix.prefix_length_key(&self.probe, self.depth);
+
+            if prefix_common_match != prefix_len {
+                return None;
+            }
+
+            self.cur_key.extend_from_slice(cur_node.prefix.as_ref());
+            self.depth += prefix_len;
+
+            self.cur_node = if prefix_len == remaining_len {
+                None
+            } else {
+                cur_node
+                    .seek_child(self.probe.at(self.depth))
+                    .map(std::convert::AsRef::as_ref)
+            };
+
+            if let Some(value) = cur_node.value() {
+                return Some((K::new_from_slice(&self.cur_key), value));
+            }
+        }
+    }
+}
+
 impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> Iterator
     for VersionedIterInner<'a, K, P, V>
 {
@@ -1716,6 +1830,42 @@ where
             let k = key.at(depth + cur_node.prefix.len());
             depth += cur_node.prefix.len();
             cur_node = cur_node.seek_child(k)?.as_ref();
+        }
+    }
+
+    fn prefix_match_for_each_impl<'a, F>(
+        cur_node: &'a VersionedNode<KeyType::PartialType, ValueType>,
+        key: &KeyType,
+        mut on_match: F,
+    ) where
+        F: FnMut(&[u8], &'a ValueType),
+    {
+        let mut cur_node = cur_node;
+        let mut depth = 0;
+        let key_bytes = key.as_ref();
+
+        loop {
+            let prefix_common_match = cur_node.prefix.prefix_length_key(key, depth);
+            if prefix_common_match != cur_node.prefix.len() {
+                return;
+            }
+
+            let matched_len = depth + cur_node.prefix.len();
+            if let Some(value) = cur_node.value() {
+                on_match(&key_bytes[..matched_len], value);
+            }
+
+            if cur_node.prefix.len() == key.length_at(depth) {
+                return;
+            }
+
+            let k = key.at(depth + cur_node.prefix.len());
+            depth += cur_node.prefix.len();
+
+            let Some(child) = cur_node.seek_child(k) else {
+                return;
+            };
+            cur_node = child.as_ref();
         }
     }
 
@@ -3258,6 +3408,73 @@ mod tests {
             views.push((key_view.to_vec(), *value));
         });
         assert_eq!(views, vec![(b"d".to_vec(), 1), (b"da".to_vec(), 2)]);
+    }
+
+    #[test]
+    fn prefix_match_iter_returns_saved_prefixes() {
+        let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+        for (idx, key) in [
+            b"".as_slice(),
+            b"a".as_slice(),
+            b"alpha".as_slice(),
+            b"alphabet".as_slice(),
+            b"alphabetical".as_slice(),
+            b"apple".as_slice(),
+        ]
+        .iter()
+        .enumerate()
+        {
+            tree.insert_k(&ArrayKey::new_from_slice(key), idx as i32);
+        }
+
+        let got: Vec<Vec<u8>> = tree
+            .prefix_match_iter(ArrayKey::new_from_slice(b"alphabet"))
+            .map(|(key, _)| key.as_ref().to_vec())
+            .collect();
+
+        assert_eq!(
+            got,
+            vec![
+                b"".to_vec(),
+                b"a".to_vec(),
+                b"alpha".to_vec(),
+                b"alphabet".to_vec(),
+            ]
+        );
+    }
+
+    #[test]
+    fn prefix_match_for_each_returns_saved_prefixes() {
+        let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+        for (idx, key) in [
+            b"".as_slice(),
+            b"a".as_slice(),
+            b"alpha".as_slice(),
+            b"alphabet".as_slice(),
+            b"alphabetical".as_slice(),
+            b"apple".as_slice(),
+        ]
+        .iter()
+        .enumerate()
+        {
+            tree.insert_k(&ArrayKey::new_from_slice(key), idx as i32);
+        }
+
+        let probe = ArrayKey::new_from_slice(b"alphabet");
+        let mut got = Vec::new();
+        tree.prefix_match_for_each_k(&probe, |key, value| {
+            got.push((key.to_vec(), *value));
+        });
+
+        assert_eq!(
+            got,
+            vec![
+                (b"".to_vec(), 0),
+                (b"a".to_vec(), 1),
+                (b"alpha".to_vec(), 2),
+                (b"alphabet".to_vec(), 3),
+            ]
+        );
     }
 
     #[test]

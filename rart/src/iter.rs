@@ -149,6 +149,17 @@ pub struct Iter<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> {
     _marker: std::marker::PhantomData<(K, P)>,
 }
 
+/// Iterator over stored keys that are prefixes of a probe key.
+///
+/// This iterator follows only the path described by the probe key and yields
+/// matching stored keys from shortest to longest.
+pub struct PrefixMatchIter<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> {
+    cur_node: Option<&'a DefaultNode<P, V>>,
+    probe: K,
+    cur_key: Vec<u8>,
+    depth: usize,
+}
+
 struct IterInner<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> {
     node_iter_stack: Vec<(usize, IterFrameIter<'a, P, V>)>,
 
@@ -406,6 +417,49 @@ impl<'a, K: KeyTrait<PartialType = P> + 'a, P: Partial + 'a, V> Iter<'a, K, P, V
         Self {
             inner: Box::new(children),
             _marker: Default::default(),
+        }
+    }
+}
+
+impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> PrefixMatchIter<'a, K, P, V> {
+    pub(crate) fn new(node: Option<&'a DefaultNode<P, V>>, probe: K) -> Self {
+        Self {
+            cur_node: node,
+            probe,
+            cur_key: Vec::new(),
+            depth: 0,
+        }
+    }
+}
+
+impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> Iterator
+    for PrefixMatchIter<'a, K, P, V>
+{
+    type Item = (K, &'a V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let cur_node = self.cur_node.take()?;
+            let remaining_len = self.probe.length_at(self.depth);
+            let prefix_len = cur_node.prefix.len();
+            let prefix_common_match = cur_node.prefix.prefix_length_key(&self.probe, self.depth);
+
+            if prefix_common_match != prefix_len {
+                return None;
+            }
+
+            self.cur_key.extend_from_slice(cur_node.prefix.as_ref());
+            self.depth += prefix_len;
+
+            self.cur_node = if prefix_len == remaining_len {
+                None
+            } else {
+                cur_node.seek_child(self.probe.at(self.depth))
+            };
+
+            if let Some(value) = cur_node.value() {
+                return Some((K::new_from_slice(&self.cur_key), value));
+            }
         }
     }
 }

@@ -7,7 +7,7 @@ use std::cmp::Ordering;
 use std::cmp::min;
 use std::ops::RangeBounds;
 
-use crate::iter::{Iter, LendingIterInner, LendingKeyView, ValuesIter};
+use crate::iter::{Iter, LendingIterInner, LendingKeyView, PrefixMatchIter, ValuesIter};
 use crate::keys::KeyTrait;
 use crate::node::{DefaultNode, Node};
 use crate::partials::Partial;
@@ -271,6 +271,63 @@ where
             return false;
         };
         AdaptiveRadixTree::longest_prefix_match_lending(root, key, on_match)
+    }
+
+    /// Iterate over stored key/value pairs whose keys are prefixes of `key`.
+    ///
+    /// Matches are yielded from shortest to longest. This differs from
+    /// [`Self::prefix_iter`], which yields entries below a supplied prefix.
+    #[inline]
+    pub fn prefix_match_iter<Key>(
+        &self,
+        key: Key,
+    ) -> PrefixMatchIter<'_, KeyType, KeyType::PartialType, ValueType>
+    where
+        Key: Into<KeyType>,
+    {
+        PrefixMatchIter::new(self.root.as_ref(), key.into())
+    }
+
+    /// Iterate over stored key/value pairs whose keys are prefixes of `key`.
+    ///
+    /// Matches are yielded from shortest to longest. This differs from
+    /// [`Self::prefix_iter_k`], which yields entries below a supplied prefix.
+    #[inline]
+    pub fn prefix_match_iter_k(
+        &self,
+        key: &KeyType,
+    ) -> PrefixMatchIter<'_, KeyType, KeyType::PartialType, ValueType> {
+        PrefixMatchIter::new(self.root.as_ref(), key.clone())
+    }
+
+    /// Visit stored key/value pairs whose keys are prefixes of `key`.
+    ///
+    /// Matches are visited from shortest to longest. The key slice passed to
+    /// the callback borrows from the supplied probe key, so the tree does not
+    /// rebuild owned keys or maintain per-match key scratch state.
+    #[inline]
+    pub fn prefix_match_for_each<Key, F>(&self, key: Key, on_match: F)
+    where
+        Key: Into<KeyType>,
+        F: FnMut(&[u8], &ValueType),
+    {
+        self.prefix_match_for_each_k(&key.into(), on_match)
+    }
+
+    /// Visit stored key/value pairs whose keys are prefixes of `key`.
+    ///
+    /// Matches are visited from shortest to longest. The key slice passed to
+    /// the callback borrows from the supplied probe key, so the tree does not
+    /// rebuild owned keys or maintain per-match key scratch state.
+    #[inline]
+    pub fn prefix_match_for_each_k<F>(&self, key: &KeyType, on_match: F)
+    where
+        F: FnMut(&[u8], &ValueType),
+    {
+        let Some(root) = self.root.as_ref() else {
+            return;
+        };
+        AdaptiveRadixTree::prefix_match_for_each_impl(root, key, on_match);
     }
 
     /// Iterate over all entries whose keys start with `prefix`.
@@ -897,6 +954,42 @@ where
         }
 
         false
+    }
+
+    fn prefix_match_for_each_impl<'a, F>(
+        cur_node: &'a DefaultNode<KeyType::PartialType, ValueType>,
+        key: &KeyType,
+        mut on_match: F,
+    ) where
+        F: FnMut(&[u8], &'a ValueType),
+    {
+        let mut cur_node = cur_node;
+        let mut depth = 0;
+        let key_bytes = key.as_ref();
+
+        loop {
+            let prefix_common_match = cur_node.prefix.prefix_length_key(key, depth);
+            if prefix_common_match != cur_node.prefix.len() {
+                return;
+            }
+
+            let matched_len = depth + cur_node.prefix.len();
+            if let Some(value) = cur_node.value() {
+                on_match(&key_bytes[..matched_len], value);
+            }
+
+            if cur_node.prefix.len() == key.length_at(depth) {
+                return;
+            }
+
+            let k = key.at(depth + cur_node.prefix.len());
+            depth += cur_node.prefix.len();
+
+            let Some(child) = cur_node.seek_child(k) else {
+                return;
+            };
+            cur_node = child;
+        }
     }
 
     fn find_prefix_subtree<'a>(
@@ -1985,6 +2078,26 @@ mod tests {
                     .max_by_key(|(key, _)| key.len())
                     .map(|(key, value)| (key.clone(), *value));
                 prop_assert_eq!(got_longest, expected_longest);
+
+                let got_prefix_matches: Vec<_> = tree
+                    .prefix_match_iter_k(&prefix)
+                    .map(|(key, value)| (trim_array_key_bytes(key.as_ref()), *value))
+                    .collect();
+                let expected_prefix_matches: Vec<_> = map
+                    .iter()
+                    .filter(|(key, _)| probe.starts_with(key.as_slice()))
+                    .map(|(key, value)| (key.clone(), *value))
+                    .collect();
+                prop_assert_eq!(&got_prefix_matches, &expected_prefix_matches);
+
+                let mut got_prefix_matches_with_callback = Vec::new();
+                tree.prefix_match_for_each_k(&prefix, |key, value| {
+                    got_prefix_matches_with_callback.push((key.to_vec(), *value));
+                });
+                prop_assert_eq!(
+                    &got_prefix_matches_with_callback,
+                    &expected_prefix_matches
+                );
             }
         }
 
@@ -2125,6 +2238,80 @@ mod tests {
                 ("alpine".to_string(), 4),
             ]
         );
+    }
+
+    #[test]
+    fn test_prefix_match_iter_returns_saved_prefixes() {
+        let mut tree = AdaptiveRadixTree::<VectorKey, i32>::new();
+        for (idx, key) in [
+            b"".as_slice(),
+            b"a".as_slice(),
+            b"alpha".as_slice(),
+            b"alphabet".as_slice(),
+            b"alphabetical".as_slice(),
+            b"apple".as_slice(),
+        ]
+        .iter()
+        .enumerate()
+        {
+            tree.insert_k(&VectorKey::new_from_slice(key), idx as i32);
+        }
+
+        let got: Vec<Vec<u8>> = tree
+            .prefix_match_iter(VectorKey::new_from_slice(b"alphabet"))
+            .map(|(key, _)| key.as_ref().to_vec())
+            .collect();
+
+        assert_eq!(
+            got,
+            vec![
+                b"".to_vec(),
+                b"a".to_vec(),
+                b"alpha".to_vec(),
+                b"alphabet".to_vec(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_prefix_match_for_each_returns_borrowed_probe_prefixes() {
+        let mut tree = AdaptiveRadixTree::<VectorKey, i32>::new();
+        tree.insert_k(&VectorKey::new_from_slice(b""), 0);
+        tree.insert_k(&VectorKey::new_from_slice(b"a"), 1);
+        tree.insert_k(&VectorKey::new_from_slice(b"alpha"), 2);
+        tree.insert_k(&VectorKey::new_from_slice(b"alphabet"), 3);
+        tree.insert_k(&VectorKey::new_from_slice(b"alphabetical"), 4);
+
+        let probe = VectorKey::new_from_slice(b"alphabet");
+        let probe_base = probe.as_ref().as_ptr() as usize;
+        let probe_end = probe_base + probe.as_ref().len();
+        let mut got = Vec::new();
+
+        tree.prefix_match_for_each_k(&probe, |key, value| {
+            let ptr = key.as_ptr() as usize;
+            assert!(ptr >= probe_base && ptr <= probe_end);
+            got.push((key.to_vec(), *value));
+        });
+
+        assert_eq!(
+            got,
+            vec![
+                (b"".to_vec(), 0),
+                (b"a".to_vec(), 1),
+                (b"alpha".to_vec(), 2),
+                (b"alphabet".to_vec(), 3),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_prefix_match_iter_no_match() {
+        let mut tree = AdaptiveRadixTree::<VectorKey, i32>::new();
+        tree.insert_k(&VectorKey::new_from_slice(b"alpha"), 1);
+        tree.insert_k(&VectorKey::new_from_slice(b"alphabet"), 2);
+
+        let probe = VectorKey::new_from_slice(b"alpine");
+        assert_eq!(tree.prefix_match_iter_k(&probe).count(), 0);
     }
 
     #[test]

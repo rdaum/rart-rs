@@ -169,14 +169,18 @@ let key5: OverflowKey<32, 8> = "tenant:account:42".into();
 traversal:
 
 - `longest_prefix_match` / `longest_prefix_match_k` on `AdaptiveRadixTree`
+- `prefix_match_iter` / `prefix_match_iter_k` on both tree types
+- `prefix_match_for_each` / `prefix_match_for_each_k` on both tree types
 - `prefix_iter` / `prefix_iter_k` on both tree types
 - `prefix_for_each_view` / `prefix_for_each_view_k` on both tree types
 
 These are useful when exact lookup is not enough:
 
 - `longest_prefix_match*`: find the deepest stored key that is a prefix of a probe key
+- `prefix_match_iter*`: iterate all stored keys that are prefixes of a probe key
+- `prefix_match_for_each*`: visit all stored prefix matches using key slices borrowed from the probe key
 - `prefix_iter*`: iterate only the subtree under a prefix, in sorted key order
-- `prefix_for_each_view*`: visit prefix matches with a borrowed key view, avoiding owned key
+- `prefix_for_each_view*`: visit entries under a prefix with a borrowed key view, avoiding owned key
   reconstruction
 
 ```rust
@@ -196,6 +200,12 @@ assert_eq!(*v, 2);
 let prefix = VectorKey::new_from_slice(b"cat");
 let matches: Vec<_> = tree.prefix_iter_k(&prefix).map(|(k, _)| k).collect();
 assert_eq!(matches.len(), 2);
+
+let prefixes: Vec<_> = tree
+    .prefix_match_iter_k(&VectorKey::new_from_slice(b"catalogue"))
+    .map(|(k, _)| k)
+    .collect();
+assert_eq!(prefixes.len(), 2); // "cat", "catalog"
 ```
 
 Typical uses:
