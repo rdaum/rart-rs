@@ -12,6 +12,19 @@ All notable changes to this project are documented in this file.
 
 ### Performance
 
+## [0.8.0] - 2026-05-15
+
+### Added
+
+- Prefix-match traversal APIs for finding stored keys that are prefixes of a probe key:
+  - `prefix_match_iter` / `prefix_match_iter_k` on `AdaptiveRadixTree`
+  - `prefix_match_iter` / `prefix_match_iter_k` on `VersionedAdaptiveRadixTree`
+- Callback-oriented prefix-match APIs that visit matches from shortest to longest while borrowing
+  matched key slices from the supplied probe key:
+  - `prefix_match_for_each` / `prefix_match_for_each_k` on `AdaptiveRadixTree`
+  - `prefix_match_for_each` / `prefix_match_for_each_k` on `VersionedAdaptiveRadixTree`
+- Regression and property coverage for owned iterator and callback prefix-match traversal.
+
 ## [0.7.0] - 2026-05-10
 
 ### Added
