@@ -7,6 +7,7 @@ use std::cmp::min;
 use std::collections::Bound;
 use std::ops::RangeBounds;
 
+use crate::VisitControl;
 use crate::iter::LendingKeyView;
 use crate::keys::KeyTrait;
 use crate::mapping::{
@@ -260,6 +261,44 @@ where
         Self::get_iterate(root, key)
     }
 
+    /// Get a mutable reference to a value by key (generic version).
+    ///
+    /// This copies any shared nodes along the key path before returning the
+    /// mutable reference, preserving snapshot isolation.
+    #[inline]
+    pub fn get_mut<Key>(&mut self, key: Key) -> Option<&mut ValueType>
+    where
+        Key: Into<KeyType>,
+    {
+        self.get_mut_k(&key.into())
+    }
+
+    /// Get a mutable reference to a value by key reference.
+    ///
+    /// This copies any shared nodes along the key path before returning the
+    /// mutable reference, preserving snapshot isolation.
+    pub fn get_mut_k(&mut self, key: &KeyType) -> Option<&mut ValueType> {
+        self.get_k(key)?;
+
+        self.version += 1;
+        let root = self
+            .root
+            .take()
+            .expect("prechecked key should imply non-empty tree");
+        self.root = Some(
+            Self::cow_path_to_key(root, key, 0, self.version)
+                .expect("prechecked key should have a CoW path"),
+        );
+
+        Self::get_iterate_mut_cow_ready(
+            self.root
+                .as_mut()
+                .expect("cow path should have restored the root"),
+            key,
+            0,
+        )
+    }
+
     /// Iterate over all key-value pairs in lexicographic order.
     pub fn iter(&self) -> VersionedIter<'_, KeyType, KeyType::PartialType, ValueType> {
         VersionedIter::new(self.root.as_deref())
@@ -453,6 +492,79 @@ where
             subtree_root_len,
             on_each,
         );
+    }
+
+    /// Visit only values whose keys start with `prefix`.
+    ///
+    /// This avoids owned key reconstruction and lending key-view construction for
+    /// each visited entry.
+    #[inline]
+    pub fn prefix_values_for_each<Key, F>(&self, prefix: Key, on_each: F)
+    where
+        Key: Into<KeyType>,
+        F: FnMut(&ValueType),
+    {
+        self.prefix_values_for_each_k(&prefix.into(), on_each)
+    }
+
+    /// Visit only values whose keys start with `prefix`.
+    ///
+    /// This avoids owned key reconstruction and lending key-view construction for
+    /// each visited entry.
+    pub fn prefix_values_for_each_k<F>(&self, prefix: &KeyType, mut on_each: F)
+    where
+        F: FnMut(&ValueType),
+    {
+        let result: Result<(), std::convert::Infallible> =
+            self.try_prefix_values_for_each_k(prefix, |value| {
+                on_each(value);
+                Ok(VisitControl::Continue)
+            });
+        match result {
+            Ok(()) => {}
+            Err(never) => match never {},
+        }
+    }
+
+    /// Fallibly visit only values whose keys start with `prefix`.
+    ///
+    /// Returning [`VisitControl::Stop`] stops traversal immediately. Returning
+    /// `Err` propagates that error without visiting more entries.
+    #[inline]
+    pub fn try_prefix_values_for_each<Key, E, F>(&self, prefix: Key, on_each: F) -> Result<(), E>
+    where
+        Key: Into<KeyType>,
+        F: FnMut(&ValueType) -> Result<VisitControl, E>,
+    {
+        self.try_prefix_values_for_each_k(&prefix.into(), on_each)
+    }
+
+    /// Fallibly visit only values whose keys start with `prefix`.
+    ///
+    /// Returning [`VisitControl::Stop`] stops traversal immediately. Returning
+    /// `Err` propagates that error without visiting more entries.
+    pub fn try_prefix_values_for_each_k<E, F>(
+        &self,
+        prefix: &KeyType,
+        mut on_each: F,
+    ) -> Result<(), E>
+    where
+        F: FnMut(&ValueType) -> Result<VisitControl, E>,
+    {
+        let Some(root) = self.root.as_deref() else {
+            return Ok(());
+        };
+        let Some(subtree_root) = Self::find_prefix_subtree_node(root, prefix) else {
+            return Ok(());
+        };
+
+        for value in VersionedValuesIter::new(Some(subtree_root)) {
+            if on_each(value)? == VisitControl::Stop {
+                break;
+            }
+        }
+
+        Ok(())
     }
 
     /// Create an iterator over key-value pairs within a specified range.
@@ -935,6 +1047,16 @@ impl<P: Partial, V> VersionedNode<P, V> {
             VersionedContent::Node16(km) => km.seek_child(key),
             VersionedContent::Node48(km) => km.seek_child(key),
             VersionedContent::Node256(km) => km.seek_child(key),
+            VersionedContent::Empty => None,
+        }
+    }
+
+    fn seek_child_mut(&mut self, key: u8) -> Option<&mut Arc<VersionedNode<P, V>>> {
+        match &mut self.content {
+            VersionedContent::Node4(km) => km.seek_child_mut(key),
+            VersionedContent::Node16(km) => km.seek_child_mut(key),
+            VersionedContent::Node48(km) => km.seek_child_mut(key),
+            VersionedContent::Node256(km) => km.seek_child_mut(key),
             VersionedContent::Empty => None,
         }
     }
@@ -1833,6 +1955,27 @@ where
         }
     }
 
+    fn get_iterate_mut_cow_ready<'a>(
+        cur_node: &'a mut Arc<VersionedNode<KeyType::PartialType, ValueType>>,
+        key: &KeyType,
+        depth: usize,
+    ) -> Option<&'a mut ValueType> {
+        let cur_node = Arc::get_mut(cur_node).expect("CoW path should be uniquely owned");
+        let prefix_common_match = cur_node.prefix.prefix_length_key(key, depth);
+        if prefix_common_match != cur_node.prefix.len() {
+            return None;
+        }
+
+        if cur_node.prefix.len() == key.length_at(depth) {
+            return cur_node.value.as_mut();
+        }
+
+        let k = key.at(depth + cur_node.prefix.len());
+        let prefix_len = cur_node.prefix.len();
+        let child = cur_node.seek_child_mut(k)?;
+        Self::get_iterate_mut_cow_ready(child, key, depth + prefix_len)
+    }
+
     fn prefix_match_for_each_impl<'a, F>(
         cur_node: &'a VersionedNode<KeyType::PartialType, ValueType>,
         key: &KeyType,
@@ -2234,6 +2377,33 @@ where
         }
     }
 
+    fn find_prefix_subtree_node<'a>(
+        cur_node: &'a VersionedNode<KeyType::PartialType, ValueType>,
+        prefix: &KeyType,
+    ) -> Option<&'a VersionedNode<KeyType::PartialType, ValueType>> {
+        let mut cur_node = cur_node;
+        let mut depth = 0;
+
+        loop {
+            let prefix_common_match = cur_node.prefix.prefix_length_key(prefix, depth);
+            if prefix_common_match != cur_node.prefix.len() {
+                if prefix_common_match == prefix.length_at(depth) {
+                    return Some(cur_node);
+                }
+                return None;
+            }
+
+            if cur_node.prefix.len() == prefix.length_at(depth) {
+                return Some(cur_node);
+            }
+
+            let key = prefix.at(depth + cur_node.prefix.len());
+            depth += cur_node.prefix.len();
+
+            cur_node = cur_node.seek_child(key)?.as_ref();
+        }
+    }
+
     fn find_prefix_subtree_view<'a>(
         cur_node: &'a VersionedNode<KeyType::PartialType, ValueType>,
         prefix: &KeyType,
@@ -2270,6 +2440,40 @@ where
                 cur_len += segment.len();
             }
         }
+    }
+
+    fn cow_path_to_key(
+        cur_node: Arc<VersionedNode<KeyType::PartialType, ValueType>>,
+        key: &KeyType,
+        depth: usize,
+        version: u64,
+    ) -> Option<Arc<VersionedNode<KeyType::PartialType, ValueType>>> {
+        let prefix_common_match = cur_node.prefix.prefix_length_key(key, depth);
+        if prefix_common_match != cur_node.prefix.len() {
+            return None;
+        }
+
+        let new_node = Self::ensure_cow_node(cur_node, version);
+        let mut new_node = match Arc::try_unwrap(new_node) {
+            Ok(owned) => owned,
+            Err(_) => panic!("ensure_cow_node should have given us exclusive ownership"),
+        };
+
+        if new_node.prefix.len() == key.length_at(depth) {
+            new_node.value.as_ref()?;
+            return Some(Arc::new(new_node));
+        }
+
+        if new_node.is_leaf() {
+            return None;
+        }
+
+        let key_byte = key.at(depth + new_node.prefix.len());
+        let prefix_len = new_node.prefix.len();
+        let child = new_node.delete_child(key_byte)?;
+        let new_child = Self::cow_path_to_key(child, key, depth + prefix_len, version)?;
+        new_node.add_child(key_byte, new_child);
+        Some(Arc::new(new_node))
     }
 
     /// Copy-on-write helper: returns the node if it's already the right version,
@@ -2493,8 +2697,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::VisitControl;
     use crate::keys::{array_key::ArrayKey, overflow_key::OverflowKey};
     use proptest::prelude::*;
+    use std::collections::BTreeSet;
     use std::mem::size_of;
 
     type DenseSequentialKey = OverflowKey<8, 4>;
@@ -3638,6 +3844,72 @@ mod tests {
         });
 
         assert_eq!(values, vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn prefix_values_for_each_supports_values_only_prefix_scans() {
+        let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, usize>::new();
+        for symbol in 0..5 {
+            tree.insert_k(&cache_key(10, symbol), symbol as usize);
+        }
+        for symbol in 0..3 {
+            tree.insert_k(&cache_key(11, symbol), 100 + symbol as usize);
+        }
+
+        let mut values = Vec::new();
+        tree.prefix_values_for_each_k(&obj_prefix(10), |value| values.push(*value));
+        assert_eq!(values, vec![0, 1, 2, 3, 4]);
+
+        let mut no_match_count = 0;
+        tree.prefix_values_for_each_k(&obj_prefix(12), |_| no_match_count += 1);
+        assert_eq!(no_match_count, 0);
+    }
+
+    #[test]
+    fn try_prefix_values_for_each_stops_and_propagates_errors() {
+        let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, usize>::new();
+        for symbol in 0..5 {
+            tree.insert_k(&cache_key(10, symbol), symbol as usize);
+        }
+
+        let mut stopped = Vec::new();
+        let stop_result: Result<(), &str> =
+            tree.try_prefix_values_for_each_k(&obj_prefix(10), |value| {
+                stopped.push(*value);
+                Ok(if *value == 2 {
+                    VisitControl::Stop
+                } else {
+                    VisitControl::Continue
+                })
+            });
+        assert_eq!(stop_result, Ok(()));
+        assert_eq!(stopped, vec![0, 1, 2]);
+
+        let mut errored = Vec::new();
+        let error_result = tree.try_prefix_values_for_each_k(&obj_prefix(10), |value| {
+            errored.push(*value);
+            if *value == 3 {
+                Err("boom")
+            } else {
+                Ok(VisitControl::Continue)
+            }
+        });
+        assert_eq!(error_result, Err("boom"));
+        assert_eq!(errored, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn get_mut_k_updates_bucket_without_mutating_snapshot() {
+        let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, BTreeSet<usize>>::new();
+        let key = cache_key(10, 2);
+        tree.insert_k(&key, BTreeSet::from([1, 2]));
+
+        let snapshot = tree.snapshot();
+        tree.get_mut_k(&key).expect("bucket should exist").insert(3);
+
+        assert_eq!(tree.get_k(&key).cloned(), Some(BTreeSet::from([1, 2, 3])));
+        assert_eq!(snapshot.get_k(&key).cloned(), Some(BTreeSet::from([1, 2])));
+        assert_eq!(tree.get_mut_k(&cache_key(10, 3)), None);
     }
 
     #[test]

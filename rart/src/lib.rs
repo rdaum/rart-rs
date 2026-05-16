@@ -77,6 +77,13 @@ pub mod stats;
 pub mod tree;
 pub mod versioned_tree;
 
+/// Controls whether callback-based traversal should continue visiting entries.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VisitControl {
+    Continue,
+    Stop,
+}
+
 // Re-export main types for convenience
 pub use iter::LendingKeyView;
 pub use keys::{KeyTrait, array_key::ArrayKey, overflow_key::OverflowKey, vector_key::VectorKey};

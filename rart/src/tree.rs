@@ -7,6 +7,7 @@ use std::cmp::Ordering;
 use std::cmp::min;
 use std::ops::RangeBounds;
 
+use crate::VisitControl;
 use crate::iter::{Iter, LendingIterInner, LendingKeyView, PrefixMatchIter, ValuesIter};
 use crate::keys::KeyTrait;
 use crate::node::{DefaultNode, Node};
@@ -599,6 +600,79 @@ where
         );
     }
 
+    /// Visit only values whose keys start with `prefix`.
+    ///
+    /// This avoids owned key reconstruction and lending key-view construction for
+    /// each visited entry.
+    #[inline]
+    pub fn prefix_values_for_each<Key, F>(&self, prefix: Key, on_each: F)
+    where
+        Key: Into<KeyType>,
+        F: FnMut(&ValueType),
+    {
+        self.prefix_values_for_each_k(&prefix.into(), on_each)
+    }
+
+    /// Visit only values whose keys start with `prefix`.
+    ///
+    /// This avoids owned key reconstruction and lending key-view construction for
+    /// each visited entry.
+    pub fn prefix_values_for_each_k<F>(&self, prefix: &KeyType, mut on_each: F)
+    where
+        F: FnMut(&ValueType),
+    {
+        let result: Result<(), std::convert::Infallible> =
+            self.try_prefix_values_for_each_k(prefix, |value| {
+                on_each(value);
+                Ok(VisitControl::Continue)
+            });
+        match result {
+            Ok(()) => {}
+            Err(never) => match never {},
+        }
+    }
+
+    /// Fallibly visit only values whose keys start with `prefix`.
+    ///
+    /// Returning [`VisitControl::Stop`] stops traversal immediately. Returning
+    /// `Err` propagates that error without visiting more entries.
+    #[inline]
+    pub fn try_prefix_values_for_each<Key, E, F>(&self, prefix: Key, on_each: F) -> Result<(), E>
+    where
+        Key: Into<KeyType>,
+        F: FnMut(&ValueType) -> Result<VisitControl, E>,
+    {
+        self.try_prefix_values_for_each_k(&prefix.into(), on_each)
+    }
+
+    /// Fallibly visit only values whose keys start with `prefix`.
+    ///
+    /// Returning [`VisitControl::Stop`] stops traversal immediately. Returning
+    /// `Err` propagates that error without visiting more entries.
+    pub fn try_prefix_values_for_each_k<E, F>(
+        &self,
+        prefix: &KeyType,
+        mut on_each: F,
+    ) -> Result<(), E>
+    where
+        F: FnMut(&ValueType) -> Result<VisitControl, E>,
+    {
+        let Some(root) = self.root.as_ref() else {
+            return Ok(());
+        };
+        let Some(subtree_root) = AdaptiveRadixTree::find_prefix_subtree_node(root, prefix) else {
+            return Ok(());
+        };
+
+        for value in ValuesIter::new(Some(subtree_root)) {
+            if on_each(value)? == VisitControl::Stop {
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
     /// Visit key-value pairs within a specified range using a lending borrowed key view.
     pub fn for_each_range_view<R, F>(&self, range: R, on_each: F)
     where
@@ -1019,6 +1093,33 @@ where
             let child = cur_node.seek_child(k)?;
             cur_node = child;
             cur_key.extend_from_slice(cur_node.prefix.as_ref());
+        }
+    }
+
+    fn find_prefix_subtree_node<'a>(
+        cur_node: &'a DefaultNode<KeyType::PartialType, ValueType>,
+        prefix: &KeyType,
+    ) -> Option<&'a DefaultNode<KeyType::PartialType, ValueType>> {
+        let mut cur_node = cur_node;
+        let mut depth = 0;
+
+        loop {
+            let prefix_common_match = cur_node.prefix.prefix_length_key(prefix, depth);
+            if prefix_common_match != cur_node.prefix.len() {
+                if prefix_common_match == prefix.length_at(depth) {
+                    return Some(cur_node);
+                }
+                return None;
+            }
+
+            if cur_node.prefix.len() == prefix.length_at(depth) {
+                return Some(cur_node);
+            }
+
+            let k = prefix.at(depth + cur_node.prefix.len());
+            depth += cur_node.prefix.len();
+
+            cur_node = cur_node.seek_child(k)?;
         }
     }
 
@@ -1571,6 +1672,7 @@ mod tests {
 
     use proptest::prelude::*;
 
+    use crate::VisitControl;
     use crate::keys::KeyTrait;
     use crate::keys::array_key::ArrayKey;
     use crate::keys::vector_key::VectorKey;
@@ -2366,6 +2468,63 @@ mod tests {
                 ("alpine".to_string(), 4),
             ]
         );
+    }
+
+    #[test]
+    fn prefix_values_for_each_visits_sorted_prefix_values() {
+        let mut tree = AdaptiveRadixTree::<VectorKey, i32>::new();
+        tree.insert_k(&VectorKey::new_from_slice(b"alpha1"), 1);
+        tree.insert_k(&VectorKey::new_from_slice(b"alpha2"), 2);
+        tree.insert_k(&VectorKey::new_from_slice(b"alphabet"), 3);
+        tree.insert_k(&VectorKey::new_from_slice(b"alpine"), 4);
+        tree.insert_k(&VectorKey::new_from_slice(b"beta"), 5);
+
+        let mut got = Vec::new();
+        tree.prefix_values_for_each_k(&VectorKey::new_from_slice(b"alp"), |value| {
+            got.push(*value);
+        });
+        assert_eq!(got, vec![1, 2, 3, 4]);
+
+        let mut no_match_count = 0;
+        tree.prefix_values_for_each_k(&VectorKey::new_from_slice(b"zzz"), |_| {
+            no_match_count += 1;
+        });
+        assert_eq!(no_match_count, 0);
+    }
+
+    #[test]
+    fn try_prefix_values_for_each_stops_and_propagates_errors() {
+        let mut tree = AdaptiveRadixTree::<VectorKey, i32>::new();
+        tree.insert_k(&VectorKey::new_from_slice(b"alpha1"), 1);
+        tree.insert_k(&VectorKey::new_from_slice(b"alpha2"), 2);
+        tree.insert_k(&VectorKey::new_from_slice(b"alphabet"), 3);
+        tree.insert_k(&VectorKey::new_from_slice(b"alpine"), 4);
+
+        let mut stopped = Vec::new();
+        let stop_result: Result<(), &str> =
+            tree.try_prefix_values_for_each_k(&VectorKey::new_from_slice(b"alp"), |value| {
+                stopped.push(*value);
+                Ok(if *value == 2 {
+                    VisitControl::Stop
+                } else {
+                    VisitControl::Continue
+                })
+            });
+        assert_eq!(stop_result, Ok(()));
+        assert_eq!(stopped, vec![1, 2]);
+
+        let mut errored = Vec::new();
+        let error_result =
+            tree.try_prefix_values_for_each_k(&VectorKey::new_from_slice(b"alp"), |value| {
+                errored.push(*value);
+                if *value == 3 {
+                    Err("boom")
+                } else {
+                    Ok(VisitControl::Continue)
+                }
+            });
+        assert_eq!(error_result, Err("boom"));
+        assert_eq!(errored, vec![1, 2, 3]);
     }
 
     #[test]

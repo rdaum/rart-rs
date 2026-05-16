@@ -6,6 +6,16 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Values-only prefix traversal APIs for scanning matching subtrees without key reconstruction:
+  - `prefix_values_for_each` / `prefix_values_for_each_k` on `AdaptiveRadixTree`
+  - `try_prefix_values_for_each` / `try_prefix_values_for_each_k` on `AdaptiveRadixTree`
+  - `prefix_values_for_each` / `prefix_values_for_each_k` on `VersionedAdaptiveRadixTree`
+  - `try_prefix_values_for_each` / `try_prefix_values_for_each_k` on
+    `VersionedAdaptiveRadixTree`
+- `VisitControl` for callback traversal early-stop control.
+- `get_mut` / `get_mut_k` on `VersionedAdaptiveRadixTree` for CoW-aware mutable value lookup that
+  preserves snapshot isolation.
+
 ### Changed
 
 ### Fixed
