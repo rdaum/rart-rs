@@ -84,6 +84,19 @@ pub enum VisitControl {
     Stop,
 }
 
+/// The value slot presented to callback-based mutation APIs.
+pub enum Slot<'a, V> {
+    Vacant,
+    Occupied(&'a mut V),
+}
+
+/// The action returned from callback-based mutation APIs.
+pub enum SlotUpdate<V> {
+    Keep,
+    Remove,
+    Insert(V),
+}
+
 // Re-export main types for convenience
 pub use iter::LendingKeyView;
 pub use keys::{

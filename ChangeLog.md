@@ -12,6 +12,32 @@ All notable changes to this project are documented in this file.
 
 ### Performance
 
+## [0.10.0] - 2026-05-16
+
+### Added
+
+- Slot-based mutation APIs for single-key updates:
+  - `Slot` and `SlotUpdate`
+  - `delete` / `delete_k` on `AdaptiveRadixTree`
+  - `update` / `update_k` on `AdaptiveRadixTree`
+  - `try_update` / `try_update_k` on `AdaptiveRadixTree`
+  - `delete` / `delete_k` on `VersionedAdaptiveRadixTree`
+  - `update` / `update_k` on `VersionedAdaptiveRadixTree`
+  - `try_update` / `try_update_k` on `VersionedAdaptiveRadixTree`
+- Regression coverage for discard deletes, slot updates, fallible update rollback, and versioned
+  snapshot isolation during delete/update mutations.
+
+### Changed
+
+### Fixed
+
+### Performance
+
+- `VersionedAdaptiveRadixTree::delete_k` removes values without cloning or returning the discarded
+  value.
+- `VersionedAdaptiveRadixTree::update_k` applies insert, mutate, and remove decisions through a
+  single copy-on-write traversal.
+
 ## [0.9.0] - 2026-05-16
 
 ### Added

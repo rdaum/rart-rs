@@ -5,15 +5,16 @@
 
 use std::cmp::Ordering;
 use std::cmp::min;
+use std::convert::Infallible;
 use std::ops::RangeBounds;
 
-use crate::VisitControl;
 use crate::iter::{Iter, LendingIterInner, LendingKeyView, PrefixMatchIter, ValuesIter};
 use crate::keys::KeyTrait;
 use crate::node::{DefaultNode, Node};
 use crate::partials::Partial;
 use crate::range::Range;
 use crate::stats::{TreeStats, TreeStatsTrait, update_tree_stats};
+use crate::{Slot, SlotUpdate, VisitControl};
 
 /// An Adaptive Radix Tree (ART) - a high-performance, memory-efficient trie data structure.
 ///
@@ -82,6 +83,12 @@ where
 }
 
 type PrefixSubtreeView<'a, P, V> = (&'a DefaultNode<P, V>, Vec<&'a [u8]>, usize);
+
+enum UpdateRecurseResult {
+    Unchanged,
+    Changed,
+    RemoveCurrent,
+}
 
 impl<KeyType: KeyTrait, ValueType> Default for AdaptiveRadixTree<KeyType, ValueType> {
     fn default() -> Self {
@@ -455,6 +462,74 @@ where
             self.root = None;
         }
         result
+    }
+
+    /// Delete a key-value pair, returning whether the key existed.
+    ///
+    /// This is the discard-value counterpart to [`Self::remove`].
+    #[inline]
+    pub fn delete<KV>(&mut self, key: KV) -> bool
+    where
+        KV: Into<KeyType>,
+    {
+        self.delete_k(&key.into())
+    }
+
+    /// Delete a key-value pair by key reference, returning whether the key existed.
+    ///
+    /// This is the discard-value counterpart to [`Self::remove_k`].
+    #[inline]
+    pub fn delete_k(&mut self, key: &KeyType) -> bool {
+        self.remove_k(key).is_some()
+    }
+
+    /// Update a value slot by key.
+    ///
+    /// The callback is called with either a vacant slot or a mutable reference
+    /// to the occupied value. Returning [`SlotUpdate::Insert`] fills or replaces
+    /// the slot; [`SlotUpdate::Remove`] removes it; [`SlotUpdate::Keep`] leaves a
+    /// vacant slot unchanged and treats an occupied mutable visit as changed.
+    #[inline]
+    pub fn update<KV, F>(&mut self, key: KV, update: F) -> bool
+    where
+        KV: Into<KeyType>,
+        F: FnOnce(Slot<'_, ValueType>) -> SlotUpdate<ValueType>,
+    {
+        self.update_k(&key.into(), update)
+    }
+
+    /// Update a value slot by key reference.
+    pub fn update_k<F>(&mut self, key: &KeyType, update: F) -> bool
+    where
+        F: FnOnce(Slot<'_, ValueType>) -> SlotUpdate<ValueType>,
+    {
+        match self.try_update_k_inner(key, |slot| Ok::<_, Infallible>(update(slot))) {
+            Ok(changed) => changed,
+            Err(never) => match never {},
+        }
+    }
+
+    /// Fallibly update a value slot by key.
+    #[inline]
+    pub fn try_update<KV, E, F>(&mut self, key: KV, update: F) -> Result<bool, E>
+    where
+        KV: Into<KeyType>,
+        ValueType: Clone,
+        F: FnOnce(Slot<'_, ValueType>) -> Result<SlotUpdate<ValueType>, E>,
+    {
+        self.try_update_k(&key.into(), update)
+    }
+
+    /// Fallibly update a value slot by key reference.
+    ///
+    /// If the callback returns an error after mutating an occupied value, the
+    /// original value is restored before the error is returned.
+    pub fn try_update_k<E, F>(&mut self, key: &KeyType, update: F) -> Result<bool, E>
+    where
+        ValueType: Clone,
+        F: FnOnce(Slot<'_, ValueType>) -> Result<SlotUpdate<ValueType>, E>,
+    {
+        self.try_update_k_rollback(key, update)
     }
 
     /// Create an iterator over all key-value pairs in the tree.
@@ -1636,6 +1711,380 @@ where
         result
     }
 
+    fn try_update_k_inner<E, F>(&mut self, key: &KeyType, update: F) -> Result<bool, E>
+    where
+        F: FnOnce(Slot<'_, ValueType>) -> Result<SlotUpdate<ValueType>, E>,
+    {
+        let mut update = Some(update);
+
+        let Some(root) = self.root.as_mut() else {
+            let action =
+                update
+                    .take()
+                    .expect("update callback should be called once")(Slot::Vacant)?;
+            return match action {
+                SlotUpdate::Insert(value) => {
+                    self.root = Some(DefaultNode::new_leaf(key.to_partial(0), value));
+                    Ok(true)
+                }
+                SlotUpdate::Keep | SlotUpdate::Remove => Ok(false),
+            };
+        };
+
+        let result = Self::try_update_recurse(root, key, 0, &mut update)?;
+        debug_assert!(update.is_none());
+
+        match result {
+            UpdateRecurseResult::Unchanged => Ok(false),
+            UpdateRecurseResult::Changed => Ok(true),
+            UpdateRecurseResult::RemoveCurrent => {
+                self.root = None;
+                Ok(true)
+            }
+        }
+    }
+
+    fn try_update_k_rollback<E, F>(&mut self, key: &KeyType, update: F) -> Result<bool, E>
+    where
+        ValueType: Clone,
+        F: FnOnce(Slot<'_, ValueType>) -> Result<SlotUpdate<ValueType>, E>,
+    {
+        let mut update = Some(update);
+
+        let Some(root) = self.root.as_mut() else {
+            let action =
+                update
+                    .take()
+                    .expect("update callback should be called once")(Slot::Vacant)?;
+            return match action {
+                SlotUpdate::Insert(value) => {
+                    self.root = Some(DefaultNode::new_leaf(key.to_partial(0), value));
+                    Ok(true)
+                }
+                SlotUpdate::Keep | SlotUpdate::Remove => Ok(false),
+            };
+        };
+
+        let result = Self::try_update_recurse_rollback(root, key, 0, &mut update)?;
+        debug_assert!(update.is_none());
+
+        match result {
+            UpdateRecurseResult::Unchanged => Ok(false),
+            UpdateRecurseResult::Changed => Ok(true),
+            UpdateRecurseResult::RemoveCurrent => {
+                self.root = None;
+                Ok(true)
+            }
+        }
+    }
+
+    fn vacant_update<E, F>(update: &mut Option<F>) -> Result<Option<ValueType>, E>
+    where
+        F: FnOnce(Slot<'_, ValueType>) -> Result<SlotUpdate<ValueType>, E>,
+    {
+        match update
+            .take()
+            .expect("update callback should be called once")(Slot::Vacant)?
+        {
+            SlotUpdate::Insert(value) => Ok(Some(value)),
+            SlotUpdate::Keep | SlotUpdate::Remove => Ok(None),
+        }
+    }
+
+    fn apply_occupied_update<E, F>(
+        node: &mut DefaultNode<KeyType::PartialType, ValueType>,
+        update: &mut Option<F>,
+    ) -> Result<UpdateRecurseResult, E>
+    where
+        F: FnOnce(Slot<'_, ValueType>) -> Result<SlotUpdate<ValueType>, E>,
+    {
+        let action = {
+            let value = node
+                .value
+                .as_mut()
+                .expect("occupied update requires an occupied slot");
+            update
+                .take()
+                .expect("update callback should be called once")(Slot::Occupied(value))?
+        };
+
+        Ok(match action {
+            SlotUpdate::Keep => UpdateRecurseResult::Changed,
+            SlotUpdate::Insert(value) => {
+                node.value = Some(value);
+                UpdateRecurseResult::Changed
+            }
+            SlotUpdate::Remove => {
+                node.value = None;
+                if node.num_children() == 0 {
+                    UpdateRecurseResult::RemoveCurrent
+                } else {
+                    UpdateRecurseResult::Changed
+                }
+            }
+        })
+    }
+
+    fn apply_occupied_update_rollback<E, F>(
+        node: &mut DefaultNode<KeyType::PartialType, ValueType>,
+        update: &mut Option<F>,
+    ) -> Result<UpdateRecurseResult, E>
+    where
+        ValueType: Clone,
+        F: FnOnce(Slot<'_, ValueType>) -> Result<SlotUpdate<ValueType>, E>,
+    {
+        let old_value = node
+            .value
+            .as_ref()
+            .expect("occupied update requires an occupied slot")
+            .clone();
+        let action = {
+            let value = node
+                .value
+                .as_mut()
+                .expect("occupied update requires an occupied slot");
+            update
+                .take()
+                .expect("update callback should be called once")(Slot::Occupied(value))
+        };
+
+        let action = match action {
+            Ok(action) => action,
+            Err(err) => {
+                node.value = Some(old_value);
+                return Err(err);
+            }
+        };
+
+        Ok(match action {
+            SlotUpdate::Keep => UpdateRecurseResult::Changed,
+            SlotUpdate::Insert(value) => {
+                node.value = Some(value);
+                UpdateRecurseResult::Changed
+            }
+            SlotUpdate::Remove => {
+                node.value = None;
+                if node.num_children() == 0 {
+                    UpdateRecurseResult::RemoveCurrent
+                } else {
+                    UpdateRecurseResult::Changed
+                }
+            }
+        })
+    }
+
+    fn try_update_recurse<E, F>(
+        cur_node: &mut DefaultNode<KeyType::PartialType, ValueType>,
+        key: &KeyType,
+        depth: usize,
+        update: &mut Option<F>,
+    ) -> Result<UpdateRecurseResult, E>
+    where
+        F: FnOnce(Slot<'_, ValueType>) -> Result<SlotUpdate<ValueType>, E>,
+    {
+        Self::try_update_recurse_with(cur_node, key, depth, update, false)
+    }
+
+    fn try_update_recurse_rollback<E, F>(
+        cur_node: &mut DefaultNode<KeyType::PartialType, ValueType>,
+        key: &KeyType,
+        depth: usize,
+        update: &mut Option<F>,
+    ) -> Result<UpdateRecurseResult, E>
+    where
+        ValueType: Clone,
+        F: FnOnce(Slot<'_, ValueType>) -> Result<SlotUpdate<ValueType>, E>,
+    {
+        Self::try_update_recurse_with_rollback(cur_node, key, depth, update)
+    }
+
+    fn try_update_recurse_with<E, F>(
+        cur_node: &mut DefaultNode<KeyType::PartialType, ValueType>,
+        key: &KeyType,
+        depth: usize,
+        update: &mut Option<F>,
+        _rollback: bool,
+    ) -> Result<UpdateRecurseResult, E>
+    where
+        F: FnOnce(Slot<'_, ValueType>) -> Result<SlotUpdate<ValueType>, E>,
+    {
+        let longest_common_prefix = cur_node.prefix.prefix_length_key(key, depth);
+        let is_prefix_match =
+            min(cur_node.prefix.len(), key.length_at(depth)) == longest_common_prefix;
+
+        if is_prefix_match && cur_node.prefix.len() == key.length_at(depth) {
+            if cur_node.value.is_some() {
+                return Self::apply_occupied_update(cur_node, update);
+            }
+            if let Some(value) = Self::vacant_update(update)? {
+                cur_node.value = Some(value);
+                return Ok(UpdateRecurseResult::Changed);
+            }
+            return Ok(UpdateRecurseResult::Unchanged);
+        }
+
+        if is_prefix_match && cur_node.prefix.len() > key.length_at(depth) {
+            let Some(value) = Self::vacant_update(update)? else {
+                return Ok(UpdateRecurseResult::Unchanged);
+            };
+            let new_prefix = cur_node.prefix.partial_after(longest_common_prefix);
+            let old_node_prefix = std::mem::replace(&mut cur_node.prefix, new_prefix);
+            let mut new_parent =
+                DefaultNode::new_inner(old_node_prefix.partial_before(longest_common_prefix));
+            new_parent.value = Some(value);
+            let edge = old_node_prefix.at(longest_common_prefix);
+            let replacement_current = std::mem::replace(cur_node, new_parent);
+            cur_node.add_child(edge, replacement_current);
+            return Ok(UpdateRecurseResult::Changed);
+        }
+
+        if !is_prefix_match {
+            let Some(value) = Self::vacant_update(update)? else {
+                return Ok(UpdateRecurseResult::Unchanged);
+            };
+            let new_prefix = cur_node.prefix.partial_after(longest_common_prefix);
+            let old_node_prefix = std::mem::replace(&mut cur_node.prefix, new_prefix);
+            let new_inner =
+                DefaultNode::new_inner(old_node_prefix.partial_before(longest_common_prefix));
+
+            let k1 = old_node_prefix.at(longest_common_prefix);
+            let k2 = key.at(depth + longest_common_prefix);
+
+            let replacement_current = std::mem::replace(cur_node, new_inner);
+            let new_leaf =
+                DefaultNode::new_leaf(key.to_partial(depth + longest_common_prefix), value);
+            cur_node.add_child(k1, replacement_current);
+            cur_node.add_child(k2, new_leaf);
+            return Ok(UpdateRecurseResult::Changed);
+        }
+
+        if cur_node.is_leaf() {
+            let Some(value) = Self::vacant_update(update)? else {
+                return Ok(UpdateRecurseResult::Unchanged);
+            };
+            let edge = key.at(depth + longest_common_prefix);
+            let new_leaf =
+                DefaultNode::new_leaf(key.to_partial(depth + longest_common_prefix), value);
+            cur_node.add_child(edge, new_leaf);
+            return Ok(UpdateRecurseResult::Changed);
+        }
+
+        let k = key.at(depth + longest_common_prefix);
+        let Some(child) = cur_node.seek_child_mut(k) else {
+            let Some(value) = Self::vacant_update(update)? else {
+                return Ok(UpdateRecurseResult::Unchanged);
+            };
+            let new_leaf =
+                DefaultNode::new_leaf(key.to_partial(depth + longest_common_prefix), value);
+            cur_node.add_child(k, new_leaf);
+            return Ok(UpdateRecurseResult::Changed);
+        };
+
+        let result = Self::try_update_recurse(child, key, depth + longest_common_prefix, update)?;
+        if matches!(result, UpdateRecurseResult::RemoveCurrent) {
+            let _deleted = cur_node.delete_child(k);
+            if cur_node.num_children() == 0 && cur_node.value().is_none() {
+                return Ok(UpdateRecurseResult::RemoveCurrent);
+            }
+            return Ok(UpdateRecurseResult::Changed);
+        }
+        Ok(result)
+    }
+
+    fn try_update_recurse_with_rollback<E, F>(
+        cur_node: &mut DefaultNode<KeyType::PartialType, ValueType>,
+        key: &KeyType,
+        depth: usize,
+        update: &mut Option<F>,
+    ) -> Result<UpdateRecurseResult, E>
+    where
+        ValueType: Clone,
+        F: FnOnce(Slot<'_, ValueType>) -> Result<SlotUpdate<ValueType>, E>,
+    {
+        let longest_common_prefix = cur_node.prefix.prefix_length_key(key, depth);
+        let is_prefix_match =
+            min(cur_node.prefix.len(), key.length_at(depth)) == longest_common_prefix;
+
+        if is_prefix_match && cur_node.prefix.len() == key.length_at(depth) {
+            if cur_node.value.is_some() {
+                return Self::apply_occupied_update_rollback(cur_node, update);
+            }
+            if let Some(value) = Self::vacant_update(update)? {
+                cur_node.value = Some(value);
+                return Ok(UpdateRecurseResult::Changed);
+            }
+            return Ok(UpdateRecurseResult::Unchanged);
+        }
+
+        if is_prefix_match && cur_node.prefix.len() > key.length_at(depth) {
+            let Some(value) = Self::vacant_update(update)? else {
+                return Ok(UpdateRecurseResult::Unchanged);
+            };
+            let new_prefix = cur_node.prefix.partial_after(longest_common_prefix);
+            let old_node_prefix = std::mem::replace(&mut cur_node.prefix, new_prefix);
+            let mut new_parent =
+                DefaultNode::new_inner(old_node_prefix.partial_before(longest_common_prefix));
+            new_parent.value = Some(value);
+            let edge = old_node_prefix.at(longest_common_prefix);
+            let replacement_current = std::mem::replace(cur_node, new_parent);
+            cur_node.add_child(edge, replacement_current);
+            return Ok(UpdateRecurseResult::Changed);
+        }
+
+        if !is_prefix_match {
+            let Some(value) = Self::vacant_update(update)? else {
+                return Ok(UpdateRecurseResult::Unchanged);
+            };
+            let new_prefix = cur_node.prefix.partial_after(longest_common_prefix);
+            let old_node_prefix = std::mem::replace(&mut cur_node.prefix, new_prefix);
+            let new_inner =
+                DefaultNode::new_inner(old_node_prefix.partial_before(longest_common_prefix));
+
+            let k1 = old_node_prefix.at(longest_common_prefix);
+            let k2 = key.at(depth + longest_common_prefix);
+
+            let replacement_current = std::mem::replace(cur_node, new_inner);
+            let new_leaf =
+                DefaultNode::new_leaf(key.to_partial(depth + longest_common_prefix), value);
+            cur_node.add_child(k1, replacement_current);
+            cur_node.add_child(k2, new_leaf);
+            return Ok(UpdateRecurseResult::Changed);
+        }
+
+        if cur_node.is_leaf() {
+            let Some(value) = Self::vacant_update(update)? else {
+                return Ok(UpdateRecurseResult::Unchanged);
+            };
+            let edge = key.at(depth + longest_common_prefix);
+            let new_leaf =
+                DefaultNode::new_leaf(key.to_partial(depth + longest_common_prefix), value);
+            cur_node.add_child(edge, new_leaf);
+            return Ok(UpdateRecurseResult::Changed);
+        }
+
+        let k = key.at(depth + longest_common_prefix);
+        let Some(child) = cur_node.seek_child_mut(k) else {
+            let Some(value) = Self::vacant_update(update)? else {
+                return Ok(UpdateRecurseResult::Unchanged);
+            };
+            let new_leaf =
+                DefaultNode::new_leaf(key.to_partial(depth + longest_common_prefix), value);
+            cur_node.add_child(k, new_leaf);
+            return Ok(UpdateRecurseResult::Changed);
+        };
+
+        let result =
+            Self::try_update_recurse_rollback(child, key, depth + longest_common_prefix, update)?;
+        if matches!(result, UpdateRecurseResult::RemoveCurrent) {
+            let _deleted = cur_node.delete_child(k);
+            if cur_node.num_children() == 0 && cur_node.value().is_none() {
+                return Ok(UpdateRecurseResult::RemoveCurrent);
+            }
+            return Ok(UpdateRecurseResult::Changed);
+        }
+        Ok(result)
+    }
+
     fn get_tree_stats_recurse(
         node: &DefaultNode<KeyType::PartialType, ValueType>,
         tree_stats: &mut TreeStats,
@@ -1672,12 +2121,12 @@ mod tests {
 
     use proptest::prelude::*;
 
-    use crate::VisitControl;
     use crate::keys::KeyTrait;
     use crate::keys::array_key::ArrayKey;
     use crate::keys::vector_key::VectorKey;
     use crate::partials::array_partial::ArrPartial;
     use crate::tree::AdaptiveRadixTree;
+    use crate::{Slot, SlotUpdate, VisitControl};
 
     fn collect_items(tree: &AdaptiveRadixTree<ArrayKey<16>, u64>) -> Vec<(Vec<u8>, u64)> {
         tree.iter()
@@ -1802,6 +2251,99 @@ mod tests {
 
         let values: Vec<_> = tree.values_iter().copied().collect();
         assert_eq!(values, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn delete_k_reports_absent_and_removes_leaf_root() {
+        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+        let missing = ArrayKey::new_from_slice(b"missing");
+        assert!(!tree.delete_k(&missing));
+
+        let key = ArrayKey::new_from_slice(b"leaf");
+        tree.insert_k(&key, 7);
+        assert!(tree.delete_k(&key));
+        assert!(tree.is_empty());
+        assert!(!tree.delete_k(&key));
+    }
+
+    #[test]
+    fn delete_k_removes_inner_value_without_losing_children() {
+        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+        let prefix = ArrayKey::new_from_slice(b"a");
+        let child = ArrayKey::new_from_slice(b"ab");
+        tree.insert_k(&prefix, 1);
+        tree.insert_k(&child, 2);
+
+        assert!(tree.delete_k(&prefix));
+        assert_eq!(tree.get_k(&prefix), None);
+        assert_eq!(tree.get_k(&child), Some(&2));
+    }
+
+    #[test]
+    fn delete_k_preserves_siblings_and_compressed_prefixes() {
+        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+        let abc = ArrayKey::new_from_slice(b"abc");
+        let abd = ArrayKey::new_from_slice(b"abd");
+        let xyz = ArrayKey::new_from_slice(b"xyz");
+        tree.insert_k(&abc, 1);
+        tree.insert_k(&abd, 2);
+        tree.insert_k(&xyz, 3);
+
+        assert!(tree.delete_k(&abc));
+        assert_eq!(tree.get_k(&abc), None);
+        assert_eq!(tree.get_k(&abd), Some(&2));
+        assert_eq!(tree.get_k(&xyz), Some(&3));
+    }
+
+    #[test]
+    fn update_k_inserts_mutates_removes_and_reports_unchanged() {
+        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+        let key = ArrayKey::new_from_slice(b"bucket");
+
+        assert!(!tree.update_k(&key, |slot| {
+            assert!(matches!(slot, Slot::Vacant));
+            SlotUpdate::Keep
+        }));
+        assert!(tree.update_k(&key, |slot| {
+            assert!(matches!(slot, Slot::Vacant));
+            SlotUpdate::Insert(10)
+        }));
+        assert_eq!(tree.get_k(&key), Some(&10));
+
+        assert!(tree.update_k(&key, |slot| match slot {
+            Slot::Occupied(value) => {
+                *value += 5;
+                SlotUpdate::Keep
+            }
+            Slot::Vacant => panic!("slot should be occupied"),
+        }));
+        assert_eq!(tree.get_k(&key), Some(&15));
+
+        assert!(tree.update_k(&key, |slot| match slot {
+            Slot::Occupied(_) => SlotUpdate::Remove,
+            Slot::Vacant => panic!("slot should be occupied"),
+        }));
+        assert_eq!(tree.get_k(&key), None);
+    }
+
+    #[test]
+    fn try_update_k_rolls_back_occupied_value_on_error() {
+        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+        let key = ArrayKey::new_from_slice(b"err");
+        tree.insert_k(&key, 1);
+
+        let result = tree.try_update_k(&key, |slot| -> Result<SlotUpdate<i32>, &'static str> {
+            match slot {
+                Slot::Occupied(value) => {
+                    *value = 99;
+                    Err("stop")
+                }
+                Slot::Vacant => panic!("slot should be occupied"),
+            }
+        });
+
+        assert_eq!(result, Err("stop"));
+        assert_eq!(tree.get_k(&key), Some(&1));
     }
 
     static PANIC_ON_FOUR_CMP: AtomicBool = AtomicBool::new(false);

@@ -7,7 +7,6 @@ use std::cmp::min;
 use std::collections::Bound;
 use std::ops::RangeBounds;
 
-use crate::VisitControl;
 use crate::iter::LendingKeyView;
 use crate::keys::KeyTrait;
 use crate::mapping::{
@@ -18,6 +17,7 @@ use crate::mapping::{
 };
 use crate::partials::Partial;
 use crate::utils::bitset::Bitset64;
+use crate::{Slot, SlotUpdate, VisitControl};
 
 #[cfg(not(feature = "triomphe-arc"))]
 use std::sync::Arc;
@@ -26,6 +26,8 @@ use triomphe::Arc;
 
 /// Type alias for remove operation result to reduce type complexity
 type RemoveResult<P, V> = (Option<Arc<VersionedNode<P, V>>>, V);
+type DeleteResult<P, V> = Option<Arc<VersionedNode<P, V>>>;
+type UpdateResult<P, V> = (Option<Arc<VersionedNode<P, V>>>, bool);
 type VersionedPrefixSubtreeView<'a, P, V> = (&'a VersionedNode<P, V>, Vec<&'a [u8]>, usize);
 
 type VersionedIterEntry<'a, P, V> = (u8, &'a VersionedNode<P, V>);
@@ -841,6 +843,161 @@ where
         }
 
         Some(removed_value)
+    }
+
+    /// Delete a key-value pair, returning whether the key existed.
+    ///
+    /// This is the discard-value counterpart to [`Self::remove`]. It preserves
+    /// snapshot isolation without cloning the removed value just to discard it.
+    #[inline]
+    pub fn delete<KV>(&mut self, key: KV) -> bool
+    where
+        KV: Into<KeyType>,
+    {
+        self.delete_k(&key.into())
+    }
+
+    /// Delete a key-value pair by key reference, returning whether the key existed.
+    pub fn delete_k(&mut self, key: &KeyType) -> bool {
+        if self.get_k(key).is_none() {
+            return false;
+        }
+
+        self.version += 1;
+        let root = self
+            .root
+            .take()
+            .expect("non-empty tree checked before delete mutation");
+
+        if root.is_leaf() {
+            self.root = None;
+            return true;
+        }
+
+        if root.prefix.len() == key.length_at(0) {
+            let new_root = Self::ensure_cow_node(root, self.version);
+            let mut new_root = match Arc::try_unwrap(new_root) {
+                Ok(owned) => owned,
+                Err(_) => panic!("ensure_cow_node should have given us exclusive ownership"),
+            };
+            new_root.value = None;
+            if new_root.num_children() == 0 {
+                self.root = None;
+            } else {
+                self.root = Some(Arc::new(new_root));
+            }
+            return true;
+        }
+
+        let new_root = Self::delete_recurse(root, key, 0, self.version)
+            .expect("prechecked key should be deletable");
+        self.root = new_root.filter(|root| {
+            !(root.is_inner() && root.num_children() == 0 && root.value().is_none())
+        });
+        true
+    }
+
+    /// Update a value slot by key.
+    #[inline]
+    pub fn update<KV, F>(&mut self, key: KV, update: F) -> bool
+    where
+        KV: Into<KeyType>,
+        F: FnOnce(Slot<'_, ValueType>) -> SlotUpdate<ValueType>,
+    {
+        self.update_k(&key.into(), update)
+    }
+
+    /// Update a value slot by key reference.
+    pub fn update_k<F>(&mut self, key: &KeyType, update: F) -> bool
+    where
+        F: FnOnce(Slot<'_, ValueType>) -> SlotUpdate<ValueType>,
+    {
+        let mut update = Some(update);
+        let next_version = self.version + 1;
+
+        let Some(root) = self.root.take() else {
+            let action =
+                update
+                    .take()
+                    .expect("update callback should be called once")(Slot::Vacant);
+            return match action {
+                SlotUpdate::Insert(value) => {
+                    self.version = next_version;
+                    self.root = Some(Arc::new(VersionedNode::new_leaf(
+                        key.to_partial(0),
+                        value,
+                        self.version,
+                    )));
+                    true
+                }
+                SlotUpdate::Keep | SlotUpdate::Remove => false,
+            };
+        };
+
+        let (new_root, changed) = Self::update_recurse(root, key, 0, next_version, &mut update);
+        debug_assert!(update.is_none());
+        if changed {
+            self.version = next_version;
+        }
+        self.root = new_root;
+        changed
+    }
+
+    /// Fallibly update a value slot by key.
+    #[inline]
+    pub fn try_update<KV, E, F>(&mut self, key: KV, update: F) -> Result<bool, E>
+    where
+        KV: Into<KeyType>,
+        F: FnOnce(Slot<'_, ValueType>) -> Result<SlotUpdate<ValueType>, E>,
+    {
+        self.try_update_k(&key.into(), update)
+    }
+
+    /// Fallibly update a value slot by key reference.
+    ///
+    /// If the callback returns an error after mutating an occupied value, the
+    /// original value is restored before the error is returned.
+    pub fn try_update_k<E, F>(&mut self, key: &KeyType, update: F) -> Result<bool, E>
+    where
+        F: FnOnce(Slot<'_, ValueType>) -> Result<SlotUpdate<ValueType>, E>,
+    {
+        let Some(old_value) = self.get_k(key).cloned() else {
+            return match update(Slot::Vacant)? {
+                SlotUpdate::Insert(value) => {
+                    self.insert_k(key, value);
+                    Ok(true)
+                }
+                SlotUpdate::Keep | SlotUpdate::Remove => Ok(false),
+            };
+        };
+
+        let action = {
+            let value = self
+                .get_mut_k(key)
+                .expect("prechecked key should remain occupied");
+            update(Slot::Occupied(value))
+        };
+
+        let action = match action {
+            Ok(action) => action,
+            Err(err) => {
+                *self
+                    .get_mut_k(key)
+                    .expect("prechecked key should remain occupied") = old_value;
+                return Err(err);
+            }
+        };
+
+        match action {
+            SlotUpdate::Keep => Ok(true),
+            SlotUpdate::Remove => Ok(self.delete_k(key)),
+            SlotUpdate::Insert(value) => {
+                *self
+                    .get_mut_k(key)
+                    .expect("prechecked key should remain occupied") = value;
+                Ok(true)
+            }
+        }
     }
 
     /// Check if the tree is empty.
@@ -2692,13 +2849,254 @@ where
 
         Some((Some(Arc::new(new_node_mut)), removed_value))
     }
+
+    /// Delete with copy-on-write semantics without returning the removed value.
+    fn delete_recurse(
+        cur_node: Arc<VersionedNode<KeyType::PartialType, ValueType>>,
+        key: &KeyType,
+        depth: usize,
+        version: u64,
+    ) -> Option<DeleteResult<KeyType::PartialType, ValueType>> {
+        let prefix_common_match = cur_node.prefix.prefix_length_key(key, depth);
+        if prefix_common_match != cur_node.prefix.len() {
+            return None;
+        }
+
+        if cur_node.prefix.len() == key.length_at(depth) {
+            if cur_node.is_leaf() {
+                return cur_node.value().is_some().then_some(None);
+            }
+
+            let new_node = Self::ensure_cow_node(cur_node, version);
+            let mut new_node = match Arc::try_unwrap(new_node) {
+                Ok(owned) => owned,
+                Err(_) => panic!("ensure_cow_node should have given us exclusive ownership"),
+            };
+            new_node.value.as_ref()?;
+            new_node.value = None;
+            if new_node.num_children() == 0 {
+                return Some(None);
+            }
+            return Some(Some(Arc::new(new_node)));
+        }
+
+        if cur_node.is_leaf() {
+            return None;
+        }
+
+        let k = key.at(depth + cur_node.prefix.len());
+        let prefix_len = cur_node.prefix.len();
+
+        let new_node = Self::ensure_cow_node(cur_node, version);
+        let mut new_node_mut = match Arc::try_unwrap(new_node) {
+            Ok(owned) => owned,
+            Err(_) => panic!("ensure_cow_node should have given us exclusive ownership"),
+        };
+
+        let child = new_node_mut.delete_child(k)?;
+        let new_child_opt = Self::delete_recurse(child, key, depth + prefix_len, version)
+            .expect("prechecked key should be deletable");
+
+        if let Some(new_child) = new_child_opt {
+            new_node_mut.add_child(k, new_child);
+        }
+
+        if new_node_mut.num_children() == 0 && new_node_mut.value.is_none() {
+            return Some(None);
+        }
+
+        Some(Some(Arc::new(new_node_mut)))
+    }
+
+    fn versioned_vacant_update<F>(update: &mut Option<F>) -> Option<ValueType>
+    where
+        F: FnOnce(Slot<'_, ValueType>) -> SlotUpdate<ValueType>,
+    {
+        match update
+            .take()
+            .expect("update callback should be called once")(Slot::Vacant)
+        {
+            SlotUpdate::Insert(value) => Some(value),
+            SlotUpdate::Keep | SlotUpdate::Remove => None,
+        }
+    }
+
+    /// Update with copy-on-write semantics.
+    /// Returns (new_node, changed).
+    fn update_recurse<F>(
+        cur_node: Arc<VersionedNode<KeyType::PartialType, ValueType>>,
+        key: &KeyType,
+        depth: usize,
+        version: u64,
+        update: &mut Option<F>,
+    ) -> UpdateResult<KeyType::PartialType, ValueType>
+    where
+        F: FnOnce(Slot<'_, ValueType>) -> SlotUpdate<ValueType>,
+    {
+        let longest_common_prefix = cur_node.prefix.prefix_length_key(key, depth);
+        let is_prefix_match =
+            min(cur_node.prefix.len(), key.length_at(depth)) == longest_common_prefix;
+
+        if is_prefix_match && cur_node.prefix.len() == key.length_at(depth) {
+            if cur_node.value().is_none() {
+                let Some(value) = Self::versioned_vacant_update(update) else {
+                    return (Some(cur_node), false);
+                };
+                let new_node = Self::ensure_cow_node(cur_node, version);
+                let mut new_node = match Arc::try_unwrap(new_node) {
+                    Ok(owned) => owned,
+                    Err(_) => panic!("ensure_cow_node should have given us exclusive ownership"),
+                };
+                new_node.value = Some(value);
+                return (Some(Arc::new(new_node)), true);
+            }
+
+            let new_node = Self::ensure_cow_node(cur_node, version);
+            let mut new_node = match Arc::try_unwrap(new_node) {
+                Ok(owned) => owned,
+                Err(_) => panic!("ensure_cow_node should have given us exclusive ownership"),
+            };
+
+            let action = {
+                let value = new_node
+                    .value
+                    .as_mut()
+                    .expect("occupied update requires an occupied slot");
+                let update = update
+                    .take()
+                    .expect("update callback should be called once");
+                update(Slot::Occupied(value))
+            };
+
+            match action {
+                SlotUpdate::Keep => (Some(Arc::new(new_node)), true),
+                SlotUpdate::Insert(value) => {
+                    new_node.value = Some(value);
+                    (Some(Arc::new(new_node)), true)
+                }
+                SlotUpdate::Remove => {
+                    new_node.value = None;
+                    if new_node.num_children() == 0 {
+                        (None, true)
+                    } else {
+                        (Some(Arc::new(new_node)), true)
+                    }
+                }
+            }
+        } else if is_prefix_match && cur_node.prefix.len() > key.length_at(depth) {
+            let Some(value) = Self::versioned_vacant_update(update) else {
+                return (Some(cur_node), false);
+            };
+            let mut existing_node = cur_node.cow_clone_inner(version);
+            let old_prefix = existing_node.prefix.clone();
+            existing_node.prefix = old_prefix.partial_after(longest_common_prefix);
+
+            let mut new_parent =
+                VersionedNode::new_inner(old_prefix.partial_before(longest_common_prefix), version);
+            new_parent.value = Some(value);
+            let edge = old_prefix.at(longest_common_prefix);
+            new_parent.add_child(edge, Arc::new(existing_node));
+            (Some(Arc::new(new_parent)), true)
+        } else if !is_prefix_match {
+            let Some(value) = Self::versioned_vacant_update(update) else {
+                return (Some(cur_node), false);
+            };
+            let mut new_inner = VersionedNode::new_inner(
+                cur_node.prefix.partial_before(longest_common_prefix),
+                version,
+            );
+
+            let k1 = cur_node.prefix.at(longest_common_prefix);
+            let k2 = key.at(depth + longest_common_prefix);
+
+            let mut existing_node_clone = cur_node.cow_clone_inner(version);
+            existing_node_clone.prefix = cur_node.prefix.partial_after(longest_common_prefix);
+            let existing_arc = Arc::new(existing_node_clone);
+
+            let new_leaf = Arc::new(VersionedNode::new_leaf(
+                key.to_partial(depth + longest_common_prefix),
+                value,
+                version,
+            ));
+
+            match &mut new_inner.content {
+                VersionedContent::Node4(km) => {
+                    km.add_child(k1, existing_arc);
+                    km.add_child(k2, new_leaf);
+                }
+                _ => unreachable!(),
+            }
+
+            (Some(Arc::new(new_inner)), true)
+        } else if cur_node.is_leaf() {
+            let Some(value) = Self::versioned_vacant_update(update) else {
+                return (Some(cur_node), false);
+            };
+            let edge = key.at(depth + longest_common_prefix);
+            let new_leaf = Arc::new(VersionedNode::new_leaf(
+                key.to_partial(depth + longest_common_prefix),
+                value,
+                version,
+            ));
+            let new_node = Self::ensure_cow_node(cur_node, version);
+            let mut new_node = match Arc::try_unwrap(new_node) {
+                Ok(owned) => owned,
+                Err(_) => panic!("ensure_cow_node should have given us exclusive ownership"),
+            };
+            new_node.add_child(edge, new_leaf);
+            (Some(Arc::new(new_node)), true)
+        } else {
+            let k = key.at(depth + cur_node.prefix.len());
+            let prefix_len = cur_node.prefix.len();
+
+            let Some(child) = cur_node.seek_child(k).cloned() else {
+                let Some(value) = Self::versioned_vacant_update(update) else {
+                    return (Some(cur_node), false);
+                };
+                let new_leaf = Arc::new(VersionedNode::new_leaf(
+                    key.to_partial(depth + prefix_len),
+                    value,
+                    version,
+                ));
+                let new_node = Self::ensure_cow_node(cur_node, version);
+                let mut new_node = match Arc::try_unwrap(new_node) {
+                    Ok(owned) => owned,
+                    Err(_) => panic!("ensure_cow_node should have given us exclusive ownership"),
+                };
+                new_node.add_child(k, new_leaf);
+                return (Some(Arc::new(new_node)), true);
+            };
+
+            let (new_child_opt, changed) =
+                Self::update_recurse(child, key, depth + prefix_len, version, update);
+            if !changed {
+                return (Some(cur_node), false);
+            }
+
+            let new_node = Self::ensure_cow_node(cur_node, version);
+            let mut new_node_mut = match Arc::try_unwrap(new_node) {
+                Ok(owned) => owned,
+                Err(_) => panic!("ensure_cow_node should have given us exclusive ownership"),
+            };
+            let _old_child = new_node_mut.delete_child(k);
+            if let Some(new_child) = new_child_opt {
+                new_node_mut.add_child(k, new_child);
+            }
+
+            if new_node_mut.num_children() == 0 && new_node_mut.value.is_none() {
+                (None, true)
+            } else {
+                (Some(Arc::new(new_node_mut)), true)
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::VisitControl;
     use crate::keys::{array_key::ArrayKey, overflow_key::OverflowKey};
+    use crate::{Slot, SlotUpdate, VisitControl};
     use proptest::prelude::*;
     use std::collections::BTreeSet;
     use std::mem::size_of;
@@ -3027,6 +3425,72 @@ mod tests {
         // Both should still have key1
         assert_eq!(tree.get("key1"), Some(&1));
         assert_eq!(snapshot.get("key1"), Some(&1));
+    }
+
+    #[test]
+    fn delete_k_preserves_existing_snapshot() {
+        let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+        let prefix = ArrayKey::new_from_slice(b"a");
+        let child = ArrayKey::new_from_slice(b"ab");
+        tree.insert_k(&prefix, 1);
+        tree.insert_k(&child, 2);
+
+        let snapshot = tree.snapshot();
+
+        assert!(tree.delete_k(&prefix));
+        assert_eq!(tree.get_k(&prefix), None);
+        assert_eq!(tree.get_k(&child), Some(&2));
+        assert_eq!(snapshot.get_k(&prefix), Some(&1));
+        assert_eq!(snapshot.get_k(&child), Some(&2));
+    }
+
+    #[test]
+    fn update_k_mutates_one_version_without_changing_snapshot() {
+        let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+        let key = ArrayKey::new_from_slice(b"bucket");
+        let inserted = ArrayKey::new_from_slice(b"bucket-2");
+        tree.insert_k(&key, 1);
+
+        let snapshot = tree.snapshot();
+
+        assert!(tree.update_k(&key, |slot| match slot {
+            Slot::Occupied(value) => {
+                *value = 2;
+                SlotUpdate::Keep
+            }
+            Slot::Vacant => panic!("slot should be occupied"),
+        }));
+        assert!(tree.update_k(&inserted, |slot| {
+            assert!(matches!(slot, Slot::Vacant));
+            SlotUpdate::Insert(3)
+        }));
+
+        assert_eq!(tree.get_k(&key), Some(&2));
+        assert_eq!(tree.get_k(&inserted), Some(&3));
+        assert_eq!(snapshot.get_k(&key), Some(&1));
+        assert_eq!(snapshot.get_k(&inserted), None);
+    }
+
+    #[test]
+    fn try_update_k_rolls_back_current_version_on_error() {
+        let mut tree = VersionedAdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+        let key = ArrayKey::new_from_slice(b"err");
+        tree.insert_k(&key, 1);
+        let snapshot = tree.snapshot();
+
+        let result = tree.try_update_k(&key, |slot| -> Result<SlotUpdate<i32>, &'static str> {
+            match slot {
+                Slot::Occupied(value) => {
+                    *value = 99;
+                    Err("stop")
+                }
+                Slot::Vacant => panic!("slot should be occupied"),
+            }
+        });
+
+        assert_eq!(result, Err("stop"));
+        assert_eq!(tree.get_k(&key), Some(&1));
+        assert_eq!(snapshot.get_k(&key), Some(&1));
     }
 
     #[test]
