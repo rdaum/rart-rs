@@ -46,7 +46,22 @@ pub struct OverflowKey<const N: usize, const P: usize = N> {
     overflow: Option<Box<[u8]>>,
 }
 
+/// Builder for [`OverflowKey`] that writes directly into the eventual key storage.
+///
+/// Bytes are kept inline until the length crosses `N`; only then does the builder allocate overflow
+/// storage and continue appending there.
+pub struct OverflowKeyBuilder<const N: usize, const P: usize = N> {
+    inline: [u8; N],
+    len: usize,
+    overflow: Option<Vec<u8>>,
+}
+
 impl<const N: usize, const P: usize> OverflowKey<N, P> {
+    /// Create a builder for constructing an [`OverflowKey`] without a temporary byte buffer.
+    pub fn builder() -> OverflowKeyBuilder<N, P> {
+        OverflowKeyBuilder::new()
+    }
+
     #[inline(always)]
     fn heap_data(&self) -> &[u8] {
         self.overflow
@@ -91,6 +106,96 @@ impl<const N: usize, const P: usize> OverflowKey<N, P> {
         let mut arr = [0; 8];
         arr[8 - self.len..].copy_from_slice(self.data());
         u64::from_be_bytes(arr)
+    }
+}
+
+impl<const N: usize, const P: usize> Default for OverflowKeyBuilder<N, P> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<const N: usize, const P: usize> OverflowKeyBuilder<N, P> {
+    /// Create an empty builder.
+    pub fn new() -> Self {
+        Self {
+            inline: [0; N],
+            len: 0,
+            overflow: None,
+        }
+    }
+
+    /// Append one byte.
+    pub fn push(&mut self, byte: u8) {
+        if let Some(overflow) = self.overflow.as_mut() {
+            overflow.push(byte);
+            self.len += 1;
+            return;
+        }
+
+        if self.len < N {
+            self.inline[self.len] = byte;
+            self.len += 1;
+            return;
+        }
+
+        let mut overflow = Vec::with_capacity(self.len + 1);
+        overflow.extend_from_slice(&self.inline[..self.len]);
+        overflow.push(byte);
+        self.len += 1;
+        self.overflow = Some(overflow);
+    }
+
+    /// Append a byte slice.
+    pub fn extend_from_slice(&mut self, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+
+        if let Some(overflow) = self.overflow.as_mut() {
+            overflow.extend_from_slice(bytes);
+            self.len += bytes.len();
+            return;
+        }
+
+        let new_len = self.len + bytes.len();
+        if new_len <= N {
+            self.inline[self.len..new_len].copy_from_slice(bytes);
+            self.len = new_len;
+            return;
+        }
+
+        let mut overflow = Vec::with_capacity(new_len);
+        overflow.extend_from_slice(&self.inline[..self.len]);
+        overflow.extend_from_slice(bytes);
+        self.len = new_len;
+        self.overflow = Some(overflow);
+    }
+
+    /// Return the number of bytes appended so far.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Return whether the builder is empty.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Finish construction and return the built key.
+    pub fn finish(self) -> OverflowKey<N, P> {
+        match self.overflow {
+            Some(overflow) => OverflowKey {
+                inline: [0; N],
+                len: overflow.len(),
+                overflow: Some(overflow.into_boxed_slice()),
+            },
+            None => OverflowKey {
+                inline: self.inline,
+                len: self.len,
+                overflow: None,
+            },
+        }
     }
 }
 
@@ -265,6 +370,8 @@ impl_from_signed!(isize, usize);
 
 #[cfg(test)]
 mod tests {
+    use std::cmp::Ordering;
+
     use crate::keys::KeyTrait;
     use crate::keys::overflow_key::OverflowKey;
     use crate::partials::overflow_partial::OverflowPartial;
@@ -309,5 +416,95 @@ mod tests {
 
         let k: OverflowKey<16> = 123213123123123u64.into();
         assert_eq!(k.to_be_u64(), 123213123123123u64);
+    }
+
+    #[test]
+    fn builder_empty_key() {
+        let key = OverflowKey::<4, 2>::builder().finish();
+        assert!(key.is_inline());
+        assert_eq!(key.as_ref(), b"");
+    }
+
+    #[test]
+    fn builder_single_byte_inline_key() {
+        let mut builder = OverflowKey::<4, 2>::builder();
+        builder.push(b'a');
+
+        assert_eq!(builder.len(), 1);
+        assert!(!builder.is_empty());
+
+        let key = builder.finish();
+        assert!(key.is_inline());
+        assert_eq!(key.as_ref(), b"a");
+    }
+
+    #[test]
+    fn builder_exact_inline_capacity_key() {
+        let mut builder = OverflowKey::<4, 2>::builder();
+        builder.extend_from_slice(b"abcd");
+
+        let key = builder.finish();
+        assert!(key.is_inline());
+        assert_eq!(key, OverflowKey::<4, 2>::new_from_slice(b"abcd"));
+    }
+
+    #[test]
+    fn builder_crosses_inline_capacity_to_overflow() {
+        let mut builder = OverflowKey::<4, 2>::builder();
+        builder.extend_from_slice(b"abcd");
+        builder.push(b'e');
+
+        let key = builder.finish();
+        assert!(!key.is_inline());
+        assert_eq!(key.as_ref(), b"abcde");
+        assert_eq!(key, OverflowKey::<4, 2>::new_from_slice(b"abcde"));
+    }
+
+    #[test]
+    fn builder_multi_append_matches_slice_constructor() {
+        let mut builder = OverflowKey::<4, 2>::builder();
+        builder.push(b'a');
+        builder.extend_from_slice(b"bc");
+        builder.push(b'd');
+        builder.extend_from_slice(b"efg");
+
+        let key = builder.finish();
+        assert_eq!(key.as_ref(), b"abcdefg");
+        assert_eq!(key, OverflowKey::<4, 2>::new_from_slice(b"abcdefg"));
+    }
+
+    #[test]
+    fn builder_matches_slice_constructor_across_lengths() {
+        for len in 0..32 {
+            let bytes: Vec<_> = (0..len).map(|idx| b'a' + (idx % 26) as u8).collect();
+            let mut builder = OverflowKey::<8, 4>::builder();
+
+            for chunk in bytes.chunks(3) {
+                builder.extend_from_slice(chunk);
+            }
+
+            let built = builder.finish();
+            let expected = OverflowKey::<8, 4>::new_from_slice(&bytes);
+            assert_eq!(built, expected);
+            assert_eq!(built.is_inline(), len <= 8);
+        }
+    }
+
+    #[test]
+    fn builder_preserves_ordering_equivalence() {
+        let mut left = OverflowKey::<4, 2>::builder();
+        left.extend_from_slice(b"abcd");
+        let left = left.finish();
+
+        let mut right = OverflowKey::<4, 2>::builder();
+        right.extend_from_slice(b"abcde");
+        let right = right.finish();
+
+        assert_eq!(left.cmp(&right), Ordering::Less);
+        assert_eq!(
+            left.cmp(&right),
+            OverflowKey::<4, 2>::new_from_slice(b"abcd")
+                .cmp(&OverflowKey::<4, 2>::new_from_slice(b"abcde"))
+        );
     }
 }

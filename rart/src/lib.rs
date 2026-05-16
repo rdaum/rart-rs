@@ -86,7 +86,10 @@ pub enum VisitControl {
 
 // Re-export main types for convenience
 pub use iter::LendingKeyView;
-pub use keys::{KeyTrait, array_key::ArrayKey, overflow_key::OverflowKey, vector_key::VectorKey};
+pub use keys::{
+    KeyTrait, array_key::ArrayKey, overflow_key::OverflowKey, overflow_key::OverflowKeyBuilder,
+    vector_key::VectorKey,
+};
 pub use partials::Partial;
 pub use tree::AdaptiveRadixTree;
 pub use versioned_tree::VersionedAdaptiveRadixTree;

@@ -6,6 +6,16 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Performance
+
+## [0.9.0] - 2026-05-16
+
+### Added
+
 - Values-only prefix traversal APIs for scanning matching subtrees without key reconstruction:
   - `prefix_values_for_each` / `prefix_values_for_each_k` on `AdaptiveRadixTree`
   - `try_prefix_values_for_each` / `try_prefix_values_for_each_k` on `AdaptiveRadixTree`
@@ -15,6 +25,8 @@ All notable changes to this project are documented in this file.
 - `VisitControl` for callback traversal early-stop control.
 - `get_mut` / `get_mut_k` on `VersionedAdaptiveRadixTree` for CoW-aware mutable value lookup that
   preserves snapshot isolation.
+- `OverflowKeyBuilder` and `OverflowKey::builder()` for direct byte construction of
+  `OverflowKey` without a temporary `Vec` on common inline-key paths.
 
 ### Changed
 
