@@ -18,13 +18,13 @@ rust-version = "1.86"
 [workspace.dependencies]
 # Core dependencies
 num-traits = "0.2"
-simdeez = "2.0.0"
+simdeez = "2.0"
 
 # Dev dependencies
 blart = "0.4"
 criterion = { version = "0.8", features = ["html_reports"] }
-imbl = "7.0.0"
-micromeasure = "0.6"
+imbl = "7.0"
+micromeasure = "0.8"
 proptest = "1.6"
 rand = "0.9"
 shuttle = "0.8"
