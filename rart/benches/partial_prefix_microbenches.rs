@@ -1,7 +1,8 @@
 use std::time::Duration;
 
 use micromeasure::{
-    BenchContext, BenchmarkRunner, BenchmarkRuntimeOptions, Throughput, benchmark_main, black_box,
+    BenchContext, BenchmarkMainOptions, BenchmarkRunner, BenchmarkRuntimeOptions, Throughput,
+    benchmark_main, black_box,
 };
 
 use rart::keys::KeyTrait;
@@ -65,6 +66,14 @@ fn runtime_options() -> BenchmarkRuntimeOptions {
             min_samples: 10,
             max_samples: 40,
         }
+    }
+}
+
+fn options() -> BenchmarkMainOptions {
+    BenchmarkMainOptions {
+        suite: Some("rart-partial-prefix".to_string()),
+        runtime: runtime_options(),
+        ..BenchmarkMainOptions::default()
     }
 }
 
@@ -376,9 +385,7 @@ fn register_vector_prefix_benches(runner: &BenchmarkRunner) {
     register_vector_case::<64, 64>(runner);
 }
 
-benchmark_main!(|runner| {
-    runner.set_runtime(runtime_options());
-
+benchmark_main!(options(), |runner| {
     register_arr_prefix_benches(runner);
     register_vector_prefix_benches(runner);
 });

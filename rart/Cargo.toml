@@ -82,10 +82,6 @@ harness = false
 name = "key_storage_microbenches"
 harness = false
 
-[[bench]]
-name = "key_type_macrobenches"
-harness = false
-
 # Miri test targets for memory safety validation
 # Run with: cargo +nightly miri test -p rart --test miri_mapping_tests --no-default-features
 [[test]]

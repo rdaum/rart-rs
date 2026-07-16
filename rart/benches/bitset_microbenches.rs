@@ -1,7 +1,8 @@
 use std::time::Duration;
 
 use micromeasure::{
-    BenchContext, BenchmarkRunner, BenchmarkRuntimeOptions, Throughput, benchmark_main, black_box,
+    BenchContext, BenchmarkMainOptions, BenchmarkRunner, BenchmarkRuntimeOptions, Throughput,
+    benchmark_main, black_box,
 };
 
 use rart::utils::bitset::{Bitset8, Bitset16, Bitset32, Bitset64, BitsetTrait};
@@ -32,6 +33,14 @@ fn runtime_options() -> BenchmarkRuntimeOptions {
             min_samples: 10,
             max_samples: 40,
         }
+    }
+}
+
+fn options() -> BenchmarkMainOptions {
+    BenchmarkMainOptions {
+        suite: Some("rart-bitset".to_string()),
+        runtime: runtime_options(),
+        ..BenchmarkMainOptions::default()
     }
 }
 
@@ -358,8 +367,7 @@ fn register_bitset256_alternate_width_benches(runner: &BenchmarkRunner) {
     register_case::<Bitset16x16, 256>(runner, "u16x16", "full");
 }
 
-benchmark_main!(|runner| {
-    runner.set_runtime(runtime_options());
+benchmark_main!(options(), |runner| {
     register_bitset64x1_benches(runner);
     register_bitset48_alternate_width_benches(runner);
     register_bitset64x4_benches(runner);

@@ -2,7 +2,8 @@
 use std::time::Duration;
 
 use micromeasure::{
-    BenchContext, BenchmarkRunner, BenchmarkRuntimeOptions, Throughput, benchmark_main, black_box,
+    BenchContext, BenchmarkMainOptions, BenchmarkRunner, BenchmarkRuntimeOptions, Throughput,
+    benchmark_main, black_box,
 };
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
@@ -122,6 +123,14 @@ fn runtime_options() -> BenchmarkRuntimeOptions {
             min_samples: 10,
             max_samples: 40,
         }
+    }
+}
+
+fn options() -> BenchmarkMainOptions {
+    BenchmarkMainOptions {
+        suite: Some("rart-node-mapping".to_string()),
+        runtime: runtime_options(),
+        ..BenchmarkMainOptions::default()
     }
 }
 
@@ -1531,9 +1540,7 @@ fn register_node4_search_experiment_benches(runner: &BenchmarkRunner) {
     });
 }
 
-benchmark_main!(|runner| {
-    runner.set_runtime(runtime_options());
-
+benchmark_main!(options(), |runner| {
     // micromeasure's context type is fixed per group, so these families are
     // registered as individual cases under the same logical group names.
     register_grow_node_benches(runner);

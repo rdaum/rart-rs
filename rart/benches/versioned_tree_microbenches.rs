@@ -8,8 +8,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use micromeasure::{
-    BenchContext, BenchmarkRuntimeOptions, ConcurrentBenchContext, ConcurrentBenchControl,
-    ConcurrentWorker, ConcurrentWorkerResult, Throughput, benchmark_main, black_box,
+    BenchContext, BenchmarkMainOptions, BenchmarkRuntimeOptions, ConcurrentBenchContext,
+    ConcurrentBenchControl, ConcurrentWorker, ConcurrentWorkerResult, Throughput, benchmark_main,
+    black_box,
 };
 use rart::{ArrayKey, VersionedAdaptiveRadixTree};
 
@@ -34,6 +35,14 @@ fn runtime_options() -> BenchmarkRuntimeOptions {
             min_samples: 10,
             max_samples: 40,
         }
+    }
+}
+
+fn options() -> BenchmarkMainOptions {
+    BenchmarkMainOptions {
+        suite: Some("rart-versioned-tree".to_string()),
+        runtime: runtime_options(),
+        ..BenchmarkMainOptions::default()
     }
 }
 
@@ -230,7 +239,7 @@ fn snapshot_remove_writer(
     ConcurrentWorkerResult::operations(operations)
 }
 
-benchmark_main!(|runner| {
+benchmark_main!(options(), |runner| {
     let read_heavy_workers = [
         ConcurrentWorker {
             name: "shared_reader",
@@ -256,8 +265,6 @@ benchmark_main!(|runner| {
             run: snapshot_remove_writer,
         },
     ];
-
-    runner.set_runtime(runtime_options());
 
     runner.group::<SnapshotOnlyContext>("versioned_tree_snapshot", |g| {
         g.throughput(Throughput::ops())
