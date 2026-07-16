@@ -241,7 +241,7 @@ fuzz_target!(|input: FuzzInput| {
     );
 
     // Verify range bounds are respected
-    for (key, _) in btree.iter() {
+    for key in btree.keys() {
         // Test that key appears in appropriate ranges
         let key_in_iter = art.iter().any(|(k, _)| k == *key);
         let key_in_range = art.range(..).any(|(k, _)| k == *key);
