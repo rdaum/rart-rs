@@ -257,6 +257,26 @@ where
         AdaptiveRadixTree::longest_prefix_match_iterate(self.root.as_ref()?, key)
     }
 
+    /// Return the value at the deepest stored key that is a prefix of `key`.
+    ///
+    /// Unlike [`Self::longest_prefix_match`], this method does not reconstruct
+    /// the matched key and performs no heap allocation during traversal.
+    #[inline]
+    pub fn longest_prefix_value<Key>(&self, key: Key) -> Option<&ValueType>
+    where
+        Key: Into<KeyType>,
+    {
+        self.longest_prefix_value_k(&key.into())
+    }
+
+    /// Return the value at the deepest stored key that is a prefix of `key`.
+    ///
+    /// This direct-key variant performs no heap allocation during traversal.
+    #[inline]
+    pub fn longest_prefix_value_k(&self, key: &KeyType) -> Option<&ValueType> {
+        AdaptiveRadixTree::longest_prefix_value_iterate(self.root.as_ref()?, key)
+    }
+
     /// Invoke `on_match` with the deepest key/value pair whose key is a prefix of `key`,
     /// using a lending borrowed key view for the matched key.
     #[inline]
@@ -1045,6 +1065,38 @@ where
             };
             cur_node = child;
             cur_key.extend_from_slice(cur_node.prefix.as_ref());
+        }
+    }
+
+    fn longest_prefix_value_iterate<'a>(
+        cur_node: &'a DefaultNode<KeyType::PartialType, ValueType>,
+        key: &KeyType,
+    ) -> Option<&'a ValueType> {
+        let mut cur_node = cur_node;
+        let mut best_match = None;
+        let mut depth = 0;
+
+        loop {
+            let prefix_common_match = cur_node.prefix.prefix_length_key(key, depth);
+            if prefix_common_match != cur_node.prefix.len() {
+                return best_match;
+            }
+
+            if let Some(value) = cur_node.value() {
+                best_match = Some(value);
+            }
+
+            if cur_node.prefix.len() == key.length_at(depth) {
+                return best_match;
+            }
+
+            let k = key.at(depth + cur_node.prefix.len());
+            depth += cur_node.prefix.len();
+
+            let Some(child) = cur_node.seek_child(k) else {
+                return best_match;
+            };
+            cur_node = child;
         }
     }
 
@@ -3146,6 +3198,54 @@ mod tests {
         assert!(
             tree.longest_prefix_match(VectorKey::new_from_slice(b"zebra"))
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn longest_prefix_value_returns_deepest_value_without_rebuilding_key() {
+        let mut tree = AdaptiveRadixTree::<VectorKey, i32>::new();
+        assert_eq!(
+            tree.longest_prefix_value_k(&VectorKey::new_from_slice(b"anything")),
+            None
+        );
+
+        tree.insert_k(&VectorKey::new_from_slice(b""), 0);
+        tree.insert_k(&VectorKey::new_from_slice(b"a"), 1);
+        tree.insert_k(&VectorKey::new_from_slice(b"alpha"), 2);
+        tree.insert_k(&VectorKey::new_from_slice(b"alphabet"), 3);
+        tree.insert_k(&VectorKey::new_from_slice(b"apple"), 4);
+
+        assert_eq!(
+            tree.longest_prefix_value(VectorKey::new_from_slice(b"alphabetical")),
+            Some(&3)
+        );
+        assert_eq!(
+            tree.longest_prefix_value_k(&VectorKey::new_from_slice(b"alpha")),
+            Some(&2)
+        );
+        assert_eq!(
+            tree.longest_prefix_value_k(&VectorKey::new_from_slice(b"alpine")),
+            Some(&1)
+        );
+        assert_eq!(
+            tree.longest_prefix_value_k(&VectorKey::new_from_slice(b"zebra")),
+            Some(&0)
+        );
+    }
+
+    #[test]
+    fn longest_prefix_value_returns_none_when_no_stored_key_matches() {
+        let mut tree = AdaptiveRadixTree::<VectorKey, i32>::new();
+        tree.insert_k(&VectorKey::new_from_slice(b"alpha"), 1);
+        tree.insert_k(&VectorKey::new_from_slice(b"alphabet"), 2);
+
+        assert_eq!(
+            tree.longest_prefix_value_k(&VectorKey::new_from_slice(b"al")),
+            None
+        );
+        assert_eq!(
+            tree.longest_prefix_value_k(&VectorKey::new_from_slice(b"beta")),
+            None
         );
     }
 
