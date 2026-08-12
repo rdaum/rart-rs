@@ -222,7 +222,16 @@ where
     /// This method works directly with key references for optimal performance.
     #[inline]
     pub fn get_k(&self, key: &KeyType) -> Option<&ValueType> {
-        AdaptiveRadixTree::get_iterate(self.root.as_ref()?, key)
+        self.get_bytes(key.as_ref())
+    }
+
+    /// Get a value by its encoded key bytes.
+    ///
+    /// This avoids constructing the tree's owned [`KeyTrait`] implementation
+    /// for an already encoded query and performs no heap allocation.
+    #[inline]
+    pub fn get_bytes(&self, key: &[u8]) -> Option<&ValueType> {
+        Self::get_bytes_iterate(self.root.as_ref()?, key)
     }
 
     /// Get a mutable reference to a value by key (generic version).
@@ -274,7 +283,16 @@ where
     /// This direct-key variant performs no heap allocation during traversal.
     #[inline]
     pub fn longest_prefix_value_k(&self, key: &KeyType) -> Option<&ValueType> {
-        AdaptiveRadixTree::longest_prefix_value_iterate(self.root.as_ref()?, key)
+        self.longest_prefix_value_bytes(key.as_ref())
+    }
+
+    /// Return the value at the deepest stored key that is a prefix of `key`.
+    ///
+    /// The query borrows encoded bytes directly, independent of the tree's
+    /// owned key representation. Traversal performs no heap allocation.
+    #[inline]
+    pub fn longest_prefix_value_bytes(&self, key: &[u8]) -> Option<&ValueType> {
+        Self::longest_prefix_value_bytes_iterate(self.root.as_ref()?, key)
     }
 
     /// Invoke `on_match` with the deepest key/value pair whose key is a prefix of `key`,
@@ -1010,17 +1028,16 @@ where
         count
     }
 
-    fn get_iterate<'a>(
+    fn get_bytes_iterate<'a>(
         cur_node: &'a DefaultNode<KeyType::PartialType, ValueType>,
-        key: &KeyType,
+        key: &[u8],
     ) -> Option<&'a ValueType> {
         let mut cur_node = cur_node;
-        let key_bytes = key.as_ref();
         let mut depth = 0;
         loop {
             let prefix_len = cur_node.prefix.len();
-            let remaining_len = key_bytes.len() - depth;
-            let prefix_common_match = cur_node.prefix.prefix_length_slice(&key_bytes[depth..]);
+            let remaining_len = key.len() - depth;
+            let prefix_common_match = cur_node.prefix.prefix_length_slice(&key[depth..]);
             if prefix_common_match != prefix_len {
                 return None;
             }
@@ -1028,7 +1045,7 @@ where
             if prefix_len == remaining_len {
                 return cur_node.value();
             }
-            let k = key_bytes[depth + prefix_len];
+            let k = key[depth + prefix_len];
             depth += prefix_len;
             cur_node = cur_node.seek_child(k)?
         }
@@ -1068,16 +1085,16 @@ where
         }
     }
 
-    fn longest_prefix_value_iterate<'a>(
+    fn longest_prefix_value_bytes_iterate<'a>(
         cur_node: &'a DefaultNode<KeyType::PartialType, ValueType>,
-        key: &KeyType,
+        key: &[u8],
     ) -> Option<&'a ValueType> {
         let mut cur_node = cur_node;
         let mut best_match = None;
         let mut depth = 0;
 
         loop {
-            let prefix_common_match = cur_node.prefix.prefix_length_key(key, depth);
+            let prefix_common_match = cur_node.prefix.prefix_length_slice(&key[depth..]);
             if prefix_common_match != cur_node.prefix.len() {
                 return best_match;
             }
@@ -1086,11 +1103,11 @@ where
                 best_match = Some(value);
             }
 
-            if cur_node.prefix.len() == key.length_at(depth) {
+            if cur_node.prefix.len() == key.len() - depth {
                 return best_match;
             }
 
-            let k = key.at(depth + cur_node.prefix.len());
+            let k = key[depth + cur_node.prefix.len()];
             depth += cur_node.prefix.len();
 
             let Some(child) = cur_node.seek_child(k) else {
@@ -2175,6 +2192,7 @@ mod tests {
 
     use crate::keys::KeyTrait;
     use crate::keys::array_key::ArrayKey;
+    use crate::keys::overflow_key::OverflowKey;
     use crate::keys::vector_key::VectorKey;
     use crate::partials::array_partial::ArrPartial;
     use crate::tree::AdaptiveRadixTree;
@@ -3247,6 +3265,37 @@ mod tests {
             tree.longest_prefix_value_k(&VectorKey::new_from_slice(b"beta")),
             None
         );
+    }
+
+    fn assert_borrowed_byte_queries<K: KeyTrait>() {
+        let mut tree = AdaptiveRadixTree::<K, i32>::new();
+        tree.insert_k(&K::new_from_slice(b"alpha"), 1);
+        tree.insert_k(&K::new_from_slice(b"alphabet"), 2);
+        tree.insert_k(&K::new_from_slice(b"beta"), 3);
+
+        assert_eq!(tree.get_bytes(b"alpha"), Some(&1));
+        assert_eq!(tree.get_bytes(b"alphabet"), Some(&2));
+        assert_eq!(tree.get_bytes(b"alph"), None);
+        assert_eq!(tree.get_bytes(b"alphabetical"), None);
+        assert_eq!(tree.longest_prefix_value_bytes(b"alphabetical"), Some(&2));
+        assert_eq!(tree.longest_prefix_value_bytes(b"alpine"), None);
+    }
+
+    #[test]
+    fn borrowed_byte_queries_are_independent_of_stored_key_representation() {
+        assert_borrowed_byte_queries::<ArrayKey<16>>();
+        assert_borrowed_byte_queries::<OverflowKey<4, 4>>();
+        assert_borrowed_byte_queries::<VectorKey>();
+    }
+
+    #[test]
+    fn borrowed_prefix_probe_can_exceed_fixed_stored_key_capacity() {
+        let mut tree = AdaptiveRadixTree::<ArrayKey<8>, i32>::new();
+        tree.insert_k(&ArrayKey::new_from_slice(b"alpha"), 1);
+        tree.insert_k(&ArrayKey::new_from_slice(b"alphabet"), 2);
+
+        assert_eq!(tree.get_bytes(b"alphabet"), Some(&2));
+        assert_eq!(tree.longest_prefix_value_bytes(b"alphabetical"), Some(&2));
     }
 
     #[test]
