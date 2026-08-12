@@ -6,11 +6,30 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Allocation-free value-only longest-prefix lookup APIs on `AdaptiveRadixTree`:
+  - `longest_prefix_value` / `longest_prefix_value_k`
+  - `longest_prefix_value_bytes` for querying directly with encoded bytes
+- `get_bytes` for exact lookup without constructing the tree's owned key representation.
+- Non-replacing insertion APIs that return the proposed and existing values when occupied:
+  - `try_insert` / `try_insert_k`
+- Constant-time `AdaptiveRadixTree::len` entry counting across insertion, removal, callback update,
+  bulk-load, and versioned-to-unversioned conversion paths.
+- Regression and property coverage for value-only prefix lookup, borrowed queries across all built-in
+  key representations, non-replacing insertion, and entry-count invariants.
+
 ### Changed
+
+- Clarified that lending key views avoid per-match owned-key reconstruction but their reusable
+  traversal scratch storage may allocate.
 
 ### Fixed
 
 ### Performance
+
+- Longest-prefix value lookup no longer needs to reconstruct an owned matched key or allocate ART
+  traversal scratch.
+- Non-replacing insertion distinguishes occupied keys in the insertion traversal instead of
+  requiring a separate exact lookup.
 
 ## [0.10.0] - 2026-05-16
 
