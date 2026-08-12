@@ -1,10 +1,14 @@
+#[path = "support/measurement.rs"]
+mod measurement;
+
 use std::time::Duration;
 
 use micromeasure::{
-    BenchContext, BenchmarkMainOptions, BenchmarkRunner, BenchmarkRuntimeOptions, Throughput,
-    benchmark_main, black_box,
+    BenchContext, BenchmarkMainOptions, BenchmarkRuntimeOptions, Throughput, benchmark_main,
+    black_box,
 };
 
+use measurement::MicrobenchmarkRunner as BenchmarkRunner;
 use rart::utils::bitset::{Bitset8, Bitset16, Bitset32, Bitset64, BitsetTrait};
 
 type Bitset64x1 = Bitset64<1>;
@@ -114,8 +118,8 @@ struct RoundTripContext<Bitset: BitsetTrait + Default, const SET_BITS: usize> {
 impl<Bitset: BitsetTrait + Default, const SET_BITS: usize> BenchContext
     for ReadContext<Bitset, SET_BITS>
 {
-    fn prepare(num_chunks: usize) -> Self {
-        let probes = (0..num_chunks)
+    fn prepare(chunk_size: usize) -> Self {
+        let probes = (0..chunk_size)
             .map(|idx| {
                 let bitset = build_bitset::<Bitset>(SET_BITS, idx + 1);
                 let hit_pos = if SET_BITS == 0 {
@@ -137,8 +141,8 @@ impl<Bitset: BitsetTrait + Default, const SET_BITS: usize> BenchContext
 impl<Bitset: BitsetTrait + Default, const SET_BITS: usize> BenchContext
     for RoundTripContext<Bitset, SET_BITS>
 {
-    fn prepare(num_chunks: usize) -> Self {
-        let probes = (0..num_chunks)
+    fn prepare(chunk_size: usize) -> Self {
+        let probes = (0..chunk_size)
             .map(|idx| {
                 let bitset = build_bitset::<Bitset>(SET_BITS, idx + 17);
                 let toggle_pos = first_clear_position::<Bitset>(SET_BITS, idx + 17);
@@ -368,6 +372,7 @@ fn register_bitset256_alternate_width_benches(runner: &BenchmarkRunner) {
 }
 
 benchmark_main!(options(), |runner| {
+    let runner = &BenchmarkRunner::new(runner);
     register_bitset64x1_benches(runner);
     register_bitset48_alternate_width_benches(runner);
     register_bitset64x4_benches(runner);

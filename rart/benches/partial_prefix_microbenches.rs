@@ -1,10 +1,14 @@
+#[path = "support/measurement.rs"]
+mod measurement;
+
 use std::time::Duration;
 
 use micromeasure::{
-    BenchContext, BenchmarkMainOptions, BenchmarkRunner, BenchmarkRuntimeOptions, Throughput,
-    benchmark_main, black_box,
+    BenchContext, BenchmarkMainOptions, BenchmarkRuntimeOptions, Throughput, benchmark_main,
+    black_box,
 };
 
+use measurement::MicrobenchmarkRunner as BenchmarkRunner;
 use rart::keys::KeyTrait;
 use rart::keys::array_key::ArrayKey;
 use rart::keys::vector_key::VectorKey;
@@ -92,9 +96,9 @@ struct VectorPrefixContext<const LEN: usize, const MISMATCH_AT: usize> {
 impl<const SIZE: usize, const LEN: usize, const MISMATCH_AT: usize> BenchContext
     for ArrPrefixContext<SIZE, LEN, MISMATCH_AT>
 {
-    fn prepare(num_chunks: usize) -> Self {
+    fn prepare(chunk_size: usize) -> Self {
         Self {
-            probes: make_arr_prefix_probes::<SIZE, LEN, MISMATCH_AT>(num_chunks),
+            probes: make_arr_prefix_probes::<SIZE, LEN, MISMATCH_AT>(chunk_size),
         }
     }
 
@@ -106,9 +110,9 @@ impl<const SIZE: usize, const LEN: usize, const MISMATCH_AT: usize> BenchContext
 impl<const LEN: usize, const MISMATCH_AT: usize> BenchContext
     for VectorPrefixContext<LEN, MISMATCH_AT>
 {
-    fn prepare(num_chunks: usize) -> Self {
+    fn prepare(chunk_size: usize) -> Self {
         Self {
-            probes: make_vector_prefix_probes::<LEN, MISMATCH_AT>(num_chunks),
+            probes: make_vector_prefix_probes::<LEN, MISMATCH_AT>(chunk_size),
         }
     }
 
@@ -135,11 +139,11 @@ fn make_matching_pair<const LEN: usize, const MISMATCH_AT: usize>(
 }
 
 fn make_arr_prefix_probes<const SIZE: usize, const LEN: usize, const MISMATCH_AT: usize>(
-    num_chunks: usize,
+    chunk_size: usize,
 ) -> Vec<(ArrPartial<SIZE>, ArrPartial<SIZE>, ArrayKey<SIZE>, Vec<u8>)> {
     debug_assert!(LEN <= SIZE);
     debug_assert!(MISMATCH_AT <= LEN);
-    (0..num_chunks)
+    (0..chunk_size)
         .map(|idx| {
             let (lhs, rhs) = make_matching_pair::<LEN, MISMATCH_AT>(idx);
             (
@@ -153,10 +157,10 @@ fn make_arr_prefix_probes<const SIZE: usize, const LEN: usize, const MISMATCH_AT
 }
 
 fn make_vector_prefix_probes<const LEN: usize, const MISMATCH_AT: usize>(
-    num_chunks: usize,
+    chunk_size: usize,
 ) -> Vec<(VectorPartial, VectorPartial, VectorKey, Vec<u8>)> {
     debug_assert!(MISMATCH_AT <= LEN);
-    (0..num_chunks)
+    (0..chunk_size)
         .map(|idx| {
             let (lhs, rhs) = make_matching_pair::<LEN, MISMATCH_AT>(idx);
             (
@@ -386,6 +390,7 @@ fn register_vector_prefix_benches(runner: &BenchmarkRunner) {
 }
 
 benchmark_main!(options(), |runner| {
+    let runner = &BenchmarkRunner::new(runner);
     register_arr_prefix_benches(runner);
     register_vector_prefix_benches(runner);
 });

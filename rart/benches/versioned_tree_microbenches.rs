@@ -4,9 +4,13 @@
 //! benches. They focus on snapshot and copy-on-write behavior, plus concurrent
 //! access patterns over shared structure.
 
+#[path = "support/measurement.rs"]
+mod measurement;
+
 use std::sync::Arc;
 use std::time::Duration;
 
+use measurement::MicrobenchmarkRunner as BenchmarkRunner;
 use micromeasure::{
     BenchContext, BenchmarkMainOptions, BenchmarkRuntimeOptions, ConcurrentBenchContext,
     ConcurrentBenchControl, ConcurrentWorker, ConcurrentWorkerResult, Throughput, benchmark_main,
@@ -79,7 +83,7 @@ struct SnapshotOnlyContext {
 }
 
 impl BenchContext for SnapshotOnlyContext {
-    fn prepare(_num_chunks: usize) -> Self {
+    fn prepare(_chunk_size: usize) -> Self {
         Self {
             tree: build_base_tree(versioned_tree_base_size()),
         }
@@ -103,7 +107,7 @@ struct SnapshotInsertContext {
 }
 
 impl BenchContext for SnapshotInsertContext {
-    fn prepare(_num_chunks: usize) -> Self {
+    fn prepare(_chunk_size: usize) -> Self {
         let base_size = versioned_tree_base_size();
         Self {
             tree: build_base_tree(base_size),
@@ -137,7 +141,7 @@ struct SnapshotRemoveContext {
 }
 
 impl BenchContext for SnapshotRemoveContext {
-    fn prepare(_num_chunks: usize) -> Self {
+    fn prepare(_chunk_size: usize) -> Self {
         let base_size = versioned_tree_base_size();
         Self {
             tree: build_base_tree(base_size),
@@ -240,6 +244,7 @@ fn snapshot_remove_writer(
 }
 
 benchmark_main!(options(), |runner| {
+    let runner = &BenchmarkRunner::new(runner);
     let read_heavy_workers = [
         ConcurrentWorker {
             name: "shared_reader",

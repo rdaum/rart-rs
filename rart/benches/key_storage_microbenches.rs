@@ -1,6 +1,6 @@
 mod support;
 
-use micromeasure::{BenchmarkMainOptions, BenchmarkRunner, Throughput, benchmark_main};
+use micromeasure::{BenchmarkMainOptions, Throughput, benchmark_main};
 
 use rart::keys::KeyTrait;
 use rart::{ArrayKey, OverflowKey, VectorKey};
@@ -11,6 +11,7 @@ use support::key_storage::{
     bench_iter_view, bench_lookup_all, bench_prefix_key, bench_tree_build_encoded,
     bench_tree_build_prebuilt, runtime_options,
 };
+use support::measurement::MicrobenchmarkRunner as BenchmarkRunner;
 
 const INLINE: usize = 32;
 
@@ -100,6 +101,7 @@ fn register_scenario(runner: &BenchmarkRunner, scenario: Scenario) {
 }
 
 benchmark_main!(options(), |runner| {
+    let runner = &BenchmarkRunner::new(runner);
     for &scenario in SCENARIOS {
         register_scenario(runner, scenario);
     }

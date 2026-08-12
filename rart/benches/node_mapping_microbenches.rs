@@ -1,14 +1,18 @@
+#[path = "support/measurement.rs"]
+mod measurement;
+
 /// Microbenches for the specific node mapping types and arrangements.
 use std::time::Duration;
 
 use micromeasure::{
-    BenchContext, BenchmarkMainOptions, BenchmarkRunner, BenchmarkRuntimeOptions, Throughput,
-    benchmark_main, black_box,
+    BenchContext, BenchmarkMainOptions, BenchmarkRuntimeOptions, Throughput, benchmark_main,
+    black_box,
 };
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
 
+use measurement::MicrobenchmarkRunner as BenchmarkRunner;
 use rart::mapping::NodeMapping;
 use rart::mapping::direct_mapping::DirectMapping;
 use rart::mapping::indexed_mapping::IndexedMapping;
@@ -146,9 +150,9 @@ impl<const WIDTH: usize, MappingType> BenchContext for EmptyMappingSetContext<WI
 where
     MappingType: NodeMapping<u64, WIDTH> + Default,
 {
-    fn prepare(num_chunks: usize) -> Self {
+    fn prepare(chunk_size: usize) -> Self {
         Self {
-            mapping_set: make_mapping_sets::<WIDTH, MappingType>(num_chunks, false),
+            mapping_set: make_mapping_sets::<WIDTH, MappingType>(chunk_size, false),
         }
     }
 
@@ -165,9 +169,9 @@ impl<const WIDTH: usize, MappingType> BenchContext for FilledMappingSetContext<W
 where
     MappingType: NodeMapping<u64, WIDTH> + Default,
 {
-    fn prepare(num_chunks: usize) -> Self {
+    fn prepare(chunk_size: usize) -> Self {
         Self {
-            mapping_set: make_mapping_sets::<WIDTH, MappingType>(num_chunks, true),
+            mapping_set: make_mapping_sets::<WIDTH, MappingType>(chunk_size, true),
         }
     }
 
@@ -189,10 +193,10 @@ impl<const WIDTH: usize, const OCCUPANCY: usize, MappingType> BenchContext
 where
     MappingType: NodeMapping<u64, WIDTH> + Default,
 {
-    fn prepare(num_chunks: usize) -> Self {
+    fn prepare(chunk_size: usize) -> Self {
         Self {
             mapping_set: make_mapping_sets_with_occupancy_and_misses::<WIDTH, OCCUPANCY, MappingType>(
-                num_chunks, true,
+                chunk_size, true,
             ),
         }
     }
@@ -207,10 +211,10 @@ impl<const WIDTH: usize, const OCCUPANCY: usize, MappingType> BenchContext
 where
     MappingType: NodeMapping<u64, WIDTH> + Default,
 {
-    fn prepare(num_chunks: usize) -> Self {
+    fn prepare(chunk_size: usize) -> Self {
         Self {
             mapping_set: make_mapping_sets_with_occupancy_and_misses::<WIDTH, OCCUPANCY, MappingType>(
-                num_chunks, false,
+                chunk_size, false,
             ),
         }
     }
@@ -223,9 +227,9 @@ where
 impl<const WIDTH: usize, const NUM_CHILDREN: usize> BenchContext
     for SortedKeyProbeContext<WIDTH, NUM_CHILDREN>
 {
-    fn prepare(num_chunks: usize) -> Self {
+    fn prepare(chunk_size: usize) -> Self {
         Self {
-            probes: make_sorted_key_probes::<WIDTH, NUM_CHILDREN>(num_chunks),
+            probes: make_sorted_key_probes::<WIDTH, NUM_CHILDREN>(chunk_size),
         }
     }
 
@@ -239,9 +243,9 @@ impl<const WIDTH: usize, const NUM_CHILDREN: usize, Bitset> BenchContext
 where
     Bitset: BitsetTrait + Default,
 {
-    fn prepare(num_chunks: usize) -> Self {
+    fn prepare(chunk_size: usize) -> Self {
         Self {
-            probes: make_unsorted_key_probes::<WIDTH, NUM_CHILDREN, Bitset>(num_chunks),
+            probes: make_unsorted_key_probes::<WIDTH, NUM_CHILDREN, Bitset>(chunk_size),
         }
     }
 
@@ -253,9 +257,9 @@ where
 impl<const WIDTH: usize, const NUM_CHILDREN: usize> BenchContext
     for SortedKeyInsertContext<WIDTH, NUM_CHILDREN>
 {
-    fn prepare(num_chunks: usize) -> Self {
+    fn prepare(chunk_size: usize) -> Self {
         Self {
-            probes: make_sorted_insert_probes::<WIDTH, NUM_CHILDREN>(num_chunks),
+            probes: make_sorted_insert_probes::<WIDTH, NUM_CHILDREN>(chunk_size),
         }
     }
 
@@ -265,9 +269,9 @@ impl<const WIDTH: usize, const NUM_CHILDREN: usize> BenchContext
 }
 
 impl<const WIDTH: usize> BenchContext for SortedNodeSeekContext<WIDTH> {
-    fn prepare(num_chunks: usize) -> Self {
+    fn prepare(chunk_size: usize) -> Self {
         Self {
-            probes: make_sorted_node_seek_probes::<WIDTH>(num_chunks),
+            probes: make_sorted_node_seek_probes::<WIDTH>(chunk_size),
         }
     }
 
@@ -277,9 +281,9 @@ impl<const WIDTH: usize> BenchContext for SortedNodeSeekContext<WIDTH> {
 }
 
 impl<const WIDTH: usize> BenchContext for SortedNodeInsertContext<WIDTH> {
-    fn prepare(num_chunks: usize) -> Self {
+    fn prepare(chunk_size: usize) -> Self {
         Self {
-            probes: make_sorted_node_insert_probes::<WIDTH>(num_chunks),
+            probes: make_sorted_node_insert_probes::<WIDTH>(chunk_size),
         }
     }
 
@@ -291,9 +295,9 @@ impl<const WIDTH: usize> BenchContext for SortedNodeInsertContext<WIDTH> {
 impl<const WIDTH: usize, const NUM_CHILDREN: usize> BenchContext
     for SortedKeyMissProbeContext<WIDTH, NUM_CHILDREN>
 {
-    fn prepare(num_chunks: usize) -> Self {
+    fn prepare(chunk_size: usize) -> Self {
         Self {
-            probes: make_sorted_key_miss_probes::<WIDTH, NUM_CHILDREN>(num_chunks),
+            probes: make_sorted_key_miss_probes::<WIDTH, NUM_CHILDREN>(chunk_size),
         }
     }
 
@@ -305,9 +309,9 @@ impl<const WIDTH: usize, const NUM_CHILDREN: usize> BenchContext
 impl<const WIDTH: usize, const NUM_CHILDREN: usize, const INDEX: usize> BenchContext
     for SortedKeyEdgeProbeContext<WIDTH, NUM_CHILDREN, INDEX>
 {
-    fn prepare(num_chunks: usize) -> Self {
+    fn prepare(chunk_size: usize) -> Self {
         Self {
-            probes: make_sorted_key_edge_probes::<WIDTH, NUM_CHILDREN, INDEX>(num_chunks),
+            probes: make_sorted_key_edge_probes::<WIDTH, NUM_CHILDREN, INDEX>(chunk_size),
         }
     }
 
@@ -317,9 +321,9 @@ impl<const WIDTH: usize, const NUM_CHILDREN: usize, const INDEX: usize> BenchCon
 }
 
 impl<const WIDTH: usize> BenchContext for SortedNodeSeekMissContext<WIDTH> {
-    fn prepare(num_chunks: usize) -> Self {
+    fn prepare(chunk_size: usize) -> Self {
         Self {
-            probes: make_sorted_node_seek_miss_probes::<WIDTH>(num_chunks),
+            probes: make_sorted_node_seek_miss_probes::<WIDTH>(chunk_size),
         }
     }
 
@@ -331,9 +335,9 @@ impl<const WIDTH: usize> BenchContext for SortedNodeSeekMissContext<WIDTH> {
 impl<const WIDTH: usize, const INDEX: usize> BenchContext
     for SortedNodeSeekEdgeContext<WIDTH, INDEX>
 {
-    fn prepare(num_chunks: usize) -> Self {
+    fn prepare(chunk_size: usize) -> Self {
         Self {
-            probes: make_sorted_node_seek_edge_probes::<WIDTH, INDEX>(num_chunks),
+            probes: make_sorted_node_seek_edge_probes::<WIDTH, INDEX>(chunk_size),
         }
     }
 
@@ -345,9 +349,9 @@ impl<const WIDTH: usize, const INDEX: usize> BenchContext
 impl<const WIDTH: usize, const NUM_CHILDREN: usize, const MISS_INTERVAL: usize> BenchContext
     for SortedKeyMixedProbeContext<WIDTH, NUM_CHILDREN, MISS_INTERVAL>
 {
-    fn prepare(num_chunks: usize) -> Self {
+    fn prepare(chunk_size: usize) -> Self {
         Self {
-            probes: make_sorted_key_mixed_probes::<WIDTH, NUM_CHILDREN, MISS_INTERVAL>(num_chunks),
+            probes: make_sorted_key_mixed_probes::<WIDTH, NUM_CHILDREN, MISS_INTERVAL>(chunk_size),
         }
     }
 
@@ -359,9 +363,9 @@ impl<const WIDTH: usize, const NUM_CHILDREN: usize, const MISS_INTERVAL: usize> 
 impl<const WIDTH: usize, const MISS_INTERVAL: usize> BenchContext
     for SortedNodeSeekMixedContext<WIDTH, MISS_INTERVAL>
 {
-    fn prepare(num_chunks: usize) -> Self {
+    fn prepare(chunk_size: usize) -> Self {
         Self {
-            probes: make_sorted_node_seek_mixed_probes::<WIDTH, MISS_INTERVAL>(num_chunks),
+            probes: make_sorted_node_seek_mixed_probes::<WIDTH, MISS_INTERVAL>(chunk_size),
         }
     }
 
@@ -371,9 +375,9 @@ impl<const WIDTH: usize, const MISS_INTERVAL: usize> BenchContext
 }
 
 impl BenchContext for Node4SearchExperimentContext {
-    fn prepare(num_chunks: usize) -> Self {
+    fn prepare(chunk_size: usize) -> Self {
         Self {
-            probes: make_node4_search_experiment_probes(num_chunks),
+            probes: make_node4_search_experiment_probes(chunk_size),
         }
     }
 
@@ -750,24 +754,24 @@ fn bench_sorted_node_insert<const WIDTH: usize>(
 }
 
 fn make_mapping_sets<const WIDTH: usize, MappingType>(
-    num_chunks: usize,
+    chunk_size: usize,
     prefill: bool,
 ) -> Vec<(MappingType, Vec<u8>)>
 where
     MappingType: NodeMapping<u64, WIDTH> + Default,
 {
-    make_mapping_sets_with_occupancy::<WIDTH, WIDTH, MappingType>(num_chunks, prefill)
+    make_mapping_sets_with_occupancy::<WIDTH, WIDTH, MappingType>(chunk_size, prefill)
 }
 
 fn make_mapping_sets_with_occupancy<const WIDTH: usize, const OCCUPANCY: usize, MappingType>(
-    num_chunks: usize,
+    chunk_size: usize,
     prefill: bool,
 ) -> Vec<(MappingType, Vec<u8>)>
 where
     MappingType: NodeMapping<u64, WIDTH> + Default,
 {
     make_mapping_sets_with_occupancy_and_misses::<WIDTH, OCCUPANCY, MappingType>(
-        num_chunks, prefill,
+        chunk_size, prefill,
     )
     .into_iter()
     .map(|(mapping, hits, _misses)| (mapping, hits))
@@ -779,15 +783,15 @@ fn make_mapping_sets_with_occupancy_and_misses<
     const OCCUPANCY: usize,
     MappingType,
 >(
-    num_chunks: usize,
+    chunk_size: usize,
     prefill: bool,
 ) -> Vec<(MappingType, Vec<u8>, Vec<u8>)>
 where
     MappingType: NodeMapping<u64, WIDTH> + Default,
 {
     debug_assert!(OCCUPANCY <= WIDTH);
-    let mut mapping_set = Vec::with_capacity(num_chunks);
-    for chunk_idx in 0..num_chunks {
+    let mut mapping_set = Vec::with_capacity(chunk_size);
+    for chunk_idx in 0..chunk_size {
         let child_set = make_child_set::<OCCUPANCY>(chunk_idx as u64);
         let miss_keys = make_miss_set(&child_set, OCCUPANCY);
         let mut mapping = MappingType::default();
@@ -875,10 +879,10 @@ fn absent_key(keys: &[u8]) -> u8 {
 }
 
 fn make_sorted_key_probes<const WIDTH: usize, const NUM_CHILDREN: usize>(
-    num_chunks: usize,
+    chunk_size: usize,
 ) -> Vec<([u8; WIDTH], u8)> {
     let target_index = NUM_CHILDREN / 2;
-    (0..num_chunks)
+    (0..chunk_size)
         .map(|chunk_idx| {
             let keys = make_sorted_keys::<WIDTH, NUM_CHILDREN>(chunk_idx as u64);
             let probe = present_key_at(&keys[..NUM_CHILDREN], target_index);
@@ -888,9 +892,9 @@ fn make_sorted_key_probes<const WIDTH: usize, const NUM_CHILDREN: usize>(
 }
 
 fn make_sorted_key_miss_probes<const WIDTH: usize, const NUM_CHILDREN: usize>(
-    num_chunks: usize,
+    chunk_size: usize,
 ) -> Vec<([u8; WIDTH], u8)> {
-    (0..num_chunks)
+    (0..chunk_size)
         .map(|chunk_idx| {
             let keys = make_sorted_keys::<WIDTH, NUM_CHILDREN>(chunk_idx as u64);
             let probe = absent_key(&keys[..NUM_CHILDREN]);
@@ -904,10 +908,10 @@ fn make_sorted_key_edge_probes<
     const NUM_CHILDREN: usize,
     const INDEX: usize,
 >(
-    num_chunks: usize,
+    chunk_size: usize,
 ) -> Vec<([u8; WIDTH], u8)> {
     debug_assert!(INDEX < NUM_CHILDREN);
-    (0..num_chunks)
+    (0..chunk_size)
         .map(|chunk_idx| {
             let keys = make_sorted_keys::<WIDTH, NUM_CHILDREN>(chunk_idx as u64);
             let probe = keys[INDEX];
@@ -940,9 +944,9 @@ fn make_sorted_key_mixed_probes<
     const NUM_CHILDREN: usize,
     const MISS_INTERVAL: usize,
 >(
-    num_chunks: usize,
+    chunk_size: usize,
 ) -> Vec<([u8; WIDTH], Vec<u8>)> {
-    (0..num_chunks)
+    (0..chunk_size)
         .map(|chunk_idx| {
             let keys = make_sorted_keys::<WIDTH, NUM_CHILDREN>(chunk_idx as u64);
             let misses = make_miss_set(&keys[..NUM_CHILDREN], NUM_CHILDREN.max(1));
@@ -953,13 +957,13 @@ fn make_sorted_key_mixed_probes<
 }
 
 fn make_unsorted_key_probes<const WIDTH: usize, const NUM_CHILDREN: usize, Bitset>(
-    num_chunks: usize,
+    chunk_size: usize,
 ) -> Vec<([u8; WIDTH], Bitset, u8)>
 where
     Bitset: BitsetTrait + Default,
 {
     let target_index = NUM_CHILDREN / 2;
-    (0..num_chunks)
+    (0..chunk_size)
         .map(|chunk_idx| {
             let keys = make_unsorted_keys::<WIDTH, NUM_CHILDREN>(chunk_idx as u64);
             let probe = present_key_at(&keys[..NUM_CHILDREN], target_index);
@@ -970,9 +974,9 @@ where
 }
 
 fn make_sorted_insert_probes<const WIDTH: usize, const NUM_CHILDREN: usize>(
-    num_chunks: usize,
+    chunk_size: usize,
 ) -> Vec<([u8; WIDTH], u8)> {
-    (0..num_chunks)
+    (0..chunk_size)
         .map(|chunk_idx| {
             let keys = make_sorted_keys::<WIDTH, NUM_CHILDREN>(chunk_idx as u64);
             let probe = if NUM_CHILDREN == 0 {
@@ -988,9 +992,9 @@ fn make_sorted_insert_probes<const WIDTH: usize, const NUM_CHILDREN: usize>(
 }
 
 fn make_sorted_node_seek_probes<const WIDTH: usize>(
-    num_chunks: usize,
+    chunk_size: usize,
 ) -> Vec<(SortedKeyedMapping<u64, WIDTH>, u8)> {
-    (0..num_chunks)
+    (0..chunk_size)
         .map(|chunk_idx| {
             let mut child_set = make_child_set::<WIDTH>(chunk_idx as u64);
             child_set.sort_unstable();
@@ -1005,9 +1009,9 @@ fn make_sorted_node_seek_probes<const WIDTH: usize>(
 }
 
 fn make_sorted_node_seek_miss_probes<const WIDTH: usize>(
-    num_chunks: usize,
+    chunk_size: usize,
 ) -> Vec<(SortedKeyedMapping<u64, WIDTH>, u8)> {
-    (0..num_chunks)
+    (0..chunk_size)
         .map(|chunk_idx| {
             let mut child_set = make_child_set::<WIDTH>(chunk_idx as u64);
             child_set.sort_unstable();
@@ -1022,10 +1026,10 @@ fn make_sorted_node_seek_miss_probes<const WIDTH: usize>(
 }
 
 fn make_sorted_node_seek_edge_probes<const WIDTH: usize, const INDEX: usize>(
-    num_chunks: usize,
+    chunk_size: usize,
 ) -> Vec<(SortedKeyedMapping<u64, WIDTH>, u8)> {
     debug_assert!(INDEX < WIDTH);
-    (0..num_chunks)
+    (0..chunk_size)
         .map(|chunk_idx| {
             let mut child_set = make_child_set::<WIDTH>(chunk_idx as u64);
             child_set.sort_unstable();
@@ -1040,9 +1044,9 @@ fn make_sorted_node_seek_edge_probes<const WIDTH: usize, const INDEX: usize>(
 }
 
 fn make_sorted_node_seek_mixed_probes<const WIDTH: usize, const MISS_INTERVAL: usize>(
-    num_chunks: usize,
+    chunk_size: usize,
 ) -> Vec<(SortedKeyedMapping<u64, WIDTH>, Vec<u8>)> {
-    (0..num_chunks)
+    (0..chunk_size)
         .map(|chunk_idx| {
             let mut child_set = make_child_set::<WIDTH>(chunk_idx as u64);
             child_set.sort_unstable();
@@ -1057,8 +1061,8 @@ fn make_sorted_node_seek_mixed_probes<const WIDTH: usize, const MISS_INTERVAL: u
         .collect()
 }
 
-fn make_node4_search_experiment_probes(num_chunks: usize) -> Vec<([u8; 16], Vec<u8>)> {
-    (0..num_chunks)
+fn make_node4_search_experiment_probes(chunk_size: usize) -> Vec<([u8; 16], Vec<u8>)> {
+    (0..chunk_size)
         .map(|chunk_idx| {
             let mut child_set = make_child_set::<4>(chunk_idx as u64);
             child_set.sort_unstable();
@@ -1077,10 +1081,10 @@ fn make_node4_search_experiment_probes(num_chunks: usize) -> Vec<([u8; 16], Vec<
 }
 
 fn make_sorted_node_insert_probes<const WIDTH: usize>(
-    num_chunks: usize,
+    chunk_size: usize,
 ) -> Vec<(SortedKeyedMapping<u64, WIDTH>, u8)> {
     let occupancy = WIDTH - 1;
-    (0..num_chunks)
+    (0..chunk_size)
         .map(|chunk_idx| {
             let mut child_set = make_child_set::<WIDTH>(chunk_idx as u64);
             child_set.sort_unstable();
@@ -1541,6 +1545,7 @@ fn register_node4_search_experiment_benches(runner: &BenchmarkRunner) {
 }
 
 benchmark_main!(options(), |runner| {
+    let runner = &BenchmarkRunner::new(runner);
     // micromeasure's context type is fixed per group, so these families are
     // registered as individual cases under the same logical group names.
     register_grow_node_benches(runner);
