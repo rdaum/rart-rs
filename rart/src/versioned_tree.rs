@@ -1037,6 +1037,7 @@ where
     pub fn into_unversioned(self) -> crate::tree::AdaptiveRadixTree<KeyType, ValueType> {
         use crate::tree::AdaptiveRadixTree;
 
+        let len = self.values_iter().count();
         let Some(root) = self.root else {
             return AdaptiveRadixTree::new();
         };
@@ -1044,7 +1045,7 @@ where
         // Try fast path: convert Arc<VersionedNode> to owned DefaultNode
         let converted_root = Self::convert_to_unversioned_node(root);
 
-        AdaptiveRadixTree::from_root(converted_root)
+        AdaptiveRadixTree::from_root(converted_root, len)
     }
 
     /// Convert a versioned node to an unversioned node.
@@ -3892,6 +3893,7 @@ mod tests {
 
         // Convert to unversioned (slow path due to snapshot)
         let tree = vtree.into_unversioned();
+        assert_eq!(tree.len(), 80);
 
         // Verify all keys are present
         for i in 0..80 {

@@ -79,6 +79,7 @@ where
     KeyType: KeyTrait,
 {
     root: Option<DefaultNode<KeyType::PartialType, ValueType>>,
+    len: usize,
     _phantom: std::marker::PhantomData<KeyType>,
 }
 
@@ -87,6 +88,8 @@ type PrefixSubtreeView<'a, P, V> = (&'a DefaultNode<P, V>, Vec<&'a [u8]>, usize)
 enum UpdateRecurseResult {
     Unchanged,
     Changed,
+    Inserted,
+    Removed,
     RemoveCurrent,
 }
 
@@ -110,6 +113,7 @@ where
     pub fn new() -> Self {
         Self {
             root: None,
+            len: 0,
             _phantom: Default::default(),
         }
     }
@@ -194,20 +198,22 @@ where
             "bulk_load_sorted_unique_by_index input is not strictly sorted and unique"
         );
 
-        Self::from_root(Self::build_bulk_node_by_index(
-            0,
+        Self::from_root(
+            Self::build_bulk_node_by_index(0, len, 0, &key_at, &mut take_value_at),
             len,
-            0,
-            &key_at,
-            &mut take_value_at,
-        ))
+        )
     }
 
     /// Create a new Adaptive Radix Tree with the given root node.
     /// This is primarily used for internal conversions.
-    pub(crate) fn from_root(root: DefaultNode<KeyType::PartialType, ValueType>) -> Self {
+    pub(crate) fn from_root(
+        root: DefaultNode<KeyType::PartialType, ValueType>,
+        len: usize,
+    ) -> Self {
+        debug_assert!(len > 0, "a rooted tree must contain at least one entry");
         Self {
             root: Some(root),
+            len,
             _phantom: Default::default(),
         }
     }
@@ -455,11 +461,15 @@ where
     pub fn insert_k(&mut self, key: &KeyType, value: ValueType) -> Option<ValueType> {
         let Some(root) = &mut self.root else {
             self.root = Some(DefaultNode::new_leaf(key.to_partial(0), value));
+            self.len = 1;
             return None;
         };
 
         match AdaptiveRadixTree::insert_recurse(root, key, value, 0, true) {
-            InsertRecurseResult::Inserted => None,
+            InsertRecurseResult::Inserted => {
+                self.len += 1;
+                None
+            }
             InsertRecurseResult::Replaced(old_value) => Some(old_value),
             InsertRecurseResult::Occupied(..) => {
                 unreachable!("replacing insertion cannot report an occupied key")
@@ -494,12 +504,16 @@ where
     ) -> Result<(), (ValueType, &'a ValueType)> {
         if self.root.is_none() {
             self.root = Some(DefaultNode::new_leaf(key.to_partial(0), value));
+            self.len = 1;
             return Ok(());
         }
         let root = self.root.as_mut().expect("root was checked above");
 
         match AdaptiveRadixTree::insert_recurse(root, key, value, 0, false) {
-            InsertRecurseResult::Inserted => Ok(()),
+            InsertRecurseResult::Inserted => {
+                self.len += 1;
+                Ok(())
+            }
             InsertRecurseResult::Occupied(value, current) => Err((value, current)),
             InsertRecurseResult::Replaced(_) => {
                 unreachable!("non-replacing insertion cannot replace a value")
@@ -535,10 +549,14 @@ where
                 let leaf = stolen
                     .value
                     .expect("corruption: missing value at leaf root");
+                self.len -= 1;
                 return Some(leaf);
             }
 
             let removed = root.value.take();
+            if removed.is_some() {
+                self.len -= 1;
+            }
             if root.num_children() == 0 {
                 self.root = None;
             }
@@ -550,6 +568,9 @@ where
         // Prune root out if it's now empty.
         if root.is_inner() && root.num_children() == 0 && root.value().is_none() {
             self.root = None;
+        }
+        if result.is_some() {
+            self.len -= 1;
         }
         result
     }
@@ -855,7 +876,14 @@ where
 
     /// Check if the tree is empty.
     pub fn is_empty(&self) -> bool {
-        self.root.is_none()
+        self.len == 0
+    }
+
+    /// Return the number of key-value pairs in the tree.
+    ///
+    /// This operation runs in constant time.
+    pub fn len(&self) -> usize {
+        self.len
     }
 }
 
@@ -906,7 +934,8 @@ where
             return Self::new();
         }
 
-        Self::from_root(Self::build_bulk_node(&mut items, 0))
+        let len = items.len();
+        Self::from_root(Self::build_bulk_node(&mut items, 0), len)
     }
 
     fn build_bulk_node(
@@ -1861,6 +1890,7 @@ where
             return match action {
                 SlotUpdate::Insert(value) => {
                     self.root = Some(DefaultNode::new_leaf(key.to_partial(0), value));
+                    self.len = 1;
                     Ok(true)
                 }
                 SlotUpdate::Keep | SlotUpdate::Remove => Ok(false),
@@ -1873,8 +1903,17 @@ where
         match result {
             UpdateRecurseResult::Unchanged => Ok(false),
             UpdateRecurseResult::Changed => Ok(true),
+            UpdateRecurseResult::Inserted => {
+                self.len += 1;
+                Ok(true)
+            }
+            UpdateRecurseResult::Removed => {
+                self.len -= 1;
+                Ok(true)
+            }
             UpdateRecurseResult::RemoveCurrent => {
                 self.root = None;
+                self.len -= 1;
                 Ok(true)
             }
         }
@@ -1895,6 +1934,7 @@ where
             return match action {
                 SlotUpdate::Insert(value) => {
                     self.root = Some(DefaultNode::new_leaf(key.to_partial(0), value));
+                    self.len = 1;
                     Ok(true)
                 }
                 SlotUpdate::Keep | SlotUpdate::Remove => Ok(false),
@@ -1907,8 +1947,17 @@ where
         match result {
             UpdateRecurseResult::Unchanged => Ok(false),
             UpdateRecurseResult::Changed => Ok(true),
+            UpdateRecurseResult::Inserted => {
+                self.len += 1;
+                Ok(true)
+            }
+            UpdateRecurseResult::Removed => {
+                self.len -= 1;
+                Ok(true)
+            }
             UpdateRecurseResult::RemoveCurrent => {
                 self.root = None;
+                self.len -= 1;
                 Ok(true)
             }
         }
@@ -1955,7 +2004,7 @@ where
                 if node.num_children() == 0 {
                     UpdateRecurseResult::RemoveCurrent
                 } else {
-                    UpdateRecurseResult::Changed
+                    UpdateRecurseResult::Removed
                 }
             }
         })
@@ -2003,7 +2052,7 @@ where
                 if node.num_children() == 0 {
                     UpdateRecurseResult::RemoveCurrent
                 } else {
-                    UpdateRecurseResult::Changed
+                    UpdateRecurseResult::Removed
                 }
             }
         })
@@ -2054,7 +2103,7 @@ where
             }
             if let Some(value) = Self::vacant_update(update)? {
                 cur_node.value = Some(value);
-                return Ok(UpdateRecurseResult::Changed);
+                return Ok(UpdateRecurseResult::Inserted);
             }
             return Ok(UpdateRecurseResult::Unchanged);
         }
@@ -2071,7 +2120,7 @@ where
             let edge = old_node_prefix.at(longest_common_prefix);
             let replacement_current = std::mem::replace(cur_node, new_parent);
             cur_node.add_child(edge, replacement_current);
-            return Ok(UpdateRecurseResult::Changed);
+            return Ok(UpdateRecurseResult::Inserted);
         }
 
         if !is_prefix_match {
@@ -2091,7 +2140,7 @@ where
                 DefaultNode::new_leaf(key.to_partial(depth + longest_common_prefix), value);
             cur_node.add_child(k1, replacement_current);
             cur_node.add_child(k2, new_leaf);
-            return Ok(UpdateRecurseResult::Changed);
+            return Ok(UpdateRecurseResult::Inserted);
         }
 
         if cur_node.is_leaf() {
@@ -2102,7 +2151,7 @@ where
             let new_leaf =
                 DefaultNode::new_leaf(key.to_partial(depth + longest_common_prefix), value);
             cur_node.add_child(edge, new_leaf);
-            return Ok(UpdateRecurseResult::Changed);
+            return Ok(UpdateRecurseResult::Inserted);
         }
 
         let k = key.at(depth + longest_common_prefix);
@@ -2113,7 +2162,7 @@ where
             let new_leaf =
                 DefaultNode::new_leaf(key.to_partial(depth + longest_common_prefix), value);
             cur_node.add_child(k, new_leaf);
-            return Ok(UpdateRecurseResult::Changed);
+            return Ok(UpdateRecurseResult::Inserted);
         };
 
         let result = Self::try_update_recurse(child, key, depth + longest_common_prefix, update)?;
@@ -2122,7 +2171,7 @@ where
             if cur_node.num_children() == 0 && cur_node.value().is_none() {
                 return Ok(UpdateRecurseResult::RemoveCurrent);
             }
-            return Ok(UpdateRecurseResult::Changed);
+            return Ok(UpdateRecurseResult::Removed);
         }
         Ok(result)
     }
@@ -2147,7 +2196,7 @@ where
             }
             if let Some(value) = Self::vacant_update(update)? {
                 cur_node.value = Some(value);
-                return Ok(UpdateRecurseResult::Changed);
+                return Ok(UpdateRecurseResult::Inserted);
             }
             return Ok(UpdateRecurseResult::Unchanged);
         }
@@ -2164,7 +2213,7 @@ where
             let edge = old_node_prefix.at(longest_common_prefix);
             let replacement_current = std::mem::replace(cur_node, new_parent);
             cur_node.add_child(edge, replacement_current);
-            return Ok(UpdateRecurseResult::Changed);
+            return Ok(UpdateRecurseResult::Inserted);
         }
 
         if !is_prefix_match {
@@ -2184,7 +2233,7 @@ where
                 DefaultNode::new_leaf(key.to_partial(depth + longest_common_prefix), value);
             cur_node.add_child(k1, replacement_current);
             cur_node.add_child(k2, new_leaf);
-            return Ok(UpdateRecurseResult::Changed);
+            return Ok(UpdateRecurseResult::Inserted);
         }
 
         if cur_node.is_leaf() {
@@ -2195,7 +2244,7 @@ where
             let new_leaf =
                 DefaultNode::new_leaf(key.to_partial(depth + longest_common_prefix), value);
             cur_node.add_child(edge, new_leaf);
-            return Ok(UpdateRecurseResult::Changed);
+            return Ok(UpdateRecurseResult::Inserted);
         }
 
         let k = key.at(depth + longest_common_prefix);
@@ -2206,7 +2255,7 @@ where
             let new_leaf =
                 DefaultNode::new_leaf(key.to_partial(depth + longest_common_prefix), value);
             cur_node.add_child(k, new_leaf);
-            return Ok(UpdateRecurseResult::Changed);
+            return Ok(UpdateRecurseResult::Inserted);
         };
 
         let result =
@@ -2216,7 +2265,7 @@ where
             if cur_node.num_children() == 0 && cur_node.value().is_none() {
                 return Ok(UpdateRecurseResult::RemoveCurrent);
             }
-            return Ok(UpdateRecurseResult::Changed);
+            return Ok(UpdateRecurseResult::Removed);
         }
         Ok(result)
     }
@@ -2797,6 +2846,8 @@ mod tests {
                         prop_assert_eq!(tree.get(key).copied(), btree.get(&key).copied());
                     }
                 }
+                prop_assert_eq!(tree.len(), btree.len());
+                prop_assert_eq!(tree.is_empty(), btree.is_empty());
             }
 
             let art_items = collect_art_u8_items(&tree);
@@ -3427,6 +3478,53 @@ mod tests {
         );
         assert_eq!(tree.get(0usize), None);
         assert_eq!(tree.remove(0usize), None);
+    }
+
+    #[test]
+    fn len_tracks_all_mutation_paths() {
+        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+        let a = ArrayKey::new_from_slice(b"a");
+        let ab = ArrayKey::new_from_slice(b"ab");
+        let b = ArrayKey::new_from_slice(b"b");
+
+        assert_eq!(tree.len(), 0);
+        assert!(tree.is_empty());
+
+        assert_eq!(tree.insert_k(&a, 1), None);
+        assert_eq!(tree.insert_k(&a, 2), Some(1));
+        assert_eq!(tree.try_insert_k(&a, 3).map_err(|(v, _)| v), Err(3));
+        assert_eq!(tree.try_insert_k(&ab, 4), Ok(()));
+        assert_eq!(tree.len(), 2);
+
+        assert!(tree.update_k(&b, |_| SlotUpdate::Insert(5)));
+        assert!(tree.update_k(&b, |slot| match slot {
+            Slot::Occupied(value) => {
+                *value = 6;
+                SlotUpdate::Keep
+            }
+            Slot::Vacant => unreachable!(),
+        }));
+        assert_eq!(tree.len(), 3);
+
+        assert_eq!(tree.remove_k(&ArrayKey::new_from_slice(b"missing")), None);
+        assert_eq!(tree.remove_k(&a), Some(2));
+        assert!(tree.update_k(&b, |_| SlotUpdate::Remove));
+        assert_eq!(tree.len(), 1);
+        assert!(tree.delete_k(&ab));
+        assert_eq!(tree.len(), 0);
+        assert!(tree.is_empty());
+    }
+
+    #[test]
+    fn bulk_load_len_counts_unique_keys() {
+        let tree = AdaptiveRadixTree::<ArrayKey<16>, i32>::bulk_load_sorted([
+            (ArrayKey::new_from_slice(b"a"), 1),
+            (ArrayKey::new_from_slice(b"a"), 2),
+            (ArrayKey::new_from_slice(b"b"), 3),
+        ]);
+
+        assert_eq!(tree.len(), 2);
+        assert!(!tree.is_empty());
     }
 
     #[test]
