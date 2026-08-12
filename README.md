@@ -279,7 +279,15 @@ For perf-sensitive traversal, prefer the lending callback APIs over materializin
 - `intersect_lending_with`
 
 These expose a `LendingKeyView` tied to the callback invocation, so the tree can reuse traversal
-scratch state instead of rebuilding or cloning per-item key views.
+scratch state instead of rebuilding or cloning per-item key views. Lending avoids an owned-key
+allocation for each match, but it is not an allocation-free traversal contract: the reusable
+stack and borrowed-segment vectors may allocate as the traversal descends. Calling
+`LendingKeyView::to_vec`, `to_key`, or `write_into` may also allocate.
+
+For longest-prefix lookup when only the value is needed, use `longest_prefix_value_k` or
+`longest_prefix_value_bytes`. Those methods do not reconstruct the matched key and perform no
+heap allocation during traversal; the byte-slice variant also avoids constructing an owned query
+key.
 
 Performance tradeoff:
 

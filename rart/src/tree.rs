@@ -273,6 +273,10 @@ where
     }
 
     /// Return the deepest key/value pair whose key is a prefix of `key`.
+    ///
+    /// This reconstructs an owned matched key and uses heap-backed traversal
+    /// scratch. Use [`Self::longest_prefix_value_k`] when only the value is
+    /// needed.
     #[inline]
     pub fn longest_prefix_match_k(&self, key: &KeyType) -> Option<(KeyType, &ValueType)> {
         AdaptiveRadixTree::longest_prefix_match_iterate(self.root.as_ref()?, key)
@@ -309,6 +313,9 @@ where
 
     /// Invoke `on_match` with the deepest key/value pair whose key is a prefix of `key`,
     /// using a lending borrowed key view for the matched key.
+    ///
+    /// This avoids constructing an owned matched key, but may allocate a
+    /// reusable vector of borrowed key segments during the lookup.
     #[inline]
     pub fn with_longest_prefix_match_view<Key, F>(&self, key: Key, on_match: F) -> bool
     where
@@ -320,6 +327,11 @@ where
 
     /// Invoke `on_match` with the deepest key/value pair whose key is a prefix of `key`,
     /// using a lending borrowed key view for the matched key.
+    ///
+    /// This avoids constructing an owned matched key, but may allocate a
+    /// reusable vector of borrowed key segments during the lookup. Use
+    /// [`Self::longest_prefix_value_k`] for an allocation-free traversal when
+    /// the matched key is not needed.
     #[inline]
     pub fn with_longest_prefix_match_view_k<F>(&self, key: &KeyType, on_match: F) -> bool
     where
@@ -651,6 +663,9 @@ where
     }
 
     /// Visit all key-value pairs using a lending borrowed key view.
+    ///
+    /// This avoids allocating an owned key for each entry. The traversal may
+    /// allocate reusable stack and key-segment scratch storage.
     pub fn for_each_view<F>(&self, on_each: F)
     where
         F: for<'view> FnMut(LendingKeyView<'_, 'view>, &ValueType),
@@ -683,6 +698,9 @@ where
     }
 
     /// Intersect two trees using ART-native traversal and yield lending key views.
+    ///
+    /// This avoids allocating an owned key per match. The traversal may
+    /// allocate reusable key-segment scratch storage.
     pub fn intersect_lending_with<'a, F>(&'a self, other: &'a Self, mut on_match: F)
     where
         F: for<'view> FnMut(LendingKeyView<'a, 'view>, &'a ValueType, &'a ValueType),
@@ -757,6 +775,9 @@ where
     }
 
     /// Visit all entries whose keys start with `prefix` using a lending borrowed key view.
+    ///
+    /// This avoids allocating an owned key for each entry. The traversal may
+    /// allocate reusable stack and key-segment scratch storage.
     pub fn prefix_for_each_view<Key, F>(&self, prefix: Key, on_each: F)
     where
         Key: Into<KeyType>,
@@ -766,6 +787,9 @@ where
     }
 
     /// Visit all entries whose keys start with `prefix` using a lending borrowed key view.
+    ///
+    /// This avoids allocating an owned key for each entry. The traversal may
+    /// allocate reusable stack and key-segment scratch storage.
     pub fn prefix_for_each_view_k<F>(&self, prefix: &KeyType, on_each: F)
     where
         F: for<'view> FnMut(LendingKeyView<'_, 'view>, &ValueType),
@@ -860,6 +884,10 @@ where
     }
 
     /// Visit key-value pairs within a specified range using a lending borrowed key view.
+    ///
+    /// This avoids allocating an owned key for each entry. The traversal may
+    /// allocate reusable stack and key-segment scratch storage and copies a
+    /// bounded range's end key into that scratch state.
     pub fn for_each_range_view<R, F>(&self, range: R, on_each: F)
     where
         R: RangeBounds<KeyType>,

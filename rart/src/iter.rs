@@ -37,7 +37,10 @@ impl<'a, P: Partial, V> Iterator for IterFrameIter<'a, P, V> {
 ///
 /// This borrows the segment list container itself from the traversal scratch
 /// state, so it is only valid for the duration of the callback invocation that
-/// receives it.
+/// receives it. Creating the view does not allocate or copy key bytes, but the
+/// traversal that supplies it may allocate reusable stack and segment storage.
+/// [`Self::to_vec`], [`Self::to_key`], and [`Self::write_into`] may allocate;
+/// [`Self::segments`] and [`Self::bytes`] do not.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct LendingKeyView<'tree, 'view> {
     segments: &'view [&'tree [u8]],
