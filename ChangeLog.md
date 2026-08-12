@@ -6,6 +6,16 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Performance
+
+## [0.11.0] - 2026-08-11
+
+### Added
+
 - Allocation-free value-only longest-prefix lookup APIs on `AdaptiveRadixTree`:
   - `longest_prefix_value` / `longest_prefix_value_k`
   - `longest_prefix_value_bytes` for querying directly with encoded bytes
