@@ -90,6 +90,12 @@ enum UpdateRecurseResult {
     RemoveCurrent,
 }
 
+enum InsertRecurseResult<'a, V> {
+    Inserted,
+    Replaced(V),
+    Occupied(V, &'a V),
+}
+
 impl<KeyType: KeyTrait, ValueType> Default for AdaptiveRadixTree<KeyType, ValueType> {
     fn default() -> Self {
         Self::new()
@@ -452,7 +458,53 @@ where
             return None;
         };
 
-        AdaptiveRadixTree::insert_recurse(root, key, value, 0)
+        match AdaptiveRadixTree::insert_recurse(root, key, value, 0, true) {
+            InsertRecurseResult::Inserted => None,
+            InsertRecurseResult::Replaced(old_value) => Some(old_value),
+            InsertRecurseResult::Occupied(..) => {
+                unreachable!("replacing insertion cannot report an occupied key")
+            }
+        }
+    }
+
+    /// Insert a key-value pair only if the key is vacant.
+    ///
+    /// This performs a single tree traversal. If the key is occupied, the tree
+    /// is unchanged and the error contains both the proposed value and a
+    /// reference to the existing value.
+    #[inline]
+    pub fn try_insert<KV>(
+        &mut self,
+        key: KV,
+        value: ValueType,
+    ) -> Result<(), (ValueType, &ValueType)>
+    where
+        KV: Into<KeyType>,
+    {
+        self.try_insert_k(&key.into(), value)
+    }
+
+    /// Insert a key-value pair by key reference only if the key is vacant.
+    ///
+    /// This is the direct-key variant of [`Self::try_insert`].
+    pub fn try_insert_k<'a>(
+        &'a mut self,
+        key: &KeyType,
+        value: ValueType,
+    ) -> Result<(), (ValueType, &'a ValueType)> {
+        if self.root.is_none() {
+            self.root = Some(DefaultNode::new_leaf(key.to_partial(0), value));
+            return Ok(());
+        }
+        let root = self.root.as_mut().expect("root was checked above");
+
+        match AdaptiveRadixTree::insert_recurse(root, key, value, 0, false) {
+            InsertRecurseResult::Inserted => Ok(()),
+            InsertRecurseResult::Occupied(value, current) => Err((value, current)),
+            InsertRecurseResult::Replaced(_) => {
+                unreachable!("non-replacing insertion cannot replace a value")
+            }
+        }
     }
 
     /// Remove a key-value pair (generic version).
@@ -1629,12 +1681,13 @@ where
         }
     }
 
-    fn insert_recurse(
-        cur_node: &mut DefaultNode<KeyType::PartialType, ValueType>,
+    fn insert_recurse<'a>(
+        cur_node: &'a mut DefaultNode<KeyType::PartialType, ValueType>,
         key: &KeyType,
         value: ValueType,
         depth: usize,
-    ) -> Option<ValueType> {
+        replace: bool,
+    ) -> InsertRecurseResult<'a, ValueType> {
         let longest_common_prefix = cur_node.prefix.prefix_length_key(key, depth);
 
         let is_prefix_match =
@@ -1643,11 +1696,22 @@ where
         // Prefix fully covers this node.
         // Either sets the value or replaces the old value already here.
         if is_prefix_match && cur_node.prefix.len() == key.length_at(depth) {
-            if let Some(v) = cur_node.value_mut() {
-                return Some(std::mem::replace(v, value));
+            if replace {
+                if let Some(current) = cur_node.value.as_mut() {
+                    return InsertRecurseResult::Replaced(std::mem::replace(current, value));
+                }
+                cur_node.value = Some(value);
+                return InsertRecurseResult::Inserted;
             }
-            cur_node.value = Some(value);
-            return None;
+
+            if cur_node.value.is_none() {
+                cur_node.value = Some(value);
+                return InsertRecurseResult::Inserted;
+            }
+            let Some(current) = cur_node.value.as_ref() else {
+                unreachable!("value was checked as occupied")
+            };
+            return InsertRecurseResult::Occupied(value, current);
         }
 
         if is_prefix_match && cur_node.prefix.len() > key.length_at(depth) {
@@ -1659,7 +1723,7 @@ where
             let edge = old_node_prefix.at(longest_common_prefix);
             let replacement_current = std::mem::replace(cur_node, new_parent);
             cur_node.add_child(edge, replacement_current);
-            return None;
+            return InsertRecurseResult::Inserted;
         }
 
         // Prefix is part of the current node, but doesn't fully cover it.
@@ -1686,7 +1750,7 @@ where
             cur_node.add_child(k1, replacement_current);
             cur_node.add_child(k2, new_leaf);
 
-            return None;
+            return InsertRecurseResult::Inserted;
         }
 
         if cur_node.is_leaf() {
@@ -1696,23 +1760,26 @@ where
             let new_leaf =
                 DefaultNode::new_leaf(key.to_partial(depth + longest_common_prefix), value);
             cur_node.add_child(edge, new_leaf);
-            return None;
+            return InsertRecurseResult::Inserted;
         }
 
         // We must be an inner node, and either we need a new baby, or one of our children does, so
         // we'll hunt and see.
         let k = key.at(depth + longest_common_prefix);
 
-        let Some(child) = cur_node.seek_child_mut(k) else {
+        if cur_node.seek_child(k).is_none() {
             // We should not be a leaf at this point. If so, something bad has happened.
             debug_assert!(cur_node.is_inner());
             let new_leaf =
                 DefaultNode::new_leaf(key.to_partial(depth + longest_common_prefix), value);
             cur_node.add_child(k, new_leaf);
-            return None;
-        };
+            return InsertRecurseResult::Inserted;
+        }
+        let child = cur_node
+            .seek_child_mut(k)
+            .expect("child existence was checked above");
 
-        AdaptiveRadixTree::insert_recurse(child, key, value, depth + longest_common_prefix)
+        AdaptiveRadixTree::insert_recurse(child, key, value, depth + longest_common_prefix, replace)
     }
 
     fn remove_recurse(
@@ -3360,6 +3427,62 @@ mod tests {
         );
         assert_eq!(tree.get(0usize), None);
         assert_eq!(tree.remove(0usize), None);
+    }
+
+    #[test]
+    fn try_insert_preserves_occupied_values_and_returns_both_values() {
+        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, String>::new();
+        let key = ArrayKey::new_from_slice(b"abcd");
+
+        assert_eq!(tree.try_insert_k(&key, "original".to_owned()), Ok(()));
+
+        let (proposed, current) = tree
+            .try_insert_k(&key, "proposed".to_owned())
+            .expect_err("the exact key should be occupied");
+        assert_eq!(proposed, "proposed");
+        assert_eq!(current, "original");
+        assert_eq!(tree.get_k(&key).map(String::as_str), Some("original"));
+    }
+
+    #[test]
+    fn try_insert_handles_all_structural_insertion_cases() {
+        let mut tree = AdaptiveRadixTree::<ArrayKey<16>, i32>::new();
+
+        assert_eq!(
+            tree.try_insert(ArrayKey::new_from_slice(b"abcd"), 1),
+            Ok(())
+        );
+        assert_eq!(
+            tree.try_insert_k(&ArrayKey::new_from_slice(b"ab"), 2),
+            Ok(())
+        );
+        assert_eq!(
+            tree.try_insert_k(&ArrayKey::new_from_slice(b"abcdef"), 3),
+            Ok(())
+        );
+        assert_eq!(
+            tree.try_insert_k(&ArrayKey::new_from_slice(b"abef"), 4),
+            Ok(())
+        );
+        assert_eq!(
+            tree.try_insert_k(&ArrayKey::new_from_slice(b"z"), 5),
+            Ok(())
+        );
+
+        let (_, current) = tree
+            .try_insert_k(&ArrayKey::new_from_slice(b"ab"), 20)
+            .expect_err("the internal value should not be replaced");
+        assert_eq!(*current, 2);
+
+        for (key, value) in [
+            (b"abcd".as_slice(), 1),
+            (b"ab".as_slice(), 2),
+            (b"abcdef".as_slice(), 3),
+            (b"abef".as_slice(), 4),
+            (b"z".as_slice(), 5),
+        ] {
+            assert_eq!(tree.get_bytes(key), Some(&value));
+        }
     }
 
     #[test]
