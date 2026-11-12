@@ -15,6 +15,7 @@ use crate::partials::Partial;
 use crate::range::Range;
 use crate::stats::{TreeStats, TreeStatsTrait, update_tree_stats};
 use crate::{Slot, SlotUpdate, VisitControl};
+use std::alloc::{Allocator, Global};
 
 /// An Adaptive Radix Tree (ART) - a high-performance, memory-efficient trie data structure.
 ///
@@ -74,16 +75,20 @@ use crate::{Slot, SlotUpdate, VisitControl};
 /// let a_keys: Vec<_> = tree.range(start..end).collect();
 /// debug_assert_eq!(a_keys.len(), 1); // Just "apple"
 /// ```
-pub struct AdaptiveRadixTree<KeyType, ValueType>
+pub struct AdaptiveRadixTree<KeyType, ValueType, A = Global>
 where
     KeyType: KeyTrait,
+    A: Allocator,
 {
-    root: Option<DefaultNode<KeyType::PartialType, ValueType>>,
+    root: Option<DefaultNode<KeyType::PartialType, ValueType, A>>,
     len: usize,
+    // Declared after `root` so the node storage is released before the allocator handle.
+    alloc: A,
     _phantom: std::marker::PhantomData<KeyType>,
 }
 
-type PrefixSubtreeView<'a, P, V> = (&'a DefaultNode<P, V>, Vec<&'a [u8]>, usize);
+type PrefixSubtree<'a, K, V, A> = (&'a DefaultNode<<K as KeyTrait>::PartialType, V, A>, K);
+type PrefixSubtreeView<'a, P, V, A> = (&'a DefaultNode<P, V, A>, Vec<&'a [u8]>, usize);
 
 enum UpdateRecurseResult {
     Unchanged,
@@ -111,11 +116,7 @@ where
 {
     /// Create a new empty Adaptive Radix Tree.
     pub fn new() -> Self {
-        Self {
-            root: None,
-            len: 0,
-            _phantom: Default::default(),
-        }
+        Self::new_in(Global)
     }
 
     /// Build an Adaptive Radix Tree from already sorted key-value pairs.
@@ -123,6 +124,74 @@ where
     /// Duplicate keys must be adjacent because the input is sorted; the last value
     /// for a key wins. Panics if keys are not in nondecreasing order.
     pub fn bulk_load_sorted<I>(items: I) -> Self
+    where
+        I: IntoIterator<Item = (KeyType, ValueType)>,
+    {
+        Self::bulk_load_sorted_in(items, Global)
+    }
+
+    /// Build an Adaptive Radix Tree from strictly sorted, unique key-value pairs.
+    ///
+    /// This is the fastest bulk-load entry point: it assumes the caller has
+    /// already sorted and deduplicated the input. Debug builds check that the
+    /// precondition holds; release builds skip that validation.
+    pub fn bulk_load_sorted_unique<I>(items: I) -> Self
+    where
+        I: IntoIterator<Item = (KeyType, ValueType)>,
+    {
+        Self::bulk_load_sorted_unique_in(items, Global)
+    }
+
+    /// Build an Adaptive Radix Tree from indexed, strictly sorted, unique keys.
+    ///
+    /// This avoids staging keys and values inside the builder. `key_at` must
+    /// provide random access to keys sorted in strict ascending order, and
+    /// `take_value_at` is called exactly once for each index whose value is
+    /// moved into the tree. Debug builds check the key ordering precondition;
+    /// release builds skip that validation.
+    pub fn bulk_load_sorted_unique_by_index<'a, KF, VF>(
+        len: usize,
+        key_at: KF,
+        take_value_at: VF,
+    ) -> Self
+    where
+        KeyType: 'a,
+        KF: Fn(usize) -> &'a KeyType,
+        VF: FnMut(usize) -> ValueType,
+    {
+        Self::bulk_load_sorted_unique_by_index_in(len, key_at, take_value_at, Global)
+    }
+
+    /// Create a new Adaptive Radix Tree with the given root node.
+    /// This is primarily used for internal conversions.
+    pub(crate) fn from_root(
+        root: DefaultNode<KeyType::PartialType, ValueType>,
+        len: usize,
+    ) -> Self {
+        Self::from_root_in(root, len, Global)
+    }
+}
+
+impl<KeyType, ValueType, A> AdaptiveRadixTree<KeyType, ValueType, A>
+where
+    KeyType: KeyTrait,
+    A: Allocator + Clone,
+{
+    /// Create a new empty Adaptive Radix Tree whose node storage is allocated in `alloc`.
+    ///
+    /// Inner-node storage is allocated through `alloc`. Heap-backed key and partial types
+    /// (`VectorKey`, long `OverflowKey`s) still use the global allocator.
+    pub fn new_in(alloc: A) -> Self {
+        Self {
+            root: None,
+            len: 0,
+            alloc,
+            _phantom: Default::default(),
+        }
+    }
+
+    /// Like [`AdaptiveRadixTree::bulk_load_sorted`], allocating node storage in `alloc`.
+    pub fn bulk_load_sorted_in<I>(items: I, alloc: A) -> Self
     where
         I: IntoIterator<Item = (KeyType, ValueType)>,
     {
@@ -145,15 +214,11 @@ where
             unique.push((key, Some(value)));
         }
 
-        Self::from_unique_sorted_items(unique)
+        Self::from_unique_sorted_items(unique, alloc)
     }
 
-    /// Build an Adaptive Radix Tree from strictly sorted, unique key-value pairs.
-    ///
-    /// This is the fastest bulk-load entry point: it assumes the caller has
-    /// already sorted and deduplicated the input. Debug builds check that the
-    /// precondition holds; release builds skip that validation.
-    pub fn bulk_load_sorted_unique<I>(items: I) -> Self
+    /// Like [`AdaptiveRadixTree::bulk_load_sorted_unique`], allocating node storage in `alloc`.
+    pub fn bulk_load_sorted_unique_in<I>(items: I, alloc: A) -> Self
     where
         I: IntoIterator<Item = (KeyType, ValueType)>,
     {
@@ -169,20 +234,16 @@ where
             "bulk_load_sorted_unique input is not strictly sorted and unique"
         );
 
-        Self::from_unique_sorted_items(items)
+        Self::from_unique_sorted_items(items, alloc)
     }
 
-    /// Build an Adaptive Radix Tree from indexed, strictly sorted, unique keys.
-    ///
-    /// This avoids staging keys and values inside the builder. `key_at` must
-    /// provide random access to keys sorted in strict ascending order, and
-    /// `take_value_at` is called exactly once for each index whose value is
-    /// moved into the tree. Debug builds check the key ordering precondition;
-    /// release builds skip that validation.
-    pub fn bulk_load_sorted_unique_by_index<'a, KF, VF>(
+    /// Like [`AdaptiveRadixTree::bulk_load_sorted_unique_by_index`], allocating node storage
+    /// in `alloc`.
+    pub fn bulk_load_sorted_unique_by_index_in<'a, KF, VF>(
         len: usize,
         key_at: KF,
         mut take_value_at: VF,
+        alloc: A,
     ) -> Self
     where
         KeyType: 'a,
@@ -190,7 +251,7 @@ where
         VF: FnMut(usize) -> ValueType,
     {
         if len == 0 {
-            return Self::new();
+            return Self::new_in(alloc);
         }
 
         debug_assert!(
@@ -198,22 +259,27 @@ where
             "bulk_load_sorted_unique_by_index input is not strictly sorted and unique"
         );
 
-        Self::from_root(
-            Self::build_bulk_node_by_index(0, len, 0, &key_at, &mut take_value_at),
-            len,
-        )
+        let root = Self::build_bulk_node_by_index(0, len, 0, &key_at, &mut take_value_at, &alloc);
+        Self::from_root_in(root, len, alloc)
     }
 
-    /// Create a new Adaptive Radix Tree with the given root node.
-    /// This is primarily used for internal conversions.
-    pub(crate) fn from_root(
-        root: DefaultNode<KeyType::PartialType, ValueType>,
+    /// Returns a reference to the allocator backing this tree's node storage.
+    #[inline]
+    pub fn allocator(&self) -> &A {
+        &self.alloc
+    }
+
+    /// Create a tree from an existing root node whose storage lives in `alloc`.
+    pub(crate) fn from_root_in(
+        root: DefaultNode<KeyType::PartialType, ValueType, A>,
         len: usize,
+        alloc: A,
     ) -> Self {
         debug_assert!(len > 0, "a rooted tree must contain at least one entry");
         Self {
             root: Some(root),
             len,
+            alloc,
             _phantom: Default::default(),
         }
     }
@@ -351,7 +417,7 @@ where
     pub fn prefix_match_iter<Key>(
         &self,
         key: Key,
-    ) -> PrefixMatchIter<'_, KeyType, KeyType::PartialType, ValueType>
+    ) -> PrefixMatchIter<'_, KeyType, KeyType::PartialType, ValueType, A>
     where
         Key: Into<KeyType>,
     {
@@ -366,7 +432,7 @@ where
     pub fn prefix_match_iter_k(
         &self,
         key: &KeyType,
-    ) -> PrefixMatchIter<'_, KeyType, KeyType::PartialType, ValueType> {
+    ) -> PrefixMatchIter<'_, KeyType, KeyType::PartialType, ValueType, A> {
         PrefixMatchIter::new(self.root.as_ref(), key.clone())
     }
 
@@ -418,12 +484,12 @@ where
         prefix: &KeyType,
     ) -> Iter<'_, KeyType, KeyType::PartialType, ValueType> {
         let Some(root) = self.root.as_ref() else {
-            return Iter::new(None);
+            return Iter::new::<A>(None);
         };
         let Some((subtree_root, subtree_root_key)) =
             AdaptiveRadixTree::find_prefix_subtree(root, prefix)
         else {
-            return Iter::new(None);
+            return Iter::new::<A>(None);
         };
         Iter::new_with_prefix(Some(subtree_root), subtree_root_key)
     }
@@ -477,7 +543,7 @@ where
             return None;
         };
 
-        match AdaptiveRadixTree::insert_recurse(root, key, value, 0, true) {
+        match AdaptiveRadixTree::insert_recurse(root, &self.alloc, key, value, 0, true) {
             InsertRecurseResult::Inserted => {
                 self.len += 1;
                 None
@@ -521,7 +587,7 @@ where
         }
         let root = self.root.as_mut().expect("root was checked above");
 
-        match AdaptiveRadixTree::insert_recurse(root, key, value, 0, false) {
+        match AdaptiveRadixTree::insert_recurse(root, &self.alloc, key, value, 0, false) {
             InsertRecurseResult::Inserted => {
                 self.len += 1;
                 Ok(())
@@ -677,7 +743,7 @@ where
     ///
     /// This iterator skips key reconstruction entirely and only yields values.
     /// It's more efficient when you don't need the keys.
-    pub fn values_iter(&self) -> ValuesIter<'_, KeyType::PartialType, ValueType> {
+    pub fn values_iter(&self) -> ValuesIter<'_, KeyType::PartialType, ValueType, A> {
         ValuesIter::new(self.root.as_ref())
     }
 
@@ -915,9 +981,10 @@ where
     }
 }
 
-impl<KeyType, ValueType> TreeStatsTrait for AdaptiveRadixTree<KeyType, ValueType>
+impl<KeyType, ValueType, A> TreeStatsTrait for AdaptiveRadixTree<KeyType, ValueType, A>
 where
     KeyType: KeyTrait,
+    A: Allocator + Clone,
 {
     fn get_tree_stats(&self) -> TreeStats {
         let mut stats = TreeStats::default();
@@ -926,11 +993,7 @@ where
             return stats;
         }
 
-        AdaptiveRadixTree::<KeyType, ValueType>::get_tree_stats_recurse(
-            self.root.as_ref().unwrap(),
-            &mut stats,
-            1,
-        );
+        Self::get_tree_stats_recurse(self.root.as_ref().unwrap(), &mut stats, 1);
 
         let total_inner_nodes = stats
             .node_stats
@@ -953,23 +1016,26 @@ where
 }
 
 // Internals implementation
-impl<KeyType, ValueType> AdaptiveRadixTree<KeyType, ValueType>
+impl<KeyType, ValueType, A> AdaptiveRadixTree<KeyType, ValueType, A>
 where
     KeyType: KeyTrait,
+    A: Allocator + Clone,
 {
-    fn from_unique_sorted_items(mut items: Vec<(KeyType, Option<ValueType>)>) -> Self {
+    fn from_unique_sorted_items(mut items: Vec<(KeyType, Option<ValueType>)>, alloc: A) -> Self {
         if items.is_empty() {
-            return Self::new();
+            return Self::new_in(alloc);
         }
 
         let len = items.len();
-        Self::from_root(Self::build_bulk_node(&mut items, 0), len)
+        let root = Self::build_bulk_node(&mut items, 0, &alloc);
+        Self::from_root_in(root, len, alloc)
     }
 
     fn build_bulk_node(
         items: &mut [(KeyType, Option<ValueType>)],
         depth: usize,
-    ) -> DefaultNode<KeyType::PartialType, ValueType> {
+        alloc: &A,
+    ) -> DefaultNode<KeyType::PartialType, ValueType, A> {
         debug_assert!(!items.is_empty());
 
         if items.len() == 1 {
@@ -996,10 +1062,10 @@ where
         }
 
         let mut node = match child_count {
-            0..=4 => DefaultNode::new_4(prefix),
-            5..=16 => DefaultNode::new_16(prefix),
-            17..=48 => DefaultNode::new_48(prefix),
-            _ => DefaultNode::new_256(prefix),
+            0..=4 => DefaultNode::new_4(prefix, alloc),
+            5..=16 => DefaultNode::new_16(prefix, alloc),
+            17..=48 => DefaultNode::new_48(prefix, alloc),
+            _ => DefaultNode::new_256(prefix, alloc),
         };
 
         if has_value {
@@ -1015,7 +1081,7 @@ where
                 end += 1;
             }
 
-            let child = Self::build_bulk_node(&mut items[start..end], node_depth);
+            let child = Self::build_bulk_node(&mut items[start..end], node_depth, alloc);
             node.add_child_sorted_unchecked(edge, child);
             start = end;
         }
@@ -1029,7 +1095,8 @@ where
         depth: usize,
         key_at: &KF,
         take_value_at: &mut VF,
-    ) -> DefaultNode<KeyType::PartialType, ValueType>
+        alloc: &A,
+    ) -> DefaultNode<KeyType::PartialType, ValueType, A>
     where
         KeyType: 'a,
         KF: Fn(usize) -> &'a KeyType,
@@ -1056,10 +1123,10 @@ where
         }
 
         let mut node = match child_count {
-            0..=4 => DefaultNode::new_4(prefix),
-            5..=16 => DefaultNode::new_16(prefix),
-            17..=48 => DefaultNode::new_48(prefix),
-            _ => DefaultNode::new_256(prefix),
+            0..=4 => DefaultNode::new_4(prefix, alloc),
+            5..=16 => DefaultNode::new_16(prefix, alloc),
+            17..=48 => DefaultNode::new_48(prefix, alloc),
+            _ => DefaultNode::new_256(prefix, alloc),
         };
 
         if has_value {
@@ -1082,6 +1149,7 @@ where
                 node_depth,
                 key_at,
                 take_value_at,
+                alloc,
             );
             node.add_child_sorted_unchecked(edge, child);
             child_start = child_end;
@@ -1138,7 +1206,7 @@ where
     }
 
     fn get_bytes_iterate<'a>(
-        cur_node: &'a DefaultNode<KeyType::PartialType, ValueType>,
+        cur_node: &'a DefaultNode<KeyType::PartialType, ValueType, A>,
         key: &[u8],
     ) -> Option<&'a ValueType> {
         let mut cur_node = cur_node;
@@ -1161,7 +1229,7 @@ where
     }
 
     fn longest_prefix_match_iterate<'a>(
-        cur_node: &'a DefaultNode<KeyType::PartialType, ValueType>,
+        cur_node: &'a DefaultNode<KeyType::PartialType, ValueType, A>,
         key: &KeyType,
     ) -> Option<(KeyType, &'a ValueType)> {
         let mut cur_node = cur_node;
@@ -1195,7 +1263,7 @@ where
     }
 
     fn longest_prefix_value_bytes_iterate<'a>(
-        cur_node: &'a DefaultNode<KeyType::PartialType, ValueType>,
+        cur_node: &'a DefaultNode<KeyType::PartialType, ValueType, A>,
         key: &[u8],
     ) -> Option<&'a ValueType> {
         let mut cur_node = cur_node;
@@ -1227,7 +1295,7 @@ where
     }
 
     fn longest_prefix_match_lending<'a, F>(
-        cur_node: &'a DefaultNode<KeyType::PartialType, ValueType>,
+        cur_node: &'a DefaultNode<KeyType::PartialType, ValueType, A>,
         key: &KeyType,
         on_match: F,
     ) -> bool
@@ -1284,7 +1352,7 @@ where
     }
 
     fn prefix_match_for_each_impl<'a, F>(
-        cur_node: &'a DefaultNode<KeyType::PartialType, ValueType>,
+        cur_node: &'a DefaultNode<KeyType::PartialType, ValueType, A>,
         key: &KeyType,
         mut on_match: F,
     ) where
@@ -1320,9 +1388,9 @@ where
     }
 
     fn find_prefix_subtree<'a>(
-        cur_node: &'a DefaultNode<KeyType::PartialType, ValueType>,
+        cur_node: &'a DefaultNode<KeyType::PartialType, ValueType, A>,
         prefix: &KeyType,
-    ) -> Option<(&'a DefaultNode<KeyType::PartialType, ValueType>, KeyType)> {
+    ) -> Option<PrefixSubtree<'a, KeyType, ValueType, A>> {
         let mut cur_node = cur_node;
         let mut cur_key = cur_node.prefix.as_ref().to_vec();
         let mut depth = 0;
@@ -1350,9 +1418,9 @@ where
     }
 
     fn find_prefix_subtree_node<'a>(
-        cur_node: &'a DefaultNode<KeyType::PartialType, ValueType>,
+        cur_node: &'a DefaultNode<KeyType::PartialType, ValueType, A>,
         prefix: &KeyType,
-    ) -> Option<&'a DefaultNode<KeyType::PartialType, ValueType>> {
+    ) -> Option<&'a DefaultNode<KeyType::PartialType, ValueType, A>> {
         let mut cur_node = cur_node;
         let mut depth = 0;
 
@@ -1377,9 +1445,9 @@ where
     }
 
     fn find_prefix_subtree_view<'a>(
-        cur_node: &'a DefaultNode<KeyType::PartialType, ValueType>,
+        cur_node: &'a DefaultNode<KeyType::PartialType, ValueType, A>,
         prefix: &KeyType,
-    ) -> Option<PrefixSubtreeView<'a, KeyType::PartialType, ValueType>> {
+    ) -> Option<PrefixSubtreeView<'a, KeyType::PartialType, ValueType, A>> {
         let mut cur_node = cur_node;
         let mut cur_segments = if cur_node.prefix.is_empty() {
             Vec::new()
@@ -1418,9 +1486,9 @@ where
     /// Recursively intersect two nodes, supporting different prefix-compression boundaries
     /// through in-prefix offsets.
     fn intersect_nodes<'a, F>(
-        left: &'a DefaultNode<KeyType::PartialType, ValueType>,
+        left: &'a DefaultNode<KeyType::PartialType, ValueType, A>,
         mut left_offset: usize,
-        right: &'a DefaultNode<KeyType::PartialType, ValueType>,
+        right: &'a DefaultNode<KeyType::PartialType, ValueType, A>,
         mut right_offset: usize,
         key_buf: &mut Vec<u8>,
         on_match: &mut F,
@@ -1509,9 +1577,9 @@ where
     }
 
     fn intersect_nodes_lending<'a, F>(
-        left: &'a DefaultNode<KeyType::PartialType, ValueType>,
+        left: &'a DefaultNode<KeyType::PartialType, ValueType, A>,
         mut left_offset: usize,
-        right: &'a DefaultNode<KeyType::PartialType, ValueType>,
+        right: &'a DefaultNode<KeyType::PartialType, ValueType, A>,
         mut right_offset: usize,
         key_segments: &mut Vec<&'a [u8]>,
         key_len: &mut usize,
@@ -1649,9 +1717,9 @@ where
 
     /// Recursively intersect two nodes and emit only value pairs (no key reconstruction).
     fn intersect_nodes_values<'a, F>(
-        left: &'a DefaultNode<KeyType::PartialType, ValueType>,
+        left: &'a DefaultNode<KeyType::PartialType, ValueType, A>,
         mut left_offset: usize,
-        right: &'a DefaultNode<KeyType::PartialType, ValueType>,
+        right: &'a DefaultNode<KeyType::PartialType, ValueType, A>,
         mut right_offset: usize,
         on_match: &mut F,
     ) where
@@ -1714,7 +1782,7 @@ where
     }
 
     fn get_iterate_mut<'a>(
-        cur_node: &'a mut DefaultNode<KeyType::PartialType, ValueType>,
+        cur_node: &'a mut DefaultNode<KeyType::PartialType, ValueType, A>,
         key: &KeyType,
     ) -> Option<&'a mut ValueType> {
         let mut cur_node = cur_node;
@@ -1739,7 +1807,8 @@ where
     }
 
     fn insert_recurse<'a>(
-        cur_node: &'a mut DefaultNode<KeyType::PartialType, ValueType>,
+        cur_node: &'a mut DefaultNode<KeyType::PartialType, ValueType, A>,
+        alloc: &A,
         key: &KeyType,
         value: ValueType,
         depth: usize,
@@ -1774,12 +1843,14 @@ where
         if is_prefix_match && cur_node.prefix.len() > key.length_at(depth) {
             let new_prefix = cur_node.prefix.partial_after(longest_common_prefix);
             let old_node_prefix = std::mem::replace(&mut cur_node.prefix, new_prefix);
-            let mut new_parent =
-                DefaultNode::new_inner(old_node_prefix.partial_before(longest_common_prefix));
+            let mut new_parent = DefaultNode::new_inner(
+                old_node_prefix.partial_before(longest_common_prefix),
+                alloc,
+            );
             new_parent.value = Some(value);
             let edge = old_node_prefix.at(longest_common_prefix);
             let replacement_current = std::mem::replace(cur_node, new_parent);
-            cur_node.add_child(edge, replacement_current);
+            cur_node.add_child(edge, replacement_current, alloc);
             return InsertRecurseResult::Inserted;
         }
 
@@ -1791,7 +1862,10 @@ where
 
             // We will replace this leaf node with a new inner node. The new value will join the
             // current node as sibling, both a child of the new node.
-            let n4 = DefaultNode::new_inner(old_node_prefix.partial_before(longest_common_prefix));
+            let n4 = DefaultNode::new_inner(
+                old_node_prefix.partial_before(longest_common_prefix),
+                alloc,
+            );
 
             let k1 = old_node_prefix.at(longest_common_prefix);
             let k2 = key.at(depth + longest_common_prefix);
@@ -1804,8 +1878,8 @@ where
                 DefaultNode::new_leaf(key.to_partial(depth + longest_common_prefix), value);
 
             // Add the old leaf node as a child of the new inner node.
-            cur_node.add_child(k1, replacement_current);
-            cur_node.add_child(k2, new_leaf);
+            cur_node.add_child(k1, replacement_current, alloc);
+            cur_node.add_child(k2, new_leaf, alloc);
 
             return InsertRecurseResult::Inserted;
         }
@@ -1816,7 +1890,7 @@ where
             let edge = key.at(depth + longest_common_prefix);
             let new_leaf =
                 DefaultNode::new_leaf(key.to_partial(depth + longest_common_prefix), value);
-            cur_node.add_child(edge, new_leaf);
+            cur_node.add_child(edge, new_leaf, alloc);
             return InsertRecurseResult::Inserted;
         }
 
@@ -1829,18 +1903,25 @@ where
             debug_assert!(cur_node.is_inner());
             let new_leaf =
                 DefaultNode::new_leaf(key.to_partial(depth + longest_common_prefix), value);
-            cur_node.add_child(k, new_leaf);
+            cur_node.add_child(k, new_leaf, alloc);
             return InsertRecurseResult::Inserted;
         }
         let child = cur_node
             .seek_child_mut(k)
             .expect("child existence was checked above");
 
-        AdaptiveRadixTree::insert_recurse(child, key, value, depth + longest_common_prefix, replace)
+        AdaptiveRadixTree::insert_recurse(
+            child,
+            alloc,
+            key,
+            value,
+            depth + longest_common_prefix,
+            replace,
+        )
     }
 
     fn remove_recurse(
-        parent_node: &mut DefaultNode<KeyType::PartialType, ValueType>,
+        parent_node: &mut DefaultNode<KeyType::PartialType, ValueType, A>,
         key: &KeyType,
         depth: usize,
     ) -> Option<ValueType> {
@@ -1925,7 +2006,7 @@ where
             };
         };
 
-        let result = Self::try_update_recurse(root, key, 0, &mut update)?;
+        let result = Self::try_update_recurse(root, &self.alloc, key, 0, &mut update)?;
         debug_assert!(update.is_none());
 
         match result {
@@ -1969,7 +2050,7 @@ where
             };
         };
 
-        let result = Self::try_update_recurse_rollback(root, key, 0, &mut update)?;
+        let result = Self::try_update_recurse_rollback(root, &self.alloc, key, 0, &mut update)?;
         debug_assert!(update.is_none());
 
         match result {
@@ -2005,7 +2086,7 @@ where
     }
 
     fn apply_occupied_update<E, F>(
-        node: &mut DefaultNode<KeyType::PartialType, ValueType>,
+        node: &mut DefaultNode<KeyType::PartialType, ValueType, A>,
         update: &mut Option<F>,
     ) -> Result<UpdateRecurseResult, E>
     where
@@ -2039,7 +2120,7 @@ where
     }
 
     fn apply_occupied_update_rollback<E, F>(
-        node: &mut DefaultNode<KeyType::PartialType, ValueType>,
+        node: &mut DefaultNode<KeyType::PartialType, ValueType, A>,
         update: &mut Option<F>,
     ) -> Result<UpdateRecurseResult, E>
     where
@@ -2087,7 +2168,8 @@ where
     }
 
     fn try_update_recurse<E, F>(
-        cur_node: &mut DefaultNode<KeyType::PartialType, ValueType>,
+        cur_node: &mut DefaultNode<KeyType::PartialType, ValueType, A>,
+        alloc: &A,
         key: &KeyType,
         depth: usize,
         update: &mut Option<F>,
@@ -2095,11 +2177,12 @@ where
     where
         F: FnOnce(Slot<'_, ValueType>) -> Result<SlotUpdate<ValueType>, E>,
     {
-        Self::try_update_recurse_with(cur_node, key, depth, update, false)
+        Self::try_update_recurse_with(cur_node, alloc, key, depth, update, false)
     }
 
     fn try_update_recurse_rollback<E, F>(
-        cur_node: &mut DefaultNode<KeyType::PartialType, ValueType>,
+        cur_node: &mut DefaultNode<KeyType::PartialType, ValueType, A>,
+        alloc: &A,
         key: &KeyType,
         depth: usize,
         update: &mut Option<F>,
@@ -2108,11 +2191,12 @@ where
         ValueType: Clone,
         F: FnOnce(Slot<'_, ValueType>) -> Result<SlotUpdate<ValueType>, E>,
     {
-        Self::try_update_recurse_with_rollback(cur_node, key, depth, update)
+        Self::try_update_recurse_with_rollback(cur_node, alloc, key, depth, update)
     }
 
     fn try_update_recurse_with<E, F>(
-        cur_node: &mut DefaultNode<KeyType::PartialType, ValueType>,
+        cur_node: &mut DefaultNode<KeyType::PartialType, ValueType, A>,
+        alloc: &A,
         key: &KeyType,
         depth: usize,
         update: &mut Option<F>,
@@ -2142,12 +2226,14 @@ where
             };
             let new_prefix = cur_node.prefix.partial_after(longest_common_prefix);
             let old_node_prefix = std::mem::replace(&mut cur_node.prefix, new_prefix);
-            let mut new_parent =
-                DefaultNode::new_inner(old_node_prefix.partial_before(longest_common_prefix));
+            let mut new_parent = DefaultNode::new_inner(
+                old_node_prefix.partial_before(longest_common_prefix),
+                alloc,
+            );
             new_parent.value = Some(value);
             let edge = old_node_prefix.at(longest_common_prefix);
             let replacement_current = std::mem::replace(cur_node, new_parent);
-            cur_node.add_child(edge, replacement_current);
+            cur_node.add_child(edge, replacement_current, alloc);
             return Ok(UpdateRecurseResult::Inserted);
         }
 
@@ -2157,8 +2243,10 @@ where
             };
             let new_prefix = cur_node.prefix.partial_after(longest_common_prefix);
             let old_node_prefix = std::mem::replace(&mut cur_node.prefix, new_prefix);
-            let new_inner =
-                DefaultNode::new_inner(old_node_prefix.partial_before(longest_common_prefix));
+            let new_inner = DefaultNode::new_inner(
+                old_node_prefix.partial_before(longest_common_prefix),
+                alloc,
+            );
 
             let k1 = old_node_prefix.at(longest_common_prefix);
             let k2 = key.at(depth + longest_common_prefix);
@@ -2166,8 +2254,8 @@ where
             let replacement_current = std::mem::replace(cur_node, new_inner);
             let new_leaf =
                 DefaultNode::new_leaf(key.to_partial(depth + longest_common_prefix), value);
-            cur_node.add_child(k1, replacement_current);
-            cur_node.add_child(k2, new_leaf);
+            cur_node.add_child(k1, replacement_current, alloc);
+            cur_node.add_child(k2, new_leaf, alloc);
             return Ok(UpdateRecurseResult::Inserted);
         }
 
@@ -2178,7 +2266,7 @@ where
             let edge = key.at(depth + longest_common_prefix);
             let new_leaf =
                 DefaultNode::new_leaf(key.to_partial(depth + longest_common_prefix), value);
-            cur_node.add_child(edge, new_leaf);
+            cur_node.add_child(edge, new_leaf, alloc);
             return Ok(UpdateRecurseResult::Inserted);
         }
 
@@ -2189,11 +2277,12 @@ where
             };
             let new_leaf =
                 DefaultNode::new_leaf(key.to_partial(depth + longest_common_prefix), value);
-            cur_node.add_child(k, new_leaf);
+            cur_node.add_child(k, new_leaf, alloc);
             return Ok(UpdateRecurseResult::Inserted);
         };
 
-        let result = Self::try_update_recurse(child, key, depth + longest_common_prefix, update)?;
+        let result =
+            Self::try_update_recurse(child, alloc, key, depth + longest_common_prefix, update)?;
         if matches!(result, UpdateRecurseResult::RemoveCurrent) {
             let _deleted = cur_node.delete_child(k);
             if cur_node.num_children() == 0 && cur_node.value().is_none() {
@@ -2205,7 +2294,8 @@ where
     }
 
     fn try_update_recurse_with_rollback<E, F>(
-        cur_node: &mut DefaultNode<KeyType::PartialType, ValueType>,
+        cur_node: &mut DefaultNode<KeyType::PartialType, ValueType, A>,
+        alloc: &A,
         key: &KeyType,
         depth: usize,
         update: &mut Option<F>,
@@ -2235,12 +2325,14 @@ where
             };
             let new_prefix = cur_node.prefix.partial_after(longest_common_prefix);
             let old_node_prefix = std::mem::replace(&mut cur_node.prefix, new_prefix);
-            let mut new_parent =
-                DefaultNode::new_inner(old_node_prefix.partial_before(longest_common_prefix));
+            let mut new_parent = DefaultNode::new_inner(
+                old_node_prefix.partial_before(longest_common_prefix),
+                alloc,
+            );
             new_parent.value = Some(value);
             let edge = old_node_prefix.at(longest_common_prefix);
             let replacement_current = std::mem::replace(cur_node, new_parent);
-            cur_node.add_child(edge, replacement_current);
+            cur_node.add_child(edge, replacement_current, alloc);
             return Ok(UpdateRecurseResult::Inserted);
         }
 
@@ -2250,8 +2342,10 @@ where
             };
             let new_prefix = cur_node.prefix.partial_after(longest_common_prefix);
             let old_node_prefix = std::mem::replace(&mut cur_node.prefix, new_prefix);
-            let new_inner =
-                DefaultNode::new_inner(old_node_prefix.partial_before(longest_common_prefix));
+            let new_inner = DefaultNode::new_inner(
+                old_node_prefix.partial_before(longest_common_prefix),
+                alloc,
+            );
 
             let k1 = old_node_prefix.at(longest_common_prefix);
             let k2 = key.at(depth + longest_common_prefix);
@@ -2259,8 +2353,8 @@ where
             let replacement_current = std::mem::replace(cur_node, new_inner);
             let new_leaf =
                 DefaultNode::new_leaf(key.to_partial(depth + longest_common_prefix), value);
-            cur_node.add_child(k1, replacement_current);
-            cur_node.add_child(k2, new_leaf);
+            cur_node.add_child(k1, replacement_current, alloc);
+            cur_node.add_child(k2, new_leaf, alloc);
             return Ok(UpdateRecurseResult::Inserted);
         }
 
@@ -2271,7 +2365,7 @@ where
             let edge = key.at(depth + longest_common_prefix);
             let new_leaf =
                 DefaultNode::new_leaf(key.to_partial(depth + longest_common_prefix), value);
-            cur_node.add_child(edge, new_leaf);
+            cur_node.add_child(edge, new_leaf, alloc);
             return Ok(UpdateRecurseResult::Inserted);
         }
 
@@ -2282,12 +2376,17 @@ where
             };
             let new_leaf =
                 DefaultNode::new_leaf(key.to_partial(depth + longest_common_prefix), value);
-            cur_node.add_child(k, new_leaf);
+            cur_node.add_child(k, new_leaf, alloc);
             return Ok(UpdateRecurseResult::Inserted);
         };
 
-        let result =
-            Self::try_update_recurse_rollback(child, key, depth + longest_common_prefix, update)?;
+        let result = Self::try_update_recurse_rollback(
+            child,
+            alloc,
+            key,
+            depth + longest_common_prefix,
+            update,
+        )?;
         if matches!(result, UpdateRecurseResult::RemoveCurrent) {
             let _deleted = cur_node.delete_child(k);
             if cur_node.num_children() == 0 && cur_node.value().is_none() {
@@ -2299,7 +2398,7 @@ where
     }
 
     fn get_tree_stats_recurse(
-        node: &DefaultNode<KeyType::PartialType, ValueType>,
+        node: &DefaultNode<KeyType::PartialType, ValueType, A>,
         tree_stats: &mut TreeStats,
         height: usize,
     ) {
@@ -2315,11 +2414,7 @@ where
             update_tree_stats(tree_stats, node);
         }
         for (_k, child) in node.iter() {
-            AdaptiveRadixTree::<KeyType, ValueType>::get_tree_stats_recurse(
-                child,
-                tree_stats,
-                height + 1,
-            );
+            Self::get_tree_stats_recurse(child, tree_stats, height + 1);
         }
     }
 }
@@ -3835,5 +3930,117 @@ mod tests {
         let btree_values: Vec<u64> = btree.range(start_raw..).map(|(_, v)| *v).collect();
 
         assert_eq!(art_values, btree_values);
+    }
+
+    mod allocator {
+        use std::alloc::{AllocError, Allocator, Global, Layout, System};
+        use std::cell::Cell;
+        use std::collections::BTreeMap;
+        use std::mem::size_of;
+        use std::ptr::NonNull;
+
+        use crate::keys::array_key::ArrayKey;
+        use crate::node::DefaultNode;
+        use crate::partials::array_partial::ArrPartial;
+        use crate::tree::AdaptiveRadixTree;
+
+        /// Forwards to `Global` while tracking every block handed out.
+        #[derive(Default)]
+        struct CountingAlloc {
+            allocs: Cell<usize>,
+            deallocs: Cell<usize>,
+            live_bytes: Cell<usize>,
+        }
+
+        unsafe impl Allocator for CountingAlloc {
+            fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+                let block = Global.allocate(layout)?;
+                self.allocs.set(self.allocs.get() + 1);
+                self.live_bytes.set(self.live_bytes.get() + layout.size());
+                Ok(block)
+            }
+
+            unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+                self.deallocs.set(self.deallocs.get() + 1);
+                self.live_bytes.set(self.live_bytes.get() - layout.size());
+                // SAFETY: `ptr` came from `Global.allocate(layout)` in `allocate` above.
+                unsafe { Global.deallocate(ptr, layout) }
+            }
+        }
+
+        fn key(i: u64) -> ArrayKey<16> {
+            // Multiply to spread keys across node widths rather than one dense run.
+            i.wrapping_mul(0x9E37_79B9_7F4A_7C15).into()
+        }
+
+        #[test]
+        fn node_storage_goes_through_custom_allocator() {
+            let counting = CountingAlloc::default();
+            {
+                let mut tree = AdaptiveRadixTree::<ArrayKey<16>, u64, _>::new_in(&counting);
+                let mut model = BTreeMap::new();
+
+                for i in 0..20_000u64 {
+                    assert_eq!(tree.insert_k(&key(i), i), model.insert(key(i), i));
+                }
+                assert!(counting.allocs.get() > 0);
+                assert!(counting.live_bytes.get() > 0);
+
+                // Removal exercises the shrink path, which re-allocates through the handle
+                // carried by the node being replaced.
+                for i in (0..20_000u64).step_by(3) {
+                    assert_eq!(tree.remove_k(&key(i)), model.remove(&key(i)));
+                }
+                for i in 0..20_000u64 {
+                    assert_eq!(tree.get_k(&key(i)), model.get(&key(i)));
+                }
+
+                assert_eq!(tree.len(), model.len());
+                let got: Vec<_> = tree.iter().map(|(k, v)| (k, *v)).collect();
+                let expected: Vec<_> = model.iter().map(|(k, v)| (*k, *v)).collect();
+                assert_eq!(got, expected);
+                assert_eq!(
+                    tree.values_iter().copied().collect::<Vec<_>>(),
+                    model.values().copied().collect::<Vec<_>>()
+                );
+            }
+
+            assert_eq!(counting.allocs.get(), counting.deallocs.get());
+            assert_eq!(counting.live_bytes.get(), 0);
+        }
+
+        #[test]
+        fn bulk_load_goes_through_custom_allocator() {
+            let counting = CountingAlloc::default();
+            {
+                let mut keys: Vec<_> = (0..5_000u64).map(key).collect();
+                keys.sort();
+                let items = keys.iter().cloned().zip(0u64..);
+                let tree = AdaptiveRadixTree::bulk_load_sorted_unique_in(items, &counting);
+
+                assert_eq!(tree.len(), keys.len());
+                assert!(counting.allocs.get() > 0);
+                for (value, key) in keys.iter().enumerate() {
+                    assert_eq!(tree.get_k(key), Some(&(value as u64)));
+                }
+            }
+
+            assert_eq!(counting.allocs.get(), counting.deallocs.get());
+            assert_eq!(counting.live_bytes.get(), 0);
+        }
+
+        #[test]
+        fn zero_sized_allocators_do_not_grow_nodes() {
+            type P = ArrPartial<16>;
+            assert_eq!(
+                size_of::<DefaultNode<P, u64, System>>(),
+                size_of::<DefaultNode<P, u64>>()
+            );
+            // A by-reference allocator stores one handle per box, so nodes get wider. This is
+            // the known cost of the `Box<T, A>` approach.
+            assert!(
+                size_of::<DefaultNode<P, u64, &CountingAlloc>>() > size_of::<DefaultNode<P, u64>>()
+            );
+        }
     }
 }

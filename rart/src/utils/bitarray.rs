@@ -1,3 +1,4 @@
+use std::alloc::{Allocator, Global};
 use std::mem::MaybeUninit;
 use std::ops::Index;
 
@@ -6,12 +7,13 @@ use crate::utils::bitset::BitsetTrait;
 // BITSET_WIDTH must be RANGE_WIDTH / 16
 // Once generic_const_exprs is stabilized, we can use that to calculate this from a RANGE_WIDTH.
 // Until then, don't mess up.
-pub struct BitArray<X, const RANGE_WIDTH: usize, BitsetType>
+pub struct BitArray<X, const RANGE_WIDTH: usize, BitsetType, A = Global>
 where
     BitsetType: BitsetTrait + std::default::Default,
+    A: Allocator,
 {
     pub(crate) bitset: BitsetType,
-    storage: Box<[MaybeUninit<X>; RANGE_WIDTH]>,
+    storage: Box<[MaybeUninit<X>; RANGE_WIDTH], A>,
 }
 
 impl<X, const RANGE_WIDTH: usize, BitsetType> BitArray<X, RANGE_WIDTH, BitsetType>
@@ -19,9 +21,20 @@ where
     BitsetType: BitsetTrait + std::default::Default,
 {
     pub fn new() -> Self {
+        Self::new_in(Global)
+    }
+}
+
+impl<X, const RANGE_WIDTH: usize, BitsetType, A> BitArray<X, RANGE_WIDTH, BitsetType, A>
+where
+    BitsetType: BitsetTrait + std::default::Default,
+    A: Allocator,
+{
+    /// Create an empty array whose slot storage is allocated in `alloc`.
+    pub fn new_in(alloc: A) -> Self {
         Self {
             bitset: Default::default(),
-            storage: Box::new([const { MaybeUninit::uninit() }; RANGE_WIDTH]),
+            storage: Box::new_in([const { MaybeUninit::uninit() }; RANGE_WIDTH], alloc),
         }
     }
 
@@ -256,9 +269,11 @@ where
     }
 }
 
-impl<X, const RANGE_WIDTH: usize, BitsetType> Index<usize> for BitArray<X, RANGE_WIDTH, BitsetType>
+impl<X, const RANGE_WIDTH: usize, BitsetType, A> Index<usize>
+    for BitArray<X, RANGE_WIDTH, BitsetType, A>
 where
     BitsetType: BitsetTrait + std::default::Default,
+    A: Allocator,
 {
     type Output = X;
 
@@ -267,9 +282,10 @@ where
     }
 }
 
-impl<X, const RANGE_WIDTH: usize, BitsetType> Drop for BitArray<X, RANGE_WIDTH, BitsetType>
+impl<X, const RANGE_WIDTH: usize, BitsetType, A> Drop for BitArray<X, RANGE_WIDTH, BitsetType, A>
 where
     BitsetType: BitsetTrait + std::default::Default,
+    A: Allocator,
 {
     fn drop(&mut self) {
         for i in 0..RANGE_WIDTH {

@@ -6,24 +6,25 @@
 //! The iterator is designed to be memory-efficient and performs lazy evaluation,
 //! only visiting nodes as needed during iteration.
 
+use std::alloc::{Allocator, Global};
 use std::collections::Bound;
 
 use crate::keys::KeyTrait;
 use crate::node::{DefaultNode, Node, NodeIter};
 use crate::partials::Partial;
 
-type IterEntry<'a, P, V> = (u8, &'a DefaultNode<P, V>);
+type IterEntry<'a, P, V, A> = (u8, &'a DefaultNode<P, V, A>);
 
-enum IterFrameIter<'a, P: Partial, V> {
-    Plain(NodeIter<'a, P, V>),
+enum IterFrameIter<'a, P: Partial, V, A: Allocator = Global> {
+    Plain(NodeIter<'a, P, V, A>),
     Leading {
-        first: Option<IterEntry<'a, P, V>>,
-        rest: NodeIter<'a, P, V>,
+        first: Option<IterEntry<'a, P, V, A>>,
+        rest: NodeIter<'a, P, V, A>,
     },
 }
 
-impl<'a, P: Partial, V> Iterator for IterFrameIter<'a, P, V> {
-    type Item = IterEntry<'a, P, V>;
+impl<'a, P: Partial, V, A: Allocator + Clone> Iterator for IterFrameIter<'a, P, V, A> {
+    type Item = IterEntry<'a, P, V, A>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
@@ -156,15 +157,21 @@ pub struct Iter<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> {
 ///
 /// This iterator follows only the path described by the probe key and yields
 /// matching stored keys from shortest to longest.
-pub struct PrefixMatchIter<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> {
-    cur_node: Option<&'a DefaultNode<P, V>>,
+pub struct PrefixMatchIter<
+    'a,
+    K: KeyTrait<PartialType = P>,
+    P: Partial + 'a,
+    V,
+    A: Allocator = Global,
+> {
+    cur_node: Option<&'a DefaultNode<P, V, A>>,
     probe: K,
     cur_key: Vec<u8>,
     depth: usize,
 }
 
-struct IterInner<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> {
-    node_iter_stack: Vec<(usize, IterFrameIter<'a, P, V>)>,
+struct IterInner<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V, A: Allocator = Global> {
+    node_iter_stack: Vec<(usize, IterFrameIter<'a, P, V, A>)>,
 
     // Pushed and popped with prefix portions as we descend the tree.
     // We materialize `K` only when yielding, which avoids repeated owned-key
@@ -175,14 +182,16 @@ struct IterInner<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> {
     start_bound: Option<Bound<K>>,
 }
 
-pub(crate) struct LendingIterInner<'a, P: Partial + 'a, V> {
-    node_iter_stack: Vec<(usize, usize, IterFrameIter<'a, P, V>)>,
+pub(crate) struct LendingIterInner<'a, P: Partial + 'a, V, A: Allocator = Global> {
+    node_iter_stack: Vec<(usize, usize, IterFrameIter<'a, P, V, A>)>,
     cur_segments: Vec<&'a [u8]>,
     cur_len: usize,
     end_bound: Option<(Vec<u8>, bool)>,
 }
 
-impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> IterInner<'a, K, P, V> {
+impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V, A: Allocator + Clone>
+    IterInner<'a, K, P, V, A>
+{
     #[inline]
     fn key_order(lhs: &K, rhs: &K) -> std::cmp::Ordering {
         let lhs_len = lhs.length_at(0);
@@ -197,7 +206,7 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> IterInner<'a, K, P, V
         lhs_len.cmp(&rhs_len)
     }
 
-    fn from_node_and_key(node: &'a DefaultNode<P, V>, cur_key: K) -> Self {
+    fn from_node_and_key(node: &'a DefaultNode<P, V, A>, cur_key: K) -> Self {
         let node_iter_stack = vec![(
             cur_key.length_at(0),              /* initial absolute tree depth */
             IterFrameIter::Plain(node.iter()), /* root node iter */
@@ -209,11 +218,11 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> IterInner<'a, K, P, V
         }
     }
 
-    pub fn new(node: &'a DefaultNode<P, V>) -> Self {
+    pub fn new(node: &'a DefaultNode<P, V, A>) -> Self {
         Self::from_node_and_key(node, K::new_from_partial(&node.prefix))
     }
 
-    pub fn new_with_start_bound(node: &'a DefaultNode<P, V>, start_bound: Bound<K>) -> Self {
+    pub fn new_with_start_bound(node: &'a DefaultNode<P, V, A>, start_bound: Bound<K>) -> Self {
         let seek_key = match &start_bound {
             Bound::Included(key) | Bound::Excluded(key) => Some(key),
             Bound::Unbounded => None,
@@ -250,10 +259,10 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> IterInner<'a, K, P, V
 
     /// Build positioned iterator stack with O(log N) navigation to starting position
     fn build_positioned_stack(
-        node: &'a DefaultNode<P, V>,
+        node: &'a DefaultNode<P, V, A>,
         seek_key: &K,
         depth: usize,
-    ) -> Vec<(usize, IterFrameIter<'a, P, V>)> {
+    ) -> Vec<(usize, IterFrameIter<'a, P, V, A>)> {
         // Compare node prefix against seek key segment at this depth.
         let prefix_common = node.prefix.prefix_length_key(seek_key, depth);
         if prefix_common != node.prefix.len() {
@@ -302,10 +311,10 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> IterInner<'a, K, P, V
 }
 
 impl<'a, K: KeyTrait<PartialType = P> + 'a, P: Partial + 'a, V> Iter<'a, K, P, V> {
-    fn from_root_and_children(
+    fn from_root_and_children<A: Allocator + Clone + 'a>(
         root_key: K,
         root_value: Option<&'a V>,
-        children: IterInner<'a, K, P, V>,
+        children: IterInner<'a, K, P, V, A>,
     ) -> Self {
         let inner: Box<dyn Iterator<Item = (K, &'a V)> + 'a> = match root_value {
             Some(value) => Box::new(std::iter::once((root_key, value)).chain(children)),
@@ -318,7 +327,7 @@ impl<'a, K: KeyTrait<PartialType = P> + 'a, P: Partial + 'a, V> Iter<'a, K, P, V
         }
     }
 
-    pub(crate) fn new(node: Option<&'a DefaultNode<P, V>>) -> Self {
+    pub(crate) fn new<A: Allocator + Clone + 'a>(node: Option<&'a DefaultNode<P, V, A>>) -> Self {
         let Some(root_node) = node else {
             return Self {
                 inner: Box::new(std::iter::empty()),
@@ -339,11 +348,18 @@ impl<'a, K: KeyTrait<PartialType = P> + 'a, P: Partial + 'a, V> Iter<'a, K, P, V
             };
         }
 
-        Self::from_root_and_children(root_key, root_value, IterInner::<K, P, V>::new(root_node))
+        Self::from_root_and_children(
+            root_key,
+            root_value,
+            IterInner::<K, P, V, A>::new(root_node),
+        )
     }
 
     /// Create an iterator from a subtree root with a fully-qualified key for that root node.
-    pub(crate) fn new_with_prefix(node: Option<&'a DefaultNode<P, V>>, root_key: K) -> Self {
+    pub(crate) fn new_with_prefix<A: Allocator + Clone + 'a>(
+        node: Option<&'a DefaultNode<P, V, A>>,
+        root_key: K,
+    ) -> Self {
         let Some(root_node) = node else {
             return Self {
                 inner: Box::new(std::iter::empty()),
@@ -366,13 +382,13 @@ impl<'a, K: KeyTrait<PartialType = P> + 'a, P: Partial + 'a, V> Iter<'a, K, P, V
         Self::from_root_and_children(
             root_key.clone(),
             root_value,
-            IterInner::<K, P, V>::from_node_and_key(root_node, root_key),
+            IterInner::<K, P, V, A>::from_node_and_key(root_node, root_key),
         )
     }
 
     /// Create an iterator with a start bound for optimized range queries
-    pub(crate) fn new_with_start_bound(
-        node: Option<&'a DefaultNode<P, V>>,
+    pub(crate) fn new_with_start_bound<A: Allocator + Clone + 'a>(
+        node: Option<&'a DefaultNode<P, V, A>>,
         start_bound: Bound<K>,
     ) -> Self {
         let Some(root_node) = node else {
@@ -386,10 +402,11 @@ impl<'a, K: KeyTrait<PartialType = P> + 'a, P: Partial + 'a, V> Iter<'a, K, P, V
         let root_value = root_node.value();
         let satisfies_start = match &start_bound {
             Bound::Included(start_key) => {
-                IterInner::<K, P, V>::key_order(&root_key, start_key) >= std::cmp::Ordering::Equal
+                IterInner::<K, P, V, A>::key_order(&root_key, start_key)
+                    >= std::cmp::Ordering::Equal
             }
             Bound::Excluded(start_key) => {
-                IterInner::<K, P, V>::key_order(&root_key, start_key) > std::cmp::Ordering::Equal
+                IterInner::<K, P, V, A>::key_order(&root_key, start_key) > std::cmp::Ordering::Equal
             }
             Bound::Unbounded => true,
         };
@@ -412,7 +429,8 @@ impl<'a, K: KeyTrait<PartialType = P> + 'a, P: Partial + 'a, V> Iter<'a, K, P, V
             };
         }
 
-        let children = IterInner::<K, P, V>::new_with_start_bound(root_node, start_bound.clone());
+        let children =
+            IterInner::<K, P, V, A>::new_with_start_bound(root_node, start_bound.clone());
         if satisfies_start {
             return Self::from_root_and_children(root_key, root_value, children);
         }
@@ -424,8 +442,10 @@ impl<'a, K: KeyTrait<PartialType = P> + 'a, P: Partial + 'a, V> Iter<'a, K, P, V
     }
 }
 
-impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> PrefixMatchIter<'a, K, P, V> {
-    pub(crate) fn new(node: Option<&'a DefaultNode<P, V>>, probe: K) -> Self {
+impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V, A: Allocator + Clone>
+    PrefixMatchIter<'a, K, P, V, A>
+{
+    pub(crate) fn new(node: Option<&'a DefaultNode<P, V, A>>, probe: K) -> Self {
         Self {
             cur_node: node,
             probe,
@@ -435,8 +455,8 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> PrefixMatchIter<'a, K
     }
 }
 
-impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> Iterator
-    for PrefixMatchIter<'a, K, P, V>
+impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V, A: Allocator + Clone> Iterator
+    for PrefixMatchIter<'a, K, P, V, A>
 {
     type Item = (K, &'a V);
 
@@ -467,7 +487,7 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> Iterator
     }
 }
 
-impl<'a, P: Partial + 'a, V> LendingIterInner<'a, P, V> {
+impl<'a, P: Partial + 'a, V, A: Allocator + Clone> LendingIterInner<'a, P, V, A> {
     fn cmp_segments_to_slice(segments: &[&[u8]], len: usize, slice: &[u8]) -> std::cmp::Ordering {
         let mut offset = 0usize;
         for segment in segments {
@@ -572,10 +592,10 @@ impl<'a, P: Partial + 'a, V> LendingIterInner<'a, P, V> {
     }
 
     fn build_positioned_stack<K: KeyTrait<PartialType = P>>(
-        node: &'a DefaultNode<P, V>,
+        node: &'a DefaultNode<P, V, A>,
         seek_key: &K,
         depth: usize,
-    ) -> Vec<(usize, usize, IterFrameIter<'a, P, V>)> {
+    ) -> Vec<(usize, usize, IterFrameIter<'a, P, V, A>)> {
         let root_segment_depth = usize::from(!node.prefix.as_ref().is_empty());
 
         let prefix_common = node.prefix.prefix_length_key(seek_key, depth);
@@ -631,8 +651,8 @@ impl<'a, P: Partial + 'a, V> LendingIterInner<'a, P, V> {
 }
 
 #[allow(dead_code)]
-impl<'a, P: Partial + 'a, V> LendingIterInner<'a, P, V> {
-    pub(crate) fn for_each<F>(node: Option<&'a DefaultNode<P, V>>, mut on_each: F)
+impl<'a, P: Partial + 'a, V, A: Allocator + Clone> LendingIterInner<'a, P, V, A> {
+    pub(crate) fn for_each<F>(node: Option<&'a DefaultNode<P, V, A>>, mut on_each: F)
     where
         F: for<'view> FnMut(LendingKeyView<'a, 'view>, &'a V),
     {
@@ -667,7 +687,7 @@ impl<'a, P: Partial + 'a, V> LendingIterInner<'a, P, V> {
     }
 
     pub(crate) fn for_each_with_prefix<F>(
-        node: Option<&'a DefaultNode<P, V>>,
+        node: Option<&'a DefaultNode<P, V, A>>,
         root_segments: Vec<&'a [u8]>,
         root_len: usize,
         mut on_each: F,
@@ -698,7 +718,7 @@ impl<'a, P: Partial + 'a, V> LendingIterInner<'a, P, V> {
     }
 
     pub(crate) fn for_each_with_bounds<K, F>(
-        node: Option<&'a DefaultNode<P, V>>,
+        node: Option<&'a DefaultNode<P, V, A>>,
         start_bound: Bound<K>,
         end_bound: Bound<K>,
         mut on_each: F,
@@ -798,7 +818,9 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> Iterator for Iter<'a,
     }
 }
 
-impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> Iterator for IterInner<'a, K, P, V> {
+impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V, A: Allocator + Clone> Iterator
+    for IterInner<'a, K, P, V, A>
+{
     type Item = (K, &'a V);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -838,11 +860,11 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> Iterator for IterInne
                 if let Some(start_bound) = self.start_bound.as_ref() {
                     let satisfies_start = match start_bound {
                         Bound::Included(start_key) => {
-                            IterInner::<K, P, V>::key_order(&key, start_key)
+                            IterInner::<K, P, V, A>::key_order(&key, start_key)
                                 >= std::cmp::Ordering::Equal
                         }
                         Bound::Excluded(start_key) => {
-                            IterInner::<K, P, V>::key_order(&key, start_key)
+                            IterInner::<K, P, V, A>::key_order(&key, start_key)
                                 > std::cmp::Ordering::Equal
                         }
                         Bound::Unbounded => true,
@@ -867,13 +889,13 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V> Iterator for IterInne
 ///
 /// This iterator skips key reconstruction entirely, only yielding values.
 /// It's useful for measuring the overhead of key reconstruction in iteration.
-pub struct ValuesIter<'a, P: Partial + 'a, V> {
+pub struct ValuesIter<'a, P: Partial + 'a, V, A: Allocator = Global> {
     root_value: Option<&'a V>,
-    node_iter_stack: Vec<NodeIter<'a, P, V>>,
+    node_iter_stack: Vec<NodeIter<'a, P, V, A>>,
 }
 
-impl<'a, P: Partial + 'a, V> ValuesIter<'a, P, V> {
-    pub(crate) fn new(node: Option<&'a DefaultNode<P, V>>) -> Self {
+impl<'a, P: Partial + 'a, V, A: Allocator + Clone> ValuesIter<'a, P, V, A> {
+    pub(crate) fn new(node: Option<&'a DefaultNode<P, V, A>>) -> Self {
         let Some(root_node) = node else {
             return Self {
                 root_value: None,
@@ -888,7 +910,7 @@ impl<'a, P: Partial + 'a, V> ValuesIter<'a, P, V> {
     }
 }
 
-impl<'a, P: Partial + 'a, V> Iterator for ValuesIter<'a, P, V> {
+impl<'a, P: Partial + 'a, V, A: Allocator + Clone> Iterator for ValuesIter<'a, P, V, A> {
     type Item = &'a V;
 
     fn next(&mut self) -> Option<Self::Item> {
