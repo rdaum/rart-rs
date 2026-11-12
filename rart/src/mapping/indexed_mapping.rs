@@ -1,3 +1,4 @@
+use std::alloc::{Allocator, Global};
 use std::mem::MaybeUninit;
 
 use crate::mapping::NodeMapping;
@@ -8,9 +9,9 @@ use crate::utils::bitarray::BitArray;
 use crate::utils::bitset::{Bitset64, BitsetOnesIter, BitsetTrait};
 
 /// A mapping from keys to separate child pointers. 256 keys, usually 48 children.
-pub struct IndexedMapping<N, const WIDTH: usize, Bitset: BitsetTrait> {
-    pub(crate) child_ptr_indexes: BitArray<u8, 256, Bitset64<4>>,
-    pub(crate) children: BitArray<N, WIDTH, Bitset>,
+pub struct IndexedMapping<N, const WIDTH: usize, Bitset: BitsetTrait, A: Allocator = Global> {
+    pub(crate) child_ptr_indexes: BitArray<u8, 256, Bitset64<4>, A>,
+    pub(crate) children: BitArray<N, WIDTH, Bitset, A>,
     pub(crate) num_children: u8,
 }
 
@@ -20,9 +21,11 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> Default for IndexedMapping<N, W
     }
 }
 
-impl<N, const WIDTH: usize, Bitset: BitsetTrait> IntoIterator for IndexedMapping<N, WIDTH, Bitset> {
+impl<N, const WIDTH: usize, Bitset: BitsetTrait, A: Allocator> IntoIterator
+    for IndexedMapping<N, WIDTH, Bitset, A>
+{
     type Item = (u8, N);
-    type IntoIter = IndexedMappingIntoIter<N, WIDTH, Bitset>;
+    type IntoIter = IndexedMappingIntoIter<N, WIDTH, Bitset, A>;
 
     fn into_iter(self) -> Self::IntoIter {
         IndexedMappingIntoIter {
@@ -32,13 +35,14 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> IntoIterator for IndexedMapping
     }
 }
 
-pub struct IndexedMappingIntoIter<N, const WIDTH: usize, Bitset: BitsetTrait> {
+pub struct IndexedMappingIntoIter<N, const WIDTH: usize, Bitset: BitsetTrait, A: Allocator = Global>
+{
     key_iter: BitsetOnesIter<u64, 4>,
-    mapping: IndexedMapping<N, WIDTH, Bitset>,
+    mapping: IndexedMapping<N, WIDTH, Bitset, A>,
 }
 
-impl<N, const WIDTH: usize, Bitset: BitsetTrait> Iterator
-    for IndexedMappingIntoIter<N, WIDTH, Bitset>
+impl<N, const WIDTH: usize, Bitset: BitsetTrait, A: Allocator> Iterator
+    for IndexedMappingIntoIter<N, WIDTH, Bitset, A>
 {
     type Item = (u8, N);
 
@@ -54,50 +58,20 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> Iterator
     }
 }
 
-impl<N, const WIDTH: usize, Bitset: BitsetTrait> ExactSizeIterator
-    for IndexedMappingIntoIter<N, WIDTH, Bitset>
+impl<N, const WIDTH: usize, Bitset: BitsetTrait, A: Allocator> ExactSizeIterator
+    for IndexedMappingIntoIter<N, WIDTH, Bitset, A>
 {
 }
 
 impl<N, const WIDTH: usize, Bitset: BitsetTrait> IndexedMapping<N, WIDTH, Bitset> {
     pub fn new() -> Self {
-        Self {
-            child_ptr_indexes: Default::default(),
-            children: BitArray::new(),
-            num_children: 0,
-        }
+        Self::new_in(Global)
     }
 
-    pub(crate) fn from_direct(dm: &mut DirectMapping<N>) -> Self {
-        let mut indexed = IndexedMapping::new();
-        let child_count = dm.num_children();
-        let mut next_slot = 0usize;
-
-        while let Some(key) = dm.children.first_used() {
-            // SAFETY: `first_used()` only returns initialized child slots.
-            let child = unsafe { dm.children.erase_known_present(key) };
-            indexed.child_ptr_indexes.set(key, next_slot as u8);
-            indexed.children.set(next_slot, child);
-            next_slot += 1;
-        }
-        indexed.num_children = child_count as u8;
-        indexed
-    }
-
-    pub fn from_sorted_keyed<const KM_WIDTH: usize>(
-        km: &mut SortedKeyedMapping<N, KM_WIDTH>,
+    pub fn from_sorted_keyed<const KM_WIDTH: usize, KA: Allocator>(
+        km: &mut SortedKeyedMapping<N, KM_WIDTH, KA>,
     ) -> Self {
-        let mut im: IndexedMapping<N, WIDTH, Bitset> = IndexedMapping::new();
-        let child_count = km.num_children as usize;
-        for i in 0..child_count {
-            let stolen = unsafe { km.children[i].assume_init_read() };
-            km.children[i] = MaybeUninit::uninit();
-            im.child_ptr_indexes.set(km.keys[i] as usize, i as u8);
-            im.children.set(i, stolen);
-        }
-        im.num_children = km.num_children;
-        km.num_children = 0;
-        im
+        Self::from_sorted_keyed_in(km, Global)
     }
 
     #[doc(hidden)]
@@ -116,7 +90,55 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> IndexedMapping<N, WIDTH, Bitset
         km.num_children = 0;
         im
     }
+}
 
+impl<N, const WIDTH: usize, Bitset: BitsetTrait, A: Allocator + Clone>
+    IndexedMapping<N, WIDTH, Bitset, A>
+{
+    /// Create an empty mapping whose index and child arrays are allocated in `alloc`.
+    pub fn new_in(alloc: A) -> Self {
+        Self {
+            child_ptr_indexes: BitArray::new_in(alloc.clone()),
+            children: BitArray::new_in(alloc),
+            num_children: 0,
+        }
+    }
+
+    pub(crate) fn from_direct_in<DA: Allocator>(dm: &mut DirectMapping<N, DA>, alloc: A) -> Self {
+        let mut indexed = IndexedMapping::new_in(alloc);
+        let child_count = dm.num_children();
+        let mut next_slot = 0usize;
+
+        while let Some(key) = dm.children.first_used() {
+            // SAFETY: `first_used()` only returns initialized child slots.
+            let child = unsafe { dm.children.erase_known_present(key) };
+            indexed.child_ptr_indexes.set(key, next_slot as u8);
+            indexed.children.set(next_slot, child);
+            next_slot += 1;
+        }
+        indexed.num_children = child_count as u8;
+        indexed
+    }
+
+    pub fn from_sorted_keyed_in<const KM_WIDTH: usize, KA: Allocator>(
+        km: &mut SortedKeyedMapping<N, KM_WIDTH, KA>,
+        alloc: A,
+    ) -> Self {
+        let mut im: IndexedMapping<N, WIDTH, Bitset, A> = IndexedMapping::new_in(alloc);
+        let child_count = km.num_children as usize;
+        for i in 0..child_count {
+            let stolen = unsafe { km.children[i].assume_init_read() };
+            km.children[i] = MaybeUninit::uninit();
+            im.child_ptr_indexes.set(km.keys[i] as usize, i as u8);
+            im.children.set(i, stolen);
+        }
+        im.num_children = km.num_children;
+        km.num_children = 0;
+        im
+    }
+}
+
+impl<N, const WIDTH: usize, Bitset: BitsetTrait, A: Allocator> IndexedMapping<N, WIDTH, Bitset, A> {
     pub(crate) fn move_into<const NEW_WIDTH: usize, NM: NodeMapping<N, NEW_WIDTH>>(
         &mut self,
         nm: &mut NM,
@@ -127,7 +149,7 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> IndexedMapping<N, WIDTH, Bitset
         }
     }
 
-    pub fn iter(&self) -> IndexedMappingIter<'_, N, WIDTH, Bitset> {
+    pub fn iter(&self) -> IndexedMappingIter<'_, N, WIDTH, Bitset, A> {
         IndexedMappingIter {
             key_iter: self.child_ptr_indexes.bitset.iter(),
             mapping: self,
@@ -160,13 +182,14 @@ where
     }
 }
 
-pub struct IndexedMappingIter<'a, N, const WIDTH: usize, Bitset: BitsetTrait> {
+pub struct IndexedMappingIter<'a, N, const WIDTH: usize, Bitset: BitsetTrait, A: Allocator = Global>
+{
     key_iter: BitsetOnesIter<u64, 4>,
-    mapping: &'a IndexedMapping<N, WIDTH, Bitset>,
+    mapping: &'a IndexedMapping<N, WIDTH, Bitset, A>,
 }
 
-impl<'a, N, const WIDTH: usize, Bitset: BitsetTrait> Iterator
-    for IndexedMappingIter<'a, N, WIDTH, Bitset>
+impl<'a, N, const WIDTH: usize, Bitset: BitsetTrait, A: Allocator> Iterator
+    for IndexedMappingIter<'a, N, WIDTH, Bitset, A>
 {
     type Item = (u8, &'a N);
 
@@ -177,8 +200,8 @@ impl<'a, N, const WIDTH: usize, Bitset: BitsetTrait> Iterator
     }
 }
 
-impl<N, const WIDTH: usize, Bitset: BitsetTrait> NodeMapping<N, WIDTH>
-    for IndexedMapping<N, WIDTH, Bitset>
+impl<N, const WIDTH: usize, Bitset: BitsetTrait, A: Allocator> NodeMapping<N, WIDTH>
+    for IndexedMapping<N, WIDTH, Bitset, A>
 {
     fn add_child(&mut self, key: u8, node: N) {
         let pos = self.children.first_empty().unwrap();
@@ -219,7 +242,9 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> NodeMapping<N, WIDTH>
     }
 }
 
-impl<N, const WIDTH: usize, Bitset: BitsetTrait> Drop for IndexedMapping<N, WIDTH, Bitset> {
+impl<N, const WIDTH: usize, Bitset: BitsetTrait, A: Allocator> Drop
+    for IndexedMapping<N, WIDTH, Bitset, A>
+{
     fn drop(&mut self) {
         if self.num_children == 0 {
             return;

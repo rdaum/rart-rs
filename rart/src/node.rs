@@ -1,3 +1,5 @@
+use std::alloc::{Allocator, Global};
+
 use crate::mapping::direct_mapping::DirectMapping;
 use crate::mapping::direct_mapping::DirectMappingIter;
 use crate::mapping::indexed_mapping::IndexedMapping;
@@ -11,7 +13,6 @@ use crate::utils::bitset::Bitset64;
 
 pub trait Node<P: Partial, V> {
     fn new_leaf(partial: P, value: V) -> Self;
-    fn new_inner(prefix: P) -> Self;
 
     fn value(&self) -> Option<&V>;
     fn value_mut(&mut self) -> Option<&mut V>;
@@ -22,8 +23,6 @@ pub trait Node<P: Partial, V> {
     fn seek_child(&self, key: u8) -> Option<&Self>;
     fn seek_child_mut(&mut self, key: u8) -> Option<&mut Self>;
 
-    fn add_child(&mut self, key: u8, node: Self);
-
     fn delete_child(&mut self, key: u8) -> Option<Self>
     where
         Self: Sized;
@@ -32,30 +31,40 @@ pub trait Node<P: Partial, V> {
     fn num_children(&self) -> usize;
 }
 
-pub struct DefaultNode<P: Partial, V> {
+/// A tree node whose child storage is allocated in `A`.
+///
+/// Leaves own no allocation and therefore carry no allocator handle; operations that may
+/// create child storage (`new_inner`, `add_child`, bulk constructors) take the allocator
+/// explicitly. Growing and shrinking reuse the handle held by the node's existing box.
+pub struct DefaultNode<P: Partial, V, A: Allocator = Global> {
     pub(crate) prefix: P,
     pub(crate) value: Option<V>,
-    pub(crate) content: Content<P, V>,
+    pub(crate) content: Content<P, V, A>,
 }
 
-pub(crate) enum Content<P: Partial, V> {
+type Node4Mapping<P, V, A> = SortedKeyedMapping<DefaultNode<P, V, A>, 4, A>;
+type Node16Mapping<P, V, A> = SortedKeyedMapping<DefaultNode<P, V, A>, 16, A>;
+type Node48Mapping<P, V, A> = IndexedMapping<DefaultNode<P, V, A>, 48, Bitset64<1>, A>;
+type Node256Mapping<P, V, A> = DirectMapping<DefaultNode<P, V, A>, A>;
+
+pub(crate) enum Content<P: Partial, V, A: Allocator = Global> {
     Empty,
-    Node4(Box<SortedKeyedMapping<DefaultNode<P, V>, 4>>),
-    Node16(Box<SortedKeyedMapping<DefaultNode<P, V>, 16>>),
-    Node48(Box<IndexedMapping<DefaultNode<P, V>, 48, Bitset64<1>>>),
-    Node256(Box<DirectMapping<DefaultNode<P, V>>>),
+    Node4(Box<Node4Mapping<P, V, A>, A>),
+    Node16(Box<Node16Mapping<P, V, A>, A>),
+    Node48(Box<Node48Mapping<P, V, A>, A>),
+    Node256(Box<Node256Mapping<P, V, A>, A>),
 }
 
-pub enum NodeIter<'a, P: Partial, V> {
-    Node4(SortedKeyedMappingIter<'a, DefaultNode<P, V>, 4>),
-    Node16(SortedKeyedMappingIter<'a, DefaultNode<P, V>, 16>),
-    Node48(IndexedMappingIter<'a, DefaultNode<P, V>, 48, Bitset64<1>>),
-    Node256(DirectMappingIter<'a, DefaultNode<P, V>>),
+pub enum NodeIter<'a, P: Partial, V, A: Allocator = Global> {
+    Node4(SortedKeyedMappingIter<'a, DefaultNode<P, V, A>, 4, A>),
+    Node16(SortedKeyedMappingIter<'a, DefaultNode<P, V, A>, 16, A>),
+    Node48(IndexedMappingIter<'a, DefaultNode<P, V, A>, 48, Bitset64<1>, A>),
+    Node256(DirectMappingIter<'a, DefaultNode<P, V, A>, A>),
     Empty,
 }
 
-impl<'a, P: Partial, V> Iterator for NodeIter<'a, P, V> {
-    type Item = (u8, &'a DefaultNode<P, V>);
+impl<'a, P: Partial, V, A: Allocator> Iterator for NodeIter<'a, P, V, A> {
+    type Item = (u8, &'a DefaultNode<P, V, A>);
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
@@ -68,23 +77,13 @@ impl<'a, P: Partial, V> Iterator for NodeIter<'a, P, V> {
     }
 }
 
-impl<P: Partial, V> Node<P, V> for DefaultNode<P, V> {
+impl<P: Partial, V, A: Allocator + Clone> Node<P, V> for DefaultNode<P, V, A> {
     #[inline]
     fn new_leaf(partial: P, value: V) -> Self {
         Self {
             prefix: partial,
             value: Some(value),
             content: Content::Empty,
-        }
-    }
-
-    #[inline]
-    fn new_inner(prefix: P) -> Self {
-        let nt = Content::Node4(Box::default());
-        Self {
-            prefix,
-            value: None,
-            content: nt,
         }
     }
 
@@ -125,32 +124,6 @@ impl<P: Partial, V> Node<P, V> for DefaultNode<P, V> {
             Content::Node48(km) => km.seek_child_mut(key),
             Content::Node256(children) => children.seek_child_mut(key),
             Content::Empty => None,
-        }
-    }
-
-    fn add_child(&mut self, key: u8, node: Self) {
-        if matches!(self.content, Content::Empty) {
-            self.content = Content::Node4(Box::default());
-        }
-
-        if self.is_full() {
-            self.grow();
-        }
-
-        match &mut self.content {
-            Content::Node4(km) => {
-                km.add_child(key, node);
-            }
-            Content::Node16(km) => {
-                km.add_child(key, node);
-            }
-            Content::Node48(im) => {
-                im.add_child(key, node);
-            }
-            Content::Node256(pm) => {
-                pm.add_child(key, node);
-            }
-            Content::Empty => unreachable!("empty nodes are promoted before adding children"),
         }
     }
 
@@ -217,11 +190,54 @@ impl<P: Partial, V> Node<P, V> for DefaultNode<P, V> {
     }
 }
 
-impl<P: Partial, V> DefaultNode<P, V> {
+impl<P: Partial, V, A: Allocator + Clone> DefaultNode<P, V, A> {
+    #[inline]
+    fn empty_node4(alloc: &A) -> Content<P, V, A> {
+        Content::Node4(Box::new_in(
+            SortedKeyedMapping::new_in(alloc.clone()),
+            alloc.clone(),
+        ))
+    }
+
+    #[inline]
+    pub(crate) fn new_inner(prefix: P, alloc: &A) -> Self {
+        Self {
+            prefix,
+            value: None,
+            content: Self::empty_node4(alloc),
+        }
+    }
+
+    pub(crate) fn add_child(&mut self, key: u8, node: Self, alloc: &A) {
+        if matches!(self.content, Content::Empty) {
+            self.content = Self::empty_node4(alloc);
+        }
+
+        if self.is_full() {
+            self.grow();
+        }
+
+        match &mut self.content {
+            Content::Node4(km) => {
+                km.add_child(key, node);
+            }
+            Content::Node16(km) => {
+                km.add_child(key, node);
+            }
+            Content::Node48(im) => {
+                im.add_child(key, node);
+            }
+            Content::Node256(pm) => {
+                pm.add_child(key, node);
+            }
+            Content::Empty => unreachable!("empty nodes are promoted before adding children"),
+        }
+    }
+
     #[inline]
     #[allow(dead_code)]
-    pub fn new_4(prefix: P) -> Self {
-        let nt = Content::Node4(Box::default());
+    pub fn new_4(prefix: P, alloc: &A) -> Self {
+        let nt = Self::empty_node4(alloc);
         Self {
             prefix,
             value: None,
@@ -231,8 +247,11 @@ impl<P: Partial, V> DefaultNode<P, V> {
 
     #[inline]
     #[allow(dead_code)]
-    pub fn new_16(prefix: P) -> Self {
-        let nt = Content::Node16(Box::default());
+    pub fn new_16(prefix: P, alloc: &A) -> Self {
+        let nt = Content::Node16(Box::new_in(
+            SortedKeyedMapping::new_in(alloc.clone()),
+            alloc.clone(),
+        ));
         Self {
             prefix,
             value: None,
@@ -242,8 +261,11 @@ impl<P: Partial, V> DefaultNode<P, V> {
 
     #[inline]
     #[allow(dead_code)]
-    pub fn new_48(prefix: P) -> Self {
-        let nt = Content::Node48(Box::default());
+    pub fn new_48(prefix: P, alloc: &A) -> Self {
+        let nt = Content::Node48(Box::new_in(
+            IndexedMapping::new_in(alloc.clone()),
+            alloc.clone(),
+        ));
         Self {
             prefix,
             value: None,
@@ -253,8 +275,11 @@ impl<P: Partial, V> DefaultNode<P, V> {
 
     #[inline]
     #[allow(dead_code)]
-    pub fn new_256(prefix: P) -> Self {
-        let nt = Content::Node256(Box::default());
+    pub fn new_256(prefix: P, alloc: &A) -> Self {
+        let nt = Content::Node256(Box::new_in(
+            DirectMapping::new_in(alloc.clone()),
+            alloc.clone(),
+        ));
         Self {
             prefix,
             value: None,
@@ -290,14 +315,26 @@ impl<P: Partial, V> DefaultNode<P, V> {
                 self.prefix = self.prefix.partial_extended_with(&prefix);
             }
             Content::Node16(km) => {
-                self.content = Content::Node4(Box::new(SortedKeyedMapping::from_resized(km)));
+                let alloc = Box::allocator(km).clone();
+                self.content = Content::Node4(Box::new_in(
+                    SortedKeyedMapping::from_resized_in(km, alloc.clone()),
+                    alloc,
+                ));
             }
             Content::Node48(im) => {
-                let new_node = Content::Node16(Box::new(SortedKeyedMapping::from_indexed(im)));
+                let alloc = Box::allocator(im).clone();
+                let new_node = Content::Node16(Box::new_in(
+                    SortedKeyedMapping::from_indexed_in(im, alloc.clone()),
+                    alloc,
+                ));
                 self.content = new_node;
             }
             Content::Node256(dm) => {
-                self.content = Content::Node48(Box::new(IndexedMapping::from_direct(dm)));
+                let alloc = Box::allocator(dm).clone();
+                self.content = Content::Node48(Box::new_in(
+                    IndexedMapping::from_direct_in(dm, alloc.clone()),
+                    alloc,
+                ));
             }
             Content::Empty => unreachable!("Should not be possible."),
         }
@@ -306,13 +343,25 @@ impl<P: Partial, V> DefaultNode<P, V> {
     fn grow(&mut self) {
         match &mut self.content {
             Content::Node4(km) => {
-                self.content = Content::Node16(Box::new(SortedKeyedMapping::from_resized(km)))
+                let alloc = Box::allocator(km).clone();
+                self.content = Content::Node16(Box::new_in(
+                    SortedKeyedMapping::from_resized_in(km, alloc.clone()),
+                    alloc,
+                ))
             }
             Content::Node16(km) => {
-                self.content = Content::Node48(Box::new(IndexedMapping::from_sorted_keyed(km)))
+                let alloc = Box::allocator(km).clone();
+                self.content = Content::Node48(Box::new_in(
+                    IndexedMapping::from_sorted_keyed_in(km, alloc.clone()),
+                    alloc,
+                ))
             }
             Content::Node48(im) => {
-                self.content = Content::Node256(Box::new(DirectMapping::from_indexed(im)));
+                let alloc = Box::allocator(im).clone();
+                self.content = Content::Node256(Box::new_in(
+                    DirectMapping::from_indexed_in(im, alloc.clone()),
+                    alloc,
+                ));
             }
             Content::Node256 { .. } => {
                 unreachable!("Should never grow a node256")
@@ -326,7 +375,7 @@ impl<P: Partial, V> DefaultNode<P, V> {
         self.capacity() - self.num_children()
     }
 
-    pub fn iter(&self) -> NodeIter<'_, P, V> {
+    pub fn iter(&self) -> NodeIter<'_, P, V, A> {
         match &self.content {
             Content::Node4(n) => NodeIter::Node4(n.iter()),
             Content::Node16(n) => NodeIter::Node16(n.iter()),
@@ -351,6 +400,7 @@ impl<P: Partial, V> DefaultNode<P, V> {
 mod tests {
     use crate::node::{Content, DefaultNode, Node};
     use crate::partials::array_partial::ArrPartial;
+    use std::alloc::Global;
     use std::mem::size_of;
 
     #[test]
@@ -369,11 +419,11 @@ mod tests {
     fn test_n4() {
         let test_key: ArrPartial<16> = ArrPartial::key("abc".as_bytes());
 
-        let mut n4 = DefaultNode::new_4(test_key.clone());
-        n4.add_child(5, DefaultNode::new_leaf(test_key.clone(), 1));
-        n4.add_child(4, DefaultNode::new_leaf(test_key.clone(), 2));
-        n4.add_child(3, DefaultNode::new_leaf(test_key.clone(), 3));
-        n4.add_child(2, DefaultNode::new_leaf(test_key.clone(), 4));
+        let mut n4 = DefaultNode::new_4(test_key.clone(), &Global);
+        n4.add_child(5, DefaultNode::new_leaf(test_key.clone(), 1), &Global);
+        n4.add_child(4, DefaultNode::new_leaf(test_key.clone(), 2), &Global);
+        n4.add_child(3, DefaultNode::new_leaf(test_key.clone(), 3), &Global);
+        n4.add_child(2, DefaultNode::new_leaf(test_key.clone(), 4), &Global);
 
         assert_eq!(*n4.seek_child(5).unwrap().value().unwrap(), 1);
         assert_eq!(*n4.seek_child(4).unwrap().value().unwrap(), 2);
@@ -390,7 +440,7 @@ mod tests {
         assert!(n4.seek_child(5).is_none());
         assert!(n4.seek_child(2).is_none());
 
-        n4.add_child(2, DefaultNode::new_leaf(test_key, 4));
+        n4.add_child(2, DefaultNode::new_leaf(test_key, 4), &Global);
         n4.delete_child(3);
         assert!(n4.seek_child(5).is_none());
         assert!(n4.seek_child(3).is_none());
@@ -400,11 +450,11 @@ mod tests {
     fn test_n16() {
         let test_key: ArrPartial<16> = ArrPartial::key("abc".as_bytes());
 
-        let mut n16 = DefaultNode::new_16(test_key.clone());
+        let mut n16 = DefaultNode::new_16(test_key.clone(), &Global);
 
         // Fill up the node with keys in reverse order.
         for i in (0..16).rev() {
-            n16.add_child(i, DefaultNode::new_leaf(test_key.clone(), i));
+            n16.add_child(i, DefaultNode::new_leaf(test_key.clone(), i), &Global);
         }
 
         for i in 0..16 {
@@ -445,11 +495,11 @@ mod tests {
     fn test_n48() {
         let test_key: ArrPartial<16> = ArrPartial::key("abc".as_bytes());
 
-        let mut n48 = DefaultNode::new_48(test_key.clone());
+        let mut n48 = DefaultNode::new_48(test_key.clone(), &Global);
 
         // indexes in n48 have no sort order, so we don't look at that
         for i in 0..48 {
-            n48.add_child(i, DefaultNode::new_leaf(test_key.clone(), i));
+            n48.add_child(i, DefaultNode::new_leaf(test_key.clone(), i), &Global);
         }
 
         for i in 0..48 {
@@ -469,10 +519,10 @@ mod tests {
     fn test_n_256() {
         let test_key: ArrPartial<16> = ArrPartial::key("abc".as_bytes());
 
-        let mut n256 = DefaultNode::new_256(test_key.clone());
+        let mut n256 = DefaultNode::new_256(test_key.clone(), &Global);
 
         for i in 0..=255 {
-            n256.add_child(i, DefaultNode::new_leaf(test_key.clone(), i));
+            n256.add_child(i, DefaultNode::new_leaf(test_key.clone(), i), &Global);
         }
         for i in 0..=255 {
             debug_assert_eq!(*n256.seek_child(i).unwrap().value().unwrap(), i);

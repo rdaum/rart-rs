@@ -9,6 +9,7 @@ keywords = ["datastructure", "tree", "radix", "index"]
 license.workspace = true
 readme = "../README.md"
 repository.workspace = true
+rust-version.workspace = true
 description = "High-performance Adaptive Radix Tree implementation with SIMD optimizations"
 
 [dev-dependencies]
@@ -76,6 +77,10 @@ harness = false
 
 [[bench]]
 name = "bulk_load_bench"
+harness = false
+
+[[bench]]
+name = "allocator_bench"
 harness = false
 
 [[bench]]

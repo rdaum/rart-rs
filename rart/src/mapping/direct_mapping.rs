@@ -1,10 +1,12 @@
+use std::alloc::{Allocator, Global};
+
 use crate::mapping::NodeMapping;
 use crate::mapping::indexed_mapping::IndexedMapping;
 use crate::utils::bitarray::BitArray;
 use crate::utils::bitset::{Bitset64, BitsetOnesIter, BitsetTrait};
 
-pub struct DirectMapping<N> {
-    pub(crate) children: BitArray<N, 256, Bitset64<4>>,
+pub struct DirectMapping<N, A: Allocator = Global> {
+    pub(crate) children: BitArray<N, 256, Bitset64<4>, A>,
     num_children: usize,
 }
 
@@ -14,9 +16,9 @@ impl<N> Default for DirectMapping<N> {
     }
 }
 
-impl<N> IntoIterator for DirectMapping<N> {
+impl<N, A: Allocator> IntoIterator for DirectMapping<N, A> {
     type Item = (u8, N);
-    type IntoIter = DirectMappingIntoIter<N>;
+    type IntoIter = DirectMappingIntoIter<N, A>;
 
     fn into_iter(self) -> Self::IntoIter {
         DirectMappingIntoIter {
@@ -26,12 +28,12 @@ impl<N> IntoIterator for DirectMapping<N> {
     }
 }
 
-pub struct DirectMappingIntoIter<N> {
+pub struct DirectMappingIntoIter<N, A: Allocator = Global> {
     key_iter: BitsetOnesIter<u64, 4>,
-    mapping: DirectMapping<N>,
+    mapping: DirectMapping<N, A>,
 }
 
-impl<N> Iterator for DirectMappingIntoIter<N> {
+impl<N, A: Allocator> Iterator for DirectMappingIntoIter<N, A> {
     type Item = (u8, N);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -46,20 +48,34 @@ impl<N> Iterator for DirectMappingIntoIter<N> {
     }
 }
 
-impl<N> ExactSizeIterator for DirectMappingIntoIter<N> {}
+impl<N, A: Allocator> ExactSizeIterator for DirectMappingIntoIter<N, A> {}
 
 impl<N> DirectMapping<N> {
     pub fn new() -> Self {
-        Self {
-            children: BitArray::new(),
-            num_children: 0,
-        }
+        Self::new_in(Global)
     }
 
     pub fn from_indexed<const WIDTH: usize, FromBitset: BitsetTrait>(
         im: &mut IndexedMapping<N, WIDTH, FromBitset>,
     ) -> Self {
-        let mut new_mapping = DirectMapping::<N>::new();
+        Self::from_indexed_in(im, Global)
+    }
+}
+
+impl<N, A: Allocator> DirectMapping<N, A> {
+    /// Create an empty mapping whose child array is allocated in `alloc`.
+    pub fn new_in(alloc: A) -> Self {
+        Self {
+            children: BitArray::new_in(alloc),
+            num_children: 0,
+        }
+    }
+
+    pub fn from_indexed_in<const WIDTH: usize, FromBitset: BitsetTrait, IA: Allocator>(
+        im: &mut IndexedMapping<N, WIDTH, FromBitset, IA>,
+        alloc: A,
+    ) -> Self {
+        let mut new_mapping = DirectMapping::<N, A>::new_in(alloc);
         let child_count = im.num_children as usize;
 
         while let Some(key) = im.child_ptr_indexes.first_used() {
@@ -76,7 +92,7 @@ impl<N> DirectMapping<N> {
     }
 
     #[inline]
-    pub fn iter(&self) -> DirectMappingIter<'_, N> {
+    pub fn iter(&self) -> DirectMappingIter<'_, N, A> {
         DirectMappingIter {
             key_iter: self.children.bitset.iter(),
             mapping: self,
@@ -93,12 +109,12 @@ impl<N: Clone> DirectMapping<N> {
     }
 }
 
-pub struct DirectMappingIter<'a, N> {
+pub struct DirectMappingIter<'a, N, A: Allocator = Global> {
     key_iter: BitsetOnesIter<u64, 4>,
-    mapping: &'a DirectMapping<N>,
+    mapping: &'a DirectMapping<N, A>,
 }
 
-impl<'a, N> Iterator for DirectMappingIter<'a, N> {
+impl<'a, N, A: Allocator> Iterator for DirectMappingIter<'a, N, A> {
     type Item = (u8, &'a N);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -108,7 +124,7 @@ impl<'a, N> Iterator for DirectMappingIter<'a, N> {
     }
 }
 
-impl<N> NodeMapping<N, 256> for DirectMapping<N> {
+impl<N, A: Allocator> NodeMapping<N, 256> for DirectMapping<N, A> {
     #[inline]
     fn add_child(&mut self, key: u8, node: N) {
         self.children.set(key as usize, node);
