@@ -1,0 +1,12 @@
+# cargo-deny configuration.
+# Run: cargo deny --all-features --locked check advisories sources bans
+
+[advisories]
+ignore = [
+    # `paste` is unmaintained (archived, not vulnerable). It is a compile-time-only
+    # proc-macro pulled in transitively by `simdeez` (and by `blart`, a dev-only
+    # benchmark dependency). The latest releases of both (simdeez 3.0.1, blart 0.6.0)
+    # still depend on it, so there is no upgrade path. Revisit when either migrates
+    # (e.g. to `pastey`).
+    { id = "RUSTSEC-2024-0436", reason = "transitive compile-time proc-macro via simdeez/blart; no upgrade available upstream" },
+]
