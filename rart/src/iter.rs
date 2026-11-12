@@ -170,13 +170,66 @@ pub struct PrefixMatchIter<
     depth: usize,
 }
 
+/// Scratch buffer holding the key bytes of the current traversal path.
+///
+/// The backing storage is kept fully initialized and only grows, with the live length
+/// tracked separately, so appending a prefix is a bounds-checked short copy rather than a
+/// `Vec::extend_from_slice` (capacity check plus an out-of-line `memcpy`).
+struct KeyBuf {
+    buf: Vec<u8>,
+    len: usize,
+}
+
+impl KeyBuf {
+    const MIN_CAPACITY: usize = 32;
+
+    fn from_slice(bytes: &[u8]) -> Self {
+        let capacity = bytes.len().max(Self::MIN_CAPACITY);
+        let mut buf = Vec::with_capacity(capacity);
+        buf.extend_from_slice(bytes);
+        buf.resize(capacity, 0);
+        Self {
+            buf,
+            len: bytes.len(),
+        }
+    }
+
+    #[inline]
+    fn truncate(&mut self, len: usize) {
+        if len < self.len {
+            self.len = len;
+        }
+    }
+
+    #[inline]
+    fn extend_from_slice(&mut self, bytes: &[u8]) {
+        let end = self.len + bytes.len();
+        if end > self.buf.len() {
+            self.grow(end);
+        }
+        crate::utils::copy_short(&mut self.buf[self.len..end], bytes);
+        self.len = end;
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn grow(&mut self, needed: usize) {
+        self.buf.resize(needed.max(self.buf.len() * 2), 0);
+    }
+
+    #[inline]
+    fn as_slice(&self) -> &[u8] {
+        &self.buf[..self.len]
+    }
+}
+
 struct IterInner<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V, A: Allocator = Global> {
     node_iter_stack: Vec<(usize, IterFrameIter<'a, P, V, A>)>,
 
     // Pushed and popped with prefix portions as we descend the tree.
     // We materialize `K` only when yielding, which avoids repeated owned-key
     // rebuilds for heap-backed key types during traversal.
-    cur_key: Vec<u8>,
+    cur_key: KeyBuf,
 
     // For seekable iteration: skip keys based on start bound
     start_bound: Option<Bound<K>>,
@@ -192,13 +245,18 @@ pub(crate) struct LendingIterInner<'a, P: Partial + 'a, V, A: Allocator = Global
 impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V, A: Allocator + Clone>
     IterInner<'a, K, P, V, A>
 {
+    /// Order the key bytes accumulated so far against `rhs`.
+    ///
+    /// Takes the left side as raw bytes so the start-bound check can run before the owned
+    /// key is built. Otherwise the key has to live on the stack to be borrowed here, and is
+    /// then reloaded to be returned, which costs a store-forwarding stall per item.
     #[inline]
-    fn key_order(lhs: &K, rhs: &K) -> std::cmp::Ordering {
-        let lhs_len = lhs.length_at(0);
+    fn key_order(lhs: &[u8], rhs: &K) -> std::cmp::Ordering {
+        let lhs_len = lhs.len();
         let rhs_len = rhs.length_at(0);
         let common = lhs_len.min(rhs_len);
-        for i in 0..common {
-            match lhs.at(i).cmp(&rhs.at(i)) {
+        for (i, lhs_byte) in lhs[..common].iter().enumerate() {
+            match lhs_byte.cmp(&rhs.at(i)) {
                 std::cmp::Ordering::Equal => {}
                 ord => return ord,
             }
@@ -213,7 +271,7 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V, A: Allocator + Clone>
         )];
         Self {
             node_iter_stack,
-            cur_key: cur_key.as_ref().to_vec(),
+            cur_key: KeyBuf::from_slice(cur_key.as_ref()),
             start_bound: None,
         }
     }
@@ -242,7 +300,7 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V, A: Allocator + Clone>
 
             return Self {
                 node_iter_stack: final_stack,
-                cur_key: node.prefix.as_ref().to_vec(),
+                cur_key: KeyBuf::from_slice(node.prefix.as_ref()),
                 start_bound: Some(start_bound.clone()),
             };
         }
@@ -252,7 +310,7 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V, A: Allocator + Clone>
 
         Self {
             node_iter_stack,
-            cur_key: node.prefix.as_ref().to_vec(),
+            cur_key: KeyBuf::from_slice(node.prefix.as_ref()),
             start_bound: None,
         }
     }
@@ -402,11 +460,12 @@ impl<'a, K: KeyTrait<PartialType = P> + 'a, P: Partial + 'a, V> Iter<'a, K, P, V
         let root_value = root_node.value();
         let satisfies_start = match &start_bound {
             Bound::Included(start_key) => {
-                IterInner::<K, P, V, A>::key_order(&root_key, start_key)
+                IterInner::<K, P, V, A>::key_order(root_key.as_ref(), start_key)
                     >= std::cmp::Ordering::Equal
             }
             Bound::Excluded(start_key) => {
-                IterInner::<K, P, V, A>::key_order(&root_key, start_key) > std::cmp::Ordering::Equal
+                IterInner::<K, P, V, A>::key_order(root_key.as_ref(), start_key)
+                    > std::cmp::Ordering::Equal
             }
             Bound::Unbounded => true,
         };
@@ -854,17 +913,17 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V, A: Allocator + Clone>
             }
 
             if let Some(v) = node.value() {
-                let key = K::new_from_slice(&self.cur_key);
+                let key_bytes = self.cur_key.as_slice();
                 // Handle start bound filtering. Once we yield a key that satisfies the start bound,
                 // all subsequent keys will also satisfy it due to sorted iteration order.
                 if let Some(start_bound) = self.start_bound.as_ref() {
                     let satisfies_start = match start_bound {
                         Bound::Included(start_key) => {
-                            IterInner::<K, P, V, A>::key_order(&key, start_key)
+                            IterInner::<K, P, V, A>::key_order(key_bytes, start_key)
                                 >= std::cmp::Ordering::Equal
                         }
                         Bound::Excluded(start_key) => {
-                            IterInner::<K, P, V, A>::key_order(&key, start_key)
+                            IterInner::<K, P, V, A>::key_order(key_bytes, start_key)
                                 > std::cmp::Ordering::Equal
                         }
                         Bound::Unbounded => true,
@@ -874,7 +933,7 @@ impl<'a, K: KeyTrait<PartialType = P>, P: Partial + 'a, V, A: Allocator + Clone>
                     }
                     self.start_bound = None;
                 }
-                return Some((key, v));
+                return Some((K::new_from_slice(self.cur_key.as_slice()), v));
             }
 
             if !is_inner {
@@ -937,5 +996,35 @@ impl<'a, P: Partial + 'a, V, A: Allocator + Clone> Iterator for ValuesIter<'a, P
                 return Some(value);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::KeyBuf;
+
+    #[test]
+    fn key_buf_grows_and_truncates() {
+        let mut expected = Vec::new();
+        let mut buf = KeyBuf::from_slice(b"root");
+        expected.extend_from_slice(b"root");
+
+        // Cross the initial capacity several times.
+        for round in 0..40u8 {
+            let fragment: Vec<u8> = (0..=round % 20).map(|i| round.wrapping_add(i)).collect();
+            buf.extend_from_slice(&fragment);
+            expected.extend_from_slice(&fragment);
+            assert_eq!(buf.as_slice(), expected.as_slice());
+        }
+        assert!(expected.len() > 4 * KeyBuf::MIN_CAPACITY);
+
+        for len in [expected.len() + 5, 100, KeyBuf::MIN_CAPACITY, 7, 0] {
+            buf.truncate(len);
+            expected.truncate(len);
+            assert_eq!(buf.as_slice(), expected.as_slice());
+        }
+
+        buf.extend_from_slice(b"again");
+        assert_eq!(buf.as_slice(), b"again");
     }
 }

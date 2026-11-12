@@ -116,7 +116,12 @@ impl<const N: usize> KeyTrait for ArrayKey<N> {
     fn new_from_slice(data: &[u8]) -> Self {
         debug_assert!(data.len() <= N, "data length is greater than array length");
         let mut arr = [0; N];
-        arr[0..data.len()].copy_from_slice(data);
+        if N >= 16 && data.len() <= 16 {
+            // Assemble short keys in registers and store them once; see `pack_short_le`.
+            arr[..16].copy_from_slice(&crate::utils::pack_short_le(data).to_le_bytes());
+        } else {
+            crate::utils::copy_short(&mut arr, data);
+        }
         Self {
             data: arr,
             len: data.len(),
