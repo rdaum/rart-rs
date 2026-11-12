@@ -3932,6 +3932,32 @@ mod tests {
         assert_eq!(art_values, btree_values);
     }
 
+    #[test]
+    fn deep_prefix_chain_does_not_overflow_stack() {
+        // Every key is a prefix of the next, so the tree is a single chain as deep as the
+        // longest key, and insert/remove/drop recursion reaches that depth. Mappings store
+        // their child slots inline (a Node256 is several kilobytes), so this guards against
+        // those temporaries ending up in the recursive frames. The depth is kept under the
+        // existing recursion limit of a debug-build test thread (roughly 1400 levels).
+        const DEPTH: usize = 1000;
+        let bytes = vec![b'a'; DEPTH];
+        let key = |len: usize| VectorKey::new_from_slice(&bytes[..len]);
+
+        let mut tree = AdaptiveRadixTree::<VectorKey, usize>::new();
+        for len in 1..=DEPTH {
+            assert_eq!(tree.insert_k(&key(len), len), None);
+        }
+        assert_eq!(tree.len(), DEPTH);
+        assert_eq!(tree.get_k(&key(DEPTH)), Some(&DEPTH));
+        assert_eq!(tree.get_k(&key(1)), Some(&1));
+
+        for len in (1..=DEPTH).rev().step_by(2) {
+            assert_eq!(tree.remove_k(&key(len)), Some(len));
+        }
+        assert_eq!(tree.len(), DEPTH / 2);
+        assert_eq!(tree.get_k(&key(DEPTH - 1)), Some(&(DEPTH - 1)));
+    }
+
     mod allocator {
         use std::alloc::{AllocError, Allocator, Global, Layout, System};
         use std::cell::Cell;

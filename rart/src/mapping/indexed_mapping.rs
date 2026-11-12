@@ -1,17 +1,16 @@
-use std::alloc::{Allocator, Global};
 use std::mem::MaybeUninit;
 
-use crate::mapping::NodeMapping;
 use crate::mapping::direct_mapping::DirectMapping;
 use crate::mapping::keyed_mapping::KeyedMapping;
 use crate::mapping::sorted_keyed_mapping::SortedKeyedMapping;
+use crate::mapping::{InitEmpty, NodeMapping};
 use crate::utils::bitarray::BitArray;
 use crate::utils::bitset::{Bitset64, BitsetOnesIter, BitsetTrait};
 
 /// A mapping from keys to separate child pointers. 256 keys, usually 48 children.
-pub struct IndexedMapping<N, const WIDTH: usize, Bitset: BitsetTrait, A: Allocator = Global> {
-    pub(crate) child_ptr_indexes: BitArray<u8, 256, Bitset64<4>, A>,
-    pub(crate) children: BitArray<N, WIDTH, Bitset, A>,
+pub struct IndexedMapping<N, const WIDTH: usize, Bitset: BitsetTrait> {
+    pub(crate) child_ptr_indexes: BitArray<u8, 256, Bitset64<4>>,
+    pub(crate) children: BitArray<N, WIDTH, Bitset>,
     pub(crate) num_children: u8,
 }
 
@@ -21,11 +20,9 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> Default for IndexedMapping<N, W
     }
 }
 
-impl<N, const WIDTH: usize, Bitset: BitsetTrait, A: Allocator> IntoIterator
-    for IndexedMapping<N, WIDTH, Bitset, A>
-{
+impl<N, const WIDTH: usize, Bitset: BitsetTrait> IntoIterator for IndexedMapping<N, WIDTH, Bitset> {
     type Item = (u8, N);
-    type IntoIter = IndexedMappingIntoIter<N, WIDTH, Bitset, A>;
+    type IntoIter = IndexedMappingIntoIter<N, WIDTH, Bitset>;
 
     fn into_iter(self) -> Self::IntoIter {
         IndexedMappingIntoIter {
@@ -35,14 +32,13 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait, A: Allocator> IntoIterator
     }
 }
 
-pub struct IndexedMappingIntoIter<N, const WIDTH: usize, Bitset: BitsetTrait, A: Allocator = Global>
-{
+pub struct IndexedMappingIntoIter<N, const WIDTH: usize, Bitset: BitsetTrait> {
     key_iter: BitsetOnesIter<u64, 4>,
-    mapping: IndexedMapping<N, WIDTH, Bitset, A>,
+    mapping: IndexedMapping<N, WIDTH, Bitset>,
 }
 
-impl<N, const WIDTH: usize, Bitset: BitsetTrait, A: Allocator> Iterator
-    for IndexedMappingIntoIter<N, WIDTH, Bitset, A>
+impl<N, const WIDTH: usize, Bitset: BitsetTrait> Iterator
+    for IndexedMappingIntoIter<N, WIDTH, Bitset>
 {
     type Item = (u8, N);
 
@@ -58,20 +54,66 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait, A: Allocator> Iterator
     }
 }
 
-impl<N, const WIDTH: usize, Bitset: BitsetTrait, A: Allocator> ExactSizeIterator
-    for IndexedMappingIntoIter<N, WIDTH, Bitset, A>
+impl<N, const WIDTH: usize, Bitset: BitsetTrait> ExactSizeIterator
+    for IndexedMappingIntoIter<N, WIDTH, Bitset>
 {
 }
 
 impl<N, const WIDTH: usize, Bitset: BitsetTrait> IndexedMapping<N, WIDTH, Bitset> {
     pub fn new() -> Self {
-        Self::new_in(Global)
+        Self {
+            child_ptr_indexes: Default::default(),
+            children: BitArray::new(),
+            num_children: 0,
+        }
     }
 
-    pub fn from_sorted_keyed<const KM_WIDTH: usize, KA: Allocator>(
-        km: &mut SortedKeyedMapping<N, KM_WIDTH, KA>,
+    #[allow(dead_code)]
+    pub(crate) fn from_direct(dm: &mut DirectMapping<N>) -> Self {
+        let mut indexed = IndexedMapping::new();
+        indexed.fill_from_direct(dm);
+        indexed
+    }
+
+    /// Move every child of `dm` into this empty mapping.
+    pub(crate) fn fill_from_direct(&mut self, dm: &mut DirectMapping<N>) {
+        debug_assert_eq!(self.num_children(), 0);
+        let child_count = dm.num_children();
+        let mut next_slot = 0usize;
+
+        while let Some(key) = dm.children.first_used() {
+            // SAFETY: `first_used()` only returns initialized child slots.
+            let child = unsafe { dm.children.erase_known_present(key) };
+            self.child_ptr_indexes.set(key, next_slot as u8);
+            self.children.set(next_slot, child);
+            next_slot += 1;
+        }
+        self.num_children = child_count as u8;
+    }
+
+    pub fn from_sorted_keyed<const KM_WIDTH: usize>(
+        km: &mut SortedKeyedMapping<N, KM_WIDTH>,
     ) -> Self {
-        Self::from_sorted_keyed_in(km, Global)
+        let mut im: IndexedMapping<N, WIDTH, Bitset> = IndexedMapping::new();
+        im.fill_from_sorted_keyed(km);
+        im
+    }
+
+    /// Move every child of `km` into this empty mapping.
+    pub(crate) fn fill_from_sorted_keyed<const KM_WIDTH: usize>(
+        &mut self,
+        km: &mut SortedKeyedMapping<N, KM_WIDTH>,
+    ) {
+        debug_assert_eq!(self.num_children(), 0);
+        let child_count = km.num_children as usize;
+        for i in 0..child_count {
+            let stolen = unsafe { km.children[i].assume_init_read() };
+            km.children[i] = MaybeUninit::uninit();
+            self.child_ptr_indexes.set(km.keys[i] as usize, i as u8);
+            self.children.set(i, stolen);
+        }
+        self.num_children = km.num_children;
+        km.num_children = 0;
     }
 
     #[doc(hidden)]
@@ -90,55 +132,7 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait> IndexedMapping<N, WIDTH, Bitset
         km.num_children = 0;
         im
     }
-}
 
-impl<N, const WIDTH: usize, Bitset: BitsetTrait, A: Allocator + Clone>
-    IndexedMapping<N, WIDTH, Bitset, A>
-{
-    /// Create an empty mapping whose index and child arrays are allocated in `alloc`.
-    pub fn new_in(alloc: A) -> Self {
-        Self {
-            child_ptr_indexes: BitArray::new_in(alloc.clone()),
-            children: BitArray::new_in(alloc),
-            num_children: 0,
-        }
-    }
-
-    pub(crate) fn from_direct_in<DA: Allocator>(dm: &mut DirectMapping<N, DA>, alloc: A) -> Self {
-        let mut indexed = IndexedMapping::new_in(alloc);
-        let child_count = dm.num_children();
-        let mut next_slot = 0usize;
-
-        while let Some(key) = dm.children.first_used() {
-            // SAFETY: `first_used()` only returns initialized child slots.
-            let child = unsafe { dm.children.erase_known_present(key) };
-            indexed.child_ptr_indexes.set(key, next_slot as u8);
-            indexed.children.set(next_slot, child);
-            next_slot += 1;
-        }
-        indexed.num_children = child_count as u8;
-        indexed
-    }
-
-    pub fn from_sorted_keyed_in<const KM_WIDTH: usize, KA: Allocator>(
-        km: &mut SortedKeyedMapping<N, KM_WIDTH, KA>,
-        alloc: A,
-    ) -> Self {
-        let mut im: IndexedMapping<N, WIDTH, Bitset, A> = IndexedMapping::new_in(alloc);
-        let child_count = km.num_children as usize;
-        for i in 0..child_count {
-            let stolen = unsafe { km.children[i].assume_init_read() };
-            km.children[i] = MaybeUninit::uninit();
-            im.child_ptr_indexes.set(km.keys[i] as usize, i as u8);
-            im.children.set(i, stolen);
-        }
-        im.num_children = km.num_children;
-        km.num_children = 0;
-        im
-    }
-}
-
-impl<N, const WIDTH: usize, Bitset: BitsetTrait, A: Allocator> IndexedMapping<N, WIDTH, Bitset, A> {
     pub(crate) fn move_into<const NEW_WIDTH: usize, NM: NodeMapping<N, NEW_WIDTH>>(
         &mut self,
         nm: &mut NM,
@@ -149,7 +143,7 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait, A: Allocator> IndexedMapping<N,
         }
     }
 
-    pub fn iter(&self) -> IndexedMappingIter<'_, N, WIDTH, Bitset, A> {
+    pub fn iter(&self) -> IndexedMappingIter<'_, N, WIDTH, Bitset> {
         IndexedMappingIter {
             key_iter: self.child_ptr_indexes.bitset.iter(),
             mapping: self,
@@ -182,14 +176,13 @@ where
     }
 }
 
-pub struct IndexedMappingIter<'a, N, const WIDTH: usize, Bitset: BitsetTrait, A: Allocator = Global>
-{
+pub struct IndexedMappingIter<'a, N, const WIDTH: usize, Bitset: BitsetTrait> {
     key_iter: BitsetOnesIter<u64, 4>,
-    mapping: &'a IndexedMapping<N, WIDTH, Bitset, A>,
+    mapping: &'a IndexedMapping<N, WIDTH, Bitset>,
 }
 
-impl<'a, N, const WIDTH: usize, Bitset: BitsetTrait, A: Allocator> Iterator
-    for IndexedMappingIter<'a, N, WIDTH, Bitset, A>
+impl<'a, N, const WIDTH: usize, Bitset: BitsetTrait> Iterator
+    for IndexedMappingIter<'a, N, WIDTH, Bitset>
 {
     type Item = (u8, &'a N);
 
@@ -200,8 +193,8 @@ impl<'a, N, const WIDTH: usize, Bitset: BitsetTrait, A: Allocator> Iterator
     }
 }
 
-impl<N, const WIDTH: usize, Bitset: BitsetTrait, A: Allocator> NodeMapping<N, WIDTH>
-    for IndexedMapping<N, WIDTH, Bitset, A>
+impl<N, const WIDTH: usize, Bitset: BitsetTrait> NodeMapping<N, WIDTH>
+    for IndexedMapping<N, WIDTH, Bitset>
 {
     fn add_child(&mut self, key: u8, node: N) {
         let pos = self.children.first_empty().unwrap();
@@ -242,9 +235,22 @@ impl<N, const WIDTH: usize, Bitset: BitsetTrait, A: Allocator> NodeMapping<N, WI
     }
 }
 
-impl<N, const WIDTH: usize, Bitset: BitsetTrait, A: Allocator> Drop
-    for IndexedMapping<N, WIDTH, Bitset, A>
-{
+impl<N, const WIDTH: usize, Bitset: BitsetTrait> InitEmpty for IndexedMapping<N, WIDTH, Bitset> {
+    #[inline]
+    fn init_empty(slot: &mut MaybeUninit<Self>) -> &mut Self {
+        let ptr = slot.as_mut_ptr();
+        // SAFETY: `ptr` comes from a live `&mut MaybeUninit<Self>`, so each field pointer is
+        // valid for writes, and all three fields are initialized before the value is used.
+        unsafe {
+            BitArray::init_empty_at(&raw mut (*ptr).child_ptr_indexes);
+            BitArray::init_empty_at(&raw mut (*ptr).children);
+            (&raw mut (*ptr).num_children).write(0);
+            slot.assume_init_mut()
+        }
+    }
+}
+
+impl<N, const WIDTH: usize, Bitset: BitsetTrait> Drop for IndexedMapping<N, WIDTH, Bitset> {
     fn drop(&mut self) {
         if self.num_children == 0 {
             return;
@@ -261,8 +267,10 @@ mod test {
     use crate::utils::bitset::Bitset16;
 
     #[test]
-    fn test_fits_in_cache_line() {
-        assert!(std::mem::size_of::<super::IndexedMapping<u8, 48, Bitset16<3>>>() <= 64);
+    fn test_storage_is_inline() {
+        // The 256 index bytes and the 48 child slots live inside the mapping itself, so the
+        // box holding the mapping is the node's only allocation.
+        assert!(std::mem::size_of::<super::IndexedMapping<u8, 48, Bitset16<3>>>() >= 256 + 48);
     }
 
     #[test]
