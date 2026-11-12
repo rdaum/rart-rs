@@ -1,8 +1,7 @@
-use std::alloc::{Allocator, Global};
 use std::mem::MaybeUninit;
 
-use crate::mapping::NodeMapping;
 use crate::mapping::indexed_mapping::IndexedMapping;
+use crate::mapping::{InitEmpty, NodeMapping};
 use crate::utils::bitset::BitsetTrait;
 use crate::utils::u8_keys::{
     u8_keys_find_insert_position_sorted, u8_keys_find_key_position_sorted,
@@ -18,9 +17,11 @@ use crate::utils::u8_keys::{
 /// *Note* this version is currently unused, as it is slower than the unsorted version on x86_64
 /// with sse. If benching on other platforms shows it to be faster, then we can use it, so the
 /// code is kept here. The bottleneck here is the constant shuffling of the keys in the array.
-pub struct SortedKeyedMapping<N, const WIDTH: usize, A: Allocator = Global> {
+pub struct SortedKeyedMapping<N, const WIDTH: usize> {
     pub(crate) keys: [u8; WIDTH],
-    pub(crate) children: Box<[MaybeUninit<N>; WIDTH], A>,
+    // Stored inline: the node boxes the whole mapping, so keys and children share one
+    // allocation.
+    pub(crate) children: [MaybeUninit<N>; WIDTH],
     pub(crate) num_children: u8,
 }
 
@@ -30,18 +31,17 @@ impl<N, const WIDTH: usize> Default for SortedKeyedMapping<N, WIDTH> {
     }
 }
 
-impl<N, const WIDTH: usize, A: Allocator> IntoIterator for SortedKeyedMapping<N, WIDTH, A> {
+impl<N, const WIDTH: usize> IntoIterator for SortedKeyedMapping<N, WIDTH> {
     type Item = (u8, N);
-    type IntoIter = SortedKeyedMappingIntoIter<N, WIDTH, A>;
+    type IntoIter = SortedKeyedMappingIntoIter<N, WIDTH>;
 
     fn into_iter(self) -> Self::IntoIter {
         let keys = self.keys;
         let num_children = self.num_children;
-        // Suppress `Drop` on the mapping, then move the children box (and the allocator it
-        // carries) out of it. This avoids allocating a placeholder box, which would need a
-        // second allocator handle.
+        // Suppress `Drop` on the mapping, then move the child slots out of it.
         let this = std::mem::ManuallyDrop::new(self);
-        // SAFETY: `this` is never dropped or read again, so the box is moved out exactly once.
+        // SAFETY: `this` is never dropped or read again, so each initialized child is moved
+        // out exactly once and is owned by the iterator from here on.
         let children = unsafe { std::ptr::read(&this.children) };
 
         SortedKeyedMappingIntoIter {
@@ -53,14 +53,14 @@ impl<N, const WIDTH: usize, A: Allocator> IntoIterator for SortedKeyedMapping<N,
     }
 }
 
-pub struct SortedKeyedMappingIntoIter<N, const WIDTH: usize, A: Allocator = Global> {
+pub struct SortedKeyedMappingIntoIter<N, const WIDTH: usize> {
     keys: [u8; WIDTH],
-    children: Box<[MaybeUninit<N>; WIDTH], A>,
+    children: [MaybeUninit<N>; WIDTH],
     num_children: u8,
     current: usize,
 }
 
-impl<N, const WIDTH: usize, A: Allocator> Iterator for SortedKeyedMappingIntoIter<N, WIDTH, A> {
+impl<N, const WIDTH: usize> Iterator for SortedKeyedMappingIntoIter<N, WIDTH> {
     type Item = (u8, N);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -82,12 +82,9 @@ impl<N, const WIDTH: usize, A: Allocator> Iterator for SortedKeyedMappingIntoIte
     }
 }
 
-impl<N, const WIDTH: usize, A: Allocator> ExactSizeIterator
-    for SortedKeyedMappingIntoIter<N, WIDTH, A>
-{
-}
+impl<N, const WIDTH: usize> ExactSizeIterator for SortedKeyedMappingIntoIter<N, WIDTH> {}
 
-impl<N, const WIDTH: usize, A: Allocator> Drop for SortedKeyedMappingIntoIter<N, WIDTH, A> {
+impl<N, const WIDTH: usize> Drop for SortedKeyedMappingIntoIter<N, WIDTH> {
     fn drop(&mut self) {
         // Drop any remaining unextracted elements
         while self.current < self.num_children as usize {
@@ -101,28 +98,9 @@ impl<N, const WIDTH: usize, A: Allocator> Drop for SortedKeyedMappingIntoIter<N,
 impl<N, const WIDTH: usize> SortedKeyedMapping<N, WIDTH> {
     #[inline]
     pub fn new() -> Self {
-        Self::new_in(Global)
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn from_indexed<const IDX_WIDTH: usize, FromBitset: BitsetTrait>(
-        im: &mut IndexedMapping<N, IDX_WIDTH, FromBitset>,
-    ) -> Self {
-        Self::from_indexed_in(im, Global)
-    }
-
-    pub fn from_resized<const OLD_WIDTH: usize>(km: &mut SortedKeyedMapping<N, OLD_WIDTH>) -> Self {
-        Self::from_resized_in(km, Global)
-    }
-}
-
-impl<N, const WIDTH: usize, A: Allocator> SortedKeyedMapping<N, WIDTH, A> {
-    /// Create an empty mapping whose child array is allocated in `alloc`.
-    #[inline]
-    pub fn new_in(alloc: A) -> Self {
         Self {
             keys: [255; WIDTH],
-            children: Box::new_in([const { MaybeUninit::uninit() }; WIDTH], alloc),
+            children: [const { MaybeUninit::uninit() }; WIDTH],
             num_children: 0,
         }
     }
@@ -137,15 +115,20 @@ impl<N, const WIDTH: usize, A: Allocator> SortedKeyedMapping<N, WIDTH, A> {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn from_indexed_in<
-        const IDX_WIDTH: usize,
-        FromBitset: BitsetTrait,
-        IA: Allocator,
-    >(
-        im: &mut IndexedMapping<N, IDX_WIDTH, FromBitset, IA>,
-        alloc: A,
+    pub(crate) fn from_indexed<const IDX_WIDTH: usize, FromBitset: BitsetTrait>(
+        im: &mut IndexedMapping<N, IDX_WIDTH, FromBitset>,
     ) -> Self {
-        let mut new_mapping = SortedKeyedMapping::new_in(alloc);
+        let mut new_mapping = SortedKeyedMapping::new();
+        new_mapping.fill_from_indexed(im);
+        new_mapping
+    }
+
+    /// Move every child of `im` into this empty mapping, in key order.
+    pub(crate) fn fill_from_indexed<const IDX_WIDTH: usize, FromBitset: BitsetTrait>(
+        &mut self,
+        im: &mut IndexedMapping<N, IDX_WIDTH, FromBitset>,
+    ) {
+        debug_assert_eq!(self.num_children(), 0);
         let child_count = im.num_children;
 
         for dst in 0..child_count as usize {
@@ -155,34 +138,39 @@ impl<N, const WIDTH: usize, A: Allocator> SortedKeyedMapping<N, WIDTH, A> {
                 .expect("indexed mapping had fewer live keys than num_children");
             // SAFETY: `first_used()` only returns initialized index entries.
             let pos = unsafe { im.child_ptr_indexes.erase_known_present(key) } as usize;
-            new_mapping.keys[dst] = key as u8;
+            self.keys[dst] = key as u8;
             // SAFETY: a live index entry points at an initialized child slot.
             let child = unsafe { im.children.erase_known_present(pos) };
-            new_mapping.children[dst].write(child);
+            self.children[dst].write(child);
         }
 
-        new_mapping.num_children = child_count;
+        self.num_children = child_count;
         im.num_children = 0;
-        new_mapping
     }
 
-    pub fn from_resized_in<const OLD_WIDTH: usize>(
-        km: &mut SortedKeyedMapping<N, OLD_WIDTH, A>,
-        alloc: A,
-    ) -> Self {
-        let mut new = SortedKeyedMapping::new_in(alloc);
-        for i in 0..km.num_children as usize {
-            new.keys[i] = km.keys[i];
-            new.children[i] = std::mem::replace(&mut km.children[i], MaybeUninit::uninit())
-        }
-        new.num_children = km.num_children;
-        km.num_children = 0;
+    pub fn from_resized<const OLD_WIDTH: usize>(km: &mut SortedKeyedMapping<N, OLD_WIDTH>) -> Self {
+        let mut new = SortedKeyedMapping::new();
+        new.fill_from_resized(km);
         new
+    }
+
+    /// Move every child of `km` into this empty mapping, preserving order.
+    pub(crate) fn fill_from_resized<const OLD_WIDTH: usize>(
+        &mut self,
+        km: &mut SortedKeyedMapping<N, OLD_WIDTH>,
+    ) {
+        debug_assert_eq!(self.num_children(), 0);
+        for i in 0..km.num_children as usize {
+            self.keys[i] = km.keys[i];
+            self.children[i] = std::mem::replace(&mut km.children[i], MaybeUninit::uninit())
+        }
+        self.num_children = km.num_children;
+        km.num_children = 0;
     }
 
     #[inline]
     #[allow(dead_code)]
-    pub(crate) fn iter(&self) -> SortedKeyedMappingIter<'_, N, WIDTH, A> {
+    pub(crate) fn iter(&self) -> SortedKeyedMappingIter<'_, N, WIDTH> {
         SortedKeyedMappingIter {
             mapping: self,
             idx: 0,
@@ -201,12 +189,12 @@ impl<N, const WIDTH: usize, A: Allocator> SortedKeyedMapping<N, WIDTH, A> {
     }
 }
 
-pub(crate) struct SortedKeyedMappingIter<'a, N, const WIDTH: usize, A: Allocator = Global> {
-    mapping: &'a SortedKeyedMapping<N, WIDTH, A>,
+pub(crate) struct SortedKeyedMappingIter<'a, N, const WIDTH: usize> {
+    mapping: &'a SortedKeyedMapping<N, WIDTH>,
     idx: usize,
 }
 
-impl<'a, N, const WIDTH: usize, A: Allocator> Iterator for SortedKeyedMappingIter<'a, N, WIDTH, A> {
+impl<'a, N, const WIDTH: usize> Iterator for SortedKeyedMappingIter<'a, N, WIDTH> {
     type Item = (u8, &'a N);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -221,9 +209,7 @@ impl<'a, N, const WIDTH: usize, A: Allocator> Iterator for SortedKeyedMappingIte
     }
 }
 
-impl<N, const WIDTH: usize, A: Allocator> NodeMapping<N, WIDTH>
-    for SortedKeyedMapping<N, WIDTH, A>
-{
+impl<N, const WIDTH: usize> NodeMapping<N, WIDTH> for SortedKeyedMapping<N, WIDTH> {
     #[inline]
     fn add_child(&mut self, key: u8, node: N) {
         let idx = u8_keys_find_insert_position_sorted::<WIDTH>(
@@ -284,7 +270,22 @@ impl<N, const WIDTH: usize, A: Allocator> NodeMapping<N, WIDTH>
     }
 }
 
-impl<N, const WIDTH: usize, A: Allocator> Drop for SortedKeyedMapping<N, WIDTH, A> {
+impl<N, const WIDTH: usize> InitEmpty for SortedKeyedMapping<N, WIDTH> {
+    #[inline]
+    fn init_empty(slot: &mut MaybeUninit<Self>) -> &mut Self {
+        let ptr = slot.as_mut_ptr();
+        // SAFETY: `ptr` comes from a live `&mut MaybeUninit<Self>`. `keys` and `num_children`
+        // are written here; `children` is an array of `MaybeUninit` and needs no
+        // initialization, and a zero count marks every slot as uninitialized.
+        unsafe {
+            (&raw mut (*ptr).keys).write([255; WIDTH]);
+            (&raw mut (*ptr).num_children).write(0);
+            slot.assume_init_mut()
+        }
+    }
+}
+
+impl<N, const WIDTH: usize> Drop for SortedKeyedMapping<N, WIDTH> {
     fn drop(&mut self) {
         for value in &mut self.children[..self.num_children as usize] {
             unsafe { value.assume_init_drop() }
@@ -326,16 +327,13 @@ mod tests {
     #[test]
     // Verify that the memory width of the node is nice and compact.
     fn test_memory_width() {
-        // 16 is padded width for 4 children
-        // num_children = 1
-        // keys = 4
-        // children array ptr = 8
-        // total = 13 pads out to 16
-        assert_eq!(std::mem::size_of::<SortedKeyedMapping<Box<u8>, 4>>(), 16);
+        // Children are stored inline, so the mapping is the child slots plus the key bytes
+        // and count, padded to pointer alignment.
+        // 4 * 8 (children) + 4 (keys) + 1 (num_children) = 37, padded to 40
+        assert_eq!(std::mem::size_of::<SortedKeyedMapping<Box<u8>, 4>>(), 40);
 
-        // 32 is the padded size of the struct on account of
-        // num_children + keys (u8) + children ptrs
-        assert_eq!(std::mem::size_of::<SortedKeyedMapping<Box<u8>, 16>>(), 32);
+        // 16 * 8 (children) + 16 (keys) + 1 (num_children) = 145, padded to 152
+        assert_eq!(std::mem::size_of::<SortedKeyedMapping<Box<u8>, 16>>(), 152);
     }
 
     #[test]

@@ -1,4 +1,3 @@
-use std::alloc::{Allocator, Global};
 use std::mem::MaybeUninit;
 use std::ops::Index;
 
@@ -7,13 +6,14 @@ use crate::utils::bitset::BitsetTrait;
 // BITSET_WIDTH must be RANGE_WIDTH / 16
 // Once generic_const_exprs is stabilized, we can use that to calculate this from a RANGE_WIDTH.
 // Until then, don't mess up.
-pub struct BitArray<X, const RANGE_WIDTH: usize, BitsetType, A = Global>
+pub struct BitArray<X, const RANGE_WIDTH: usize, BitsetType>
 where
     BitsetType: BitsetTrait + std::default::Default,
-    A: Allocator,
 {
     pub(crate) bitset: BitsetType,
-    storage: Box<[MaybeUninit<X>; RANGE_WIDTH], A>,
+    // Stored inline: the owning mapping is itself boxed by the node, so a second allocation
+    // here would only add a pointer hop.
+    storage: [MaybeUninit<X>; RANGE_WIDTH],
 }
 
 impl<X, const RANGE_WIDTH: usize, BitsetType> BitArray<X, RANGE_WIDTH, BitsetType>
@@ -21,21 +21,23 @@ where
     BitsetType: BitsetTrait + std::default::Default,
 {
     pub fn new() -> Self {
-        Self::new_in(Global)
-    }
-}
-
-impl<X, const RANGE_WIDTH: usize, BitsetType, A> BitArray<X, RANGE_WIDTH, BitsetType, A>
-where
-    BitsetType: BitsetTrait + std::default::Default,
-    A: Allocator,
-{
-    /// Create an empty array whose slot storage is allocated in `alloc`.
-    pub fn new_in(alloc: A) -> Self {
         Self {
             bitset: Default::default(),
-            storage: Box::new_in([const { MaybeUninit::uninit() }; RANGE_WIDTH], alloc),
+            storage: [const { MaybeUninit::uninit() }; RANGE_WIDTH],
         }
+    }
+
+    /// Initialize an empty array in place, without building one on the stack first.
+    ///
+    /// # Safety
+    /// `ptr` must be valid for writes of `Self` and properly aligned. Any previous contents
+    /// are overwritten without being dropped.
+    #[inline]
+    pub(crate) unsafe fn init_empty_at(ptr: *mut Self) {
+        // SAFETY: the caller guarantees `ptr` is valid for writes. `bitset` is the only
+        // field with a validity requirement: `storage` is an array of `MaybeUninit`, which
+        // is valid in any state, and an empty bitset marks every slot as uninitialized.
+        unsafe { (&raw mut (*ptr).bitset).write(Default::default()) }
     }
 
     #[allow(dead_code)]
@@ -269,11 +271,9 @@ where
     }
 }
 
-impl<X, const RANGE_WIDTH: usize, BitsetType, A> Index<usize>
-    for BitArray<X, RANGE_WIDTH, BitsetType, A>
+impl<X, const RANGE_WIDTH: usize, BitsetType> Index<usize> for BitArray<X, RANGE_WIDTH, BitsetType>
 where
     BitsetType: BitsetTrait + std::default::Default,
-    A: Allocator,
 {
     type Output = X;
 
@@ -282,10 +282,9 @@ where
     }
 }
 
-impl<X, const RANGE_WIDTH: usize, BitsetType, A> Drop for BitArray<X, RANGE_WIDTH, BitsetType, A>
+impl<X, const RANGE_WIDTH: usize, BitsetType> Drop for BitArray<X, RANGE_WIDTH, BitsetType>
 where
     BitsetType: BitsetTrait + std::default::Default,
-    A: Allocator,
 {
     fn drop(&mut self) {
         for i in 0..RANGE_WIDTH {
