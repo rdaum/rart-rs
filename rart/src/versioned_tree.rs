@@ -124,7 +124,7 @@ pub struct VersionedRange<'a, K: KeyTrait + 'a, V> {
 
 /// A versioned Adaptive Radix Tree that supports snapshot-based copy-on-write mutations.
 ///
-/// Unlike the standard [`AdaptiveRadixTree`], this version allows taking O(1) snapshots
+/// Unlike the standard [`AdaptiveRadixTree`](crate::AdaptiveRadixTree), this version allows taking O(1) snapshots
 /// that can be independently mutated. Mutations use copy-on-write semantics to minimize
 /// memory usage while maintaining structural sharing between versions.
 ///
