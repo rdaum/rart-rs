@@ -181,6 +181,22 @@ where
     ///
     /// Inner-node storage is allocated through `alloc`. Heap-backed key and partial types
     /// (`VectorKey`, long `OverflowKey`s) still use the global allocator.
+    ///
+    /// ```rust
+    /// use std::alloc::System;
+    ///
+    /// use rart::{AdaptiveRadixTree, ArrayKey};
+    ///
+    /// // Any `A: Allocator + Clone` works, including `&MyArena`.
+    /// let mut tree = AdaptiveRadixTree::<ArrayKey<16>, u64, _>::new_in(System);
+    /// tree.insert("apple", 1);
+    /// assert_eq!(tree.get("apple"), Some(&1));
+    ///
+    /// // Bulk loading takes the allocator as its last argument.
+    /// let sorted = (0u64..1000).map(|i| (ArrayKey::<16>::from(i), i));
+    /// let bulk = AdaptiveRadixTree::bulk_load_sorted_unique_in(sorted, System);
+    /// assert_eq!(bulk.len(), 1000);
+    /// ```
     pub fn new_in(alloc: A) -> Self {
         Self {
             root: None,

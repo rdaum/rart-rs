@@ -107,6 +107,41 @@ println ! ("{:?} -> {}", key.as_ref(), value);
 }
 ```
 
+#### Custom allocators
+
+`AdaptiveRadixTree` takes an optional allocator parameter, `AdaptiveRadixTree<K, V, A = Global>`,
+built on the allocator API stabilized in Rust 1.100. Use the `_in` constructors to place the tree's
+node storage in an arena, pool, or accounting allocator:
+
+```rust
+use std::alloc::System;
+
+use rart::{AdaptiveRadixTree, ArrayKey};
+
+// Any `A: Allocator + Clone` works, including `&MyArena`.
+let mut tree = AdaptiveRadixTree::<ArrayKey<16>, u64, _>::new_in(System);
+tree.insert("apple", 1);
+assert_eq!(tree.get("apple"), Some(&1));
+
+// Bulk loading takes the allocator as its last argument.
+let sorted = (0u64..1000).map(|i| (ArrayKey::<16>::from(i), i));
+let bulk = AdaptiveRadixTree::bulk_load_sorted_unique_in(sorted, System);
+assert_eq!(bulk.len(), 1000);
+```
+
+Things to know:
+
+- Every inner node is one allocation in the tree's allocator. Leaves allocate nothing.
+- Zero-sized allocators add no per-node overhead. A by-reference allocator such as `&Arena` stores
+  one reference per inner node.
+- Heap-backed keys and prefixes still use the global allocator: `VectorKey`, and `OverflowKey`
+  prefixes longer than their inline capacity. For a tree that lives entirely in an arena, use
+  `ArrayKey`, or an `OverflowKey` whose inline prefix capacity covers your keys.
+- `VersionedAdaptiveRadixTree` always uses the global allocator.
+
+In the included `allocator_bench`, building in a bump arena instead of the global allocator was up
+to about 2.2x faster for bulk loads over sparse keys, with lookups unchanged.
+
 ### VersionedAdaptiveRadixTree - Concurrent Versioning
 
 **Key Features:**
@@ -300,8 +335,9 @@ Performance tradeoff:
 ## Performance
 
 Benchmark environment: NVIDIA GB10 (NVIDIA Spark equivalent, ASUS GX10 variant), ARM Cortex-X925,
-Criterion.rs. Numbers below were refreshed on May 10, 2026 from the default quick benchmark profile
-(`RART_BENCH_FULL` unset). For longer high-confidence runs, use `RART_BENCH_FULL=1`.
+Criterion.rs, Rust 1.100. Numbers below were refreshed on November 12, 2026 for `0.12.0` from the
+default quick benchmark profile (`RART_BENCH_FULL` unset), with each benchmark binary pinned to a
+single Cortex-X925 core. For longer high-confidence runs, use `RART_BENCH_FULL=1`.
 
 Comparison baselines in this section:
 
@@ -315,21 +351,21 @@ Comparison baselines in this section:
 Quick read on this machine:
 
 - `rart` is excellent at point lookup.
-  - `seq_get` at `32768`: rart `3.1ns`, `HashMap` `7.4ns`, `BLART` `8.8ns`, `BTreeMap` `21.9ns`
-- Inserts are competitive with `HashMap`.
-  - `seq_insert`: rart `33.4ns`, `HashMap` `34.3ns`, `BTreeMap` `43.6ns`
+  - `seq_get` at `32768`: rart `2.3ns`, `HashMap` `7.2ns`, `BLART` `9.0ns`, `BTreeMap` `22.4ns`
+- Inserts are competitive with `HashMap`, and faster in this run.
+  - `seq_insert`: rart `28.3ns`, `HashMap` `40.2ns`, `BTreeMap` `48.5ns`, `BLART` `112.8ns`
 - Prefix-structured workloads are one of the big reasons to choose it.
-  - `longest_prefix_match` at `32768`: rart `1.83ms`, `BTreeMap` `6.78ms`
-  - low-overlap intersection at `n100000/o10`: `intersect_with` `64.1us`, `BTreeMap` merge join
-    `133.8us`
+  - `longest_prefix_match` at `32768`: rart `1.77ms`, `BTreeMap` `6.95ms`
+  - low-overlap intersection at `n100000/o10`: `intersect_with` `63.4us`, `BTreeMap` merge join
+    `147.6us`
 - Full-key iteration is the main weak spot.
-  - full iteration at `32768`: rart `310us`, `BLART` `61.8us`, `BTreeMap` `29.1us`, `HashMap`
-    `20.5us`
+  - full iteration at `32768`: rart `260us`, `BLART` `63.0us`, `BTreeMap` `29.1us`, `HashMap`
+    `20.3us`
 - The lending traversal APIs are the preferred fast path when you can consume keys inside a
   callback.
-  - full traversal at `32768`: owned `587.8us`, lending `223.0us`
-  - ranged traversal at `32768`: owned `297.8us`, lending `147.9us`
-  - narrow prefix traversal at `32768`: owned `591.8us`, lending `217.4us`
+  - full traversal at `32768`: owned `579.1us`, lending `215.6us`
+  - ranged traversal at `32768`: owned `307.2us`, lending `147.7us`
+  - narrow prefix traversal at `32768`: owned `580.5us`, lending `211.1us`
 
 Short version:
 
@@ -348,27 +384,27 @@ persistent `HashMap` and `OrdMap`.
 Quick read on this machine:
 
 - persistent lookup is strong
-  - `lookup_comparison/16384`: versioned rart `14.9ns`, `imbl::HashMap` `22.6ns`, `imbl::OrdMap`
-    `38.0ns`
+  - `lookup_comparison/16384`: versioned rart `15.1ns`, `imbl::HashMap` `23.5ns`, `imbl::OrdMap`
+    `38.7ns`
 - sequential point scans are also strong
-  - `sequential_scan/16384`: versioned rart `132.5us`, `imbl::HashMap` `187.5us`,
-    `imbl::OrdMap` `463.9us`
+  - `sequential_scan/16384`: versioned rart `126.8us`, `imbl::HashMap` `184.9us`,
+    `imbl::OrdMap` `464.1us`
 - snapshot-plus-mutation bursts are now competitive with `imbl`
-  - `mutations_per_snapshot/100`: versioned rart `19.3us`, `imbl::HashMap` `58.6us`,
-    `imbl::OrdMap` `35.7us`
+  - `mutations_per_snapshot/100`: versioned rart `19.9us`, `imbl::HashMap` `58.1us`,
+    `imbl::OrdMap` `39.4us`
 - full iteration depends on whether keys must be reconstructed
-  - `full_iteration/16384`: owned versioned rart `169.5us`, lending versioned rart `95.6us`,
-    values-only versioned rart `43.9us`, `imbl::HashMap` `48.3us`, `imbl::OrdMap` `44.9us`
+  - `full_iteration/16384`: owned versioned rart `153.3us`, lending versioned rart `92.3us`,
+    values-only versioned rart `43.8us`, `imbl::HashMap` `48.6us`, `imbl::OrdMap` `44.3us`
 - versioned intersection/join performance depends heavily on overlap and key reconstruction
-  - `join_comparison/n100000_o10`: lending versioned rart `58.5us`, owned versioned rart
-    `60.9us`, `imbl::OrdMap` merge join `309.7us`, `imbl::HashMap` probe join `3.00ms`
-  - `join_comparison/n100000_o50` values-only: versioned rart `259.1us`, `imbl::OrdMap`
-    `426.7us`, `imbl::HashMap` `6.27ms`
-  - `join_comparison/n100000_o90` count-only: versioned rart `532.7us`, `imbl::OrdMap`
-    `512.3us`, `imbl::HashMap` `3.87ms`
+  - `join_comparison/n100000_o10`: lending versioned rart `55.4us`, owned versioned rart
+    `58.8us`, `imbl::OrdMap` merge join `312.8us`, `imbl::HashMap` probe join `2.89ms`
+  - `join_comparison/n100000_o50` values-only: versioned rart `258.1us`, `imbl::OrdMap`
+    `431.0us`, `imbl::HashMap` `3.49ms`
+  - `join_comparison/n100000_o90` count-only: versioned rart `493.8us`, `imbl::OrdMap`
+    `505.9us`, `imbl::HashMap` `3.67ms`
 - prefix invalidation is workload-sensitive
-  - object-prefix invalidation over 64 symbols: versioned rart lending prefix `352ns`, owned prefix
-    iterator `704ns`, `imbl::OrdMap::range` `268ns`, `imbl::HashMap` full scan `402us`
+  - object-prefix invalidation over 64 symbols: versioned rart lending prefix `339ns`, owned prefix
+    iterator `595ns`, `imbl::OrdMap::range` `267ns`, `imbl::HashMap` full scan `394us`
 
 Short version:
 
@@ -399,7 +435,8 @@ Both implementations use several key optimizations:
 - **Adaptive node types**: 4, 16, 48, and 256-child nodes based on density
 - **Path compression**: Stores common prefixes to reduce tree height
 - **SIMD acceleration**: Vectorized search operations
-- **Memory efficiency**: Minimizes allocations during operations
+- **Memory efficiency**: One allocation per inner node, none per leaf
+- **Custom allocators**: `AdaptiveRadixTree` can place its nodes in a caller-supplied allocator
 
 **Additional for VersionedAdaptiveRadixTree:**
 
@@ -418,7 +455,7 @@ versioning support.
 
 **Technical Details:**
 
-- Compiles on stable Rust
+- Compiles on stable Rust (MSRV 1.100)
 - Minimal external dependencies
 - Safe public API with compartmentalized unsafe code for performance
 - Comprehensive test suite including property-based fuzzing
