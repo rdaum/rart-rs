@@ -12,6 +12,55 @@ All notable changes to this project are documented in this file.
 
 ### Performance
 
+## [0.12.0] - 2026-11-12
+
+### Added
+
+- Custom allocator support for `AdaptiveRadixTree`, using the allocator API stabilized in Rust
+  `1.100`. The tree is now `AdaptiveRadixTree<K, V, A = Global>`, so existing code is unaffected.
+  - `new_in`
+  - `bulk_load_sorted_in` / `bulk_load_sorted_unique_in` / `bulk_load_sorted_unique_by_index_in`
+  - `allocator` to borrow the tree's allocator
+- All inner-node storage is allocated through the tree's allocator. Heap-backed keys and prefixes
+  (`VectorKey`, and `OverflowKey` prefixes that exceed their inline capacity) still use the global
+  allocator, as does `VersionedAdaptiveRadixTree`.
+- `allocator_bench`, comparing the global allocator against a bump arena reached by reference and
+  through a zero-sized handle.
+- Regression coverage for allocator routing (a counting global allocator asserts that a tree built
+  in a custom allocator makes no global-heap allocations), node growth and shrinkage through every
+  node kind with owned values, and deep prefix-chain recursion.
+
+### Changed
+
+- **Breaking:** raised the MSRV to Rust `1.100`. The `rart` crate now declares it through
+  `rust-version`; previously the workspace setting was not inherited by the package.
+- `PrefixMatchIter` and `ValuesIter` gained a defaulted allocator type parameter. `Iter` and `Range`
+  are unchanged.
+- Each inner node is now a single allocation. The internal mapping types store their child slots
+  inline instead of behind a second box, which changes the size of the `#[doc(hidden)]` mapping
+  types.
+- Updated the `micromeasure` dev-dependency to `0.16`.
+
+### Fixed
+
+### Performance
+
+Measured with Criterion on a single pinned Cortex-X925 core, relative to `0.11.0`:
+
+- Storing each inner node in one allocation removes one or two allocations and a pointer hop per
+  node:
+  - builds over sparse keys: 16-29% faster
+  - lookups over sparse keys: 12-16% faster
+  - random insert: 6-9% faster; random and sequential remove: 9-13% faster
+  - bulk load: 4-6% faster
+- Key-yielding iteration no longer stalls on store-to-load forwarding when building each yielded
+  key:
+  - full iteration with keys: about 22% faster
+  - range iteration: about 26% faster
+  - seeking to a start key and reading the first entry: 10-29% faster
+- Building a tree in a bump arena instead of the global allocator is up to about 2.2x faster for
+  bulk load over sparse keys and about 1.6x faster for build-then-drop, with lookups unchanged.
+
 ## [0.11.0] - 2026-08-11
 
 ### Added
